@@ -1,0 +1,93 @@
+name: Create tag
+
+# Least privilege: default read-only, each job grants only what it needs.
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      increment_type:
+        type: choice
+        description: Select the type of version increment
+        required: true
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  increment_version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release + tag
+    outputs:
+      new_version: ${{ steps.version.outputs.NEW_VERSION }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: version
+        name: Get current version
+        run: |
+          VERSION=$(git describe --abbrev=0 --tags)
+
+          # Split version into major, minor, and patch
+          MAJOR=$(echo $VERSION | awk -F '.' '{print $1}' | cut -c 2-)
+          MINOR=$(echo $VERSION | awk -F '.' '{print $2}')
+          PATCH=$(echo $VERSION | awk -F '.' '{print $3}')
+
+          # Increment the appropriate part of the version
+          if [[ ${{ inputs.increment_type }} == "patch" ]]; then
+            PATCH=$((PATCH + 1))
+          elif [[ ${{ inputs.increment_type }} == "minor" ]]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif [[ ${{ inputs.increment_type }} == "major" ]]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          fi
+
+          # Update the version
+          echo "NEW_VERSION=v$MAJOR.$MINOR.$PATCH" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          name: Meshtastic Protobufs ${{ steps.version.outputs.NEW_VERSION }}
+          tag: ${{ steps.version.outputs.NEW_VERSION }}
+          generateReleaseNotes: true
+          token: ${{ github.token }}
+
+      # The Buf schema-registry push previously lived here. It now runs in
+      # publish.yml's push-buf-registry job (invoked below), so keeping it
+      # here too would push the same tag to Buf twice per release.
+
+  # The tag above is created with GITHUB_TOKEN, which by design does NOT fire
+  # the `push: tags` trigger on the publish workflows (GitHub's recursion
+  # guard). Before this, publishing depended on someone manually dispatching
+  # each publish workflow - and when that was missed, an artifact silently
+  # lagged its tag (org.meshtastic:protobufs sat at 2.7.25 while v2.7.26 was
+  # tagged). Invoke the publishers directly instead so every tag publishes
+  # every package. publish.yml also owns the Buf schema-registry push.
+  publish-npm:
+    needs: increment_version
+    permissions:
+      contents: write # create-release + upload assets
+      id-token: write # JSR OIDC / npm provenance
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: ${{ needs.increment_version.outputs.new_version }}
+    secrets: inherit
+
+  publish-kmp:
+    needs: increment_version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish-kmp.yml
+    with:
+      version: ${{ needs.increment_version.outputs.new_version }}
+    secrets: inherit

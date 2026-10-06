@@ -1,0 +1,854 @@
+/**
+ * @file ExternalNotificationModule.cpp
+ * @brief Implementation of the ExternalNotificationModule class.
+ *
+ * This file contains the implementation of the ExternalNotificationModule class, which is responsible for handling external
+ * notifications such as vibration, buzzer, and LED lights. The class provides methods to turn on and off the external
+ * notification outputs and to play ringtones using PWM buzzer. It also includes default configurations and a runOnce() method to
+ * handle the module's behavior.
+ *
+ * Documentation:
+ * https://meshtastic.org/docs/configuration/module/external-notification
+ *
+ * @author Jm Casler & Meshtastic Team
+ * @date [Insert Date]
+ */
+#include "ExternalNotificationModule.h"
+#include "Channels.h"
+#include "MeshService.h"
+#include "NodeDB.h"
+#include "Router.h"
+#include "buzz/buzz.h"
+#include "configuration.h"
+#include "gps/RTC.h"
+#include "main.h"
+#include "mesh/Throttle.h"
+#include "mesh/generated/meshtastic/rtttl.pb.h"
+#include <Arduino.h>
+
+#if HAS_LIBNOTIFY
+#include "meshUtils.h"
+#include <libnotify/notify.h>
+#endif
+
+#if defined(HAS_RGB_LED)
+#include "AmbientLightingThread.h"
+uint8_t red = 0;
+uint8_t green = 0;
+uint8_t blue = 0;
+uint8_t white = 0;
+uint8_t colorState = 1;
+uint8_t brightnessIndex = 0;
+uint8_t brightnessValues[] = {0, 10, 20, 30, 50, 90, 160, 170}; // blue gets multiplied by 1.5
+bool ascending = true;
+#endif
+
+#ifndef PIN_BUZZER
+#define PIN_BUZZER false
+#endif
+
+#if defined(HAS_I2S_SPEAKER_NRF52)
+#include "platform/nrf52/NRF52RtttlPlayer.h"
+#endif
+
+/*
+    Documentation:
+        https://meshtastic.org/docs/configuration/module/external-notification
+*/
+
+// Default configurations
+#ifdef EXT_NOTIFY_OUT
+#define EXT_NOTIFICATION_MODULE_OUTPUT EXT_NOTIFY_OUT
+#else
+#define EXT_NOTIFICATION_MODULE_OUTPUT 0
+#endif
+#define EXT_NOTIFICATION_MODULE_OUTPUT_MS 1000
+
+#define EXT_NOTIFICATION_FAST_THREAD_MS 25
+
+#define ASCII_BELL 0x07
+
+#if !MESHTASTIC_EXCLUDE_RTTTL
+meshtastic_RTTTLConfig rtttlConfig;
+static const char *rtttlConfigFile = "/prefs/ringtone.proto";
+#endif
+
+ExternalNotificationModule *externalNotificationModule;
+
+bool externalCurrentState[3] = {};
+
+uint32_t externalTurnedOn[3] = {};
+
+int32_t ExternalNotificationModule::runOnce()
+{
+    if (!moduleConfig.external_notification.enabled) {
+        return INT32_MAX; // we don't need this thread here...
+    } else {
+#if HAS_LIBNOTIFY
+        // Catches the case where traffic stops right after a failure, so the state change still
+        // gets reported without waiting for the next inbound alert.
+        reportNotifyStatus();
+#endif
+        uint32_t delay = EXT_NOTIFICATION_MODULE_OUTPUT_MS;
+        bool isRtttlPlaying = rtttl::isPlaying();
+#ifdef HAS_I2S
+        // audioThread->isPlaying() also handles actually playing the RTTTL, needs to be called in loop
+        isRtttlPlaying = isRtttlPlaying || audioThread->isPlaying();
+#endif
+#if defined(HAS_I2S_SPEAKER_NRF52)
+        isRtttlPlaying = isRtttlPlaying || nrf52RtttlPlayer.isPlaying();
+#endif
+        // isNagging is the armed flag; nagCycleCutoff is only a deadline while it is set, so
+        // short-circuit before the comparison. `millis() + durationMs` can land on any value.
+        const bool nagWindowExpired = !isNagging || Throttle::deadlinePassed(nagCycleCutoff);
+        if (nagWindowExpired && !isRtttlPlaying) {
+            // Turn off external notification immediately when timeout is reached, regardless of song state
+            ExternalNotificationModule::stopNow();
+            isNagging = false;
+            return INT32_MAX; // save cycles till we're needed again
+        }
+
+        // If the output is turned on, turn it back off after the given period of time.
+        if (isNagging) {
+            delay = (moduleConfig.external_notification.output_ms ? moduleConfig.external_notification.output_ms
+                                                                  : EXT_NOTIFICATION_MODULE_OUTPUT_MS);
+            // externalTurnedOn[] is when each output was last toggled, so these are intervals.
+            if (Throttle::hasElapsed(externalTurnedOn[0], delay)) {
+                setExternalState(0, !getExternal(0));
+            }
+            if (Throttle::hasElapsed(externalTurnedOn[1], delay)) {
+                setExternalState(1, !getExternal(1));
+            }
+            // Only toggle buzzer output if not using PWM mode (to avoid conflict with RTTTL)
+            if (!moduleConfig.external_notification.use_pwm && Throttle::hasElapsed(externalTurnedOn[2], delay)) {
+                LOG_DEBUG("EXTERNAL 2 %d compared to %d", externalTurnedOn[2] + moduleConfig.external_notification.output_ms,
+                          millis());
+                setExternalState(2, !getExternal(2));
+            }
+#if defined(HAS_RGB_LED)
+            red = (colorState & 4) ? brightnessValues[brightnessIndex] : 0;          // Red enabled on colorState = 4,5,6,7
+            green = (colorState & 2) ? brightnessValues[brightnessIndex] : 0;        // Green enabled on colorState = 2,3,6,7
+            blue = (colorState & 1) ? (brightnessValues[brightnessIndex] * 1.5) : 0; // Blue enabled on colorState = 1,3,5,7
+            white = (colorState & 12) ? brightnessValues[brightnessIndex] : 0;
+            if (ascending) { // fade in
+                brightnessIndex++;
+                if (brightnessIndex == (sizeof(brightnessValues) - 1)) {
+                    ascending = false;
+                }
+            } else {
+                brightnessIndex--; // fade out
+            }
+            if (brightnessIndex == 0) {
+                ascending = true;
+                colorState++; // next color
+                if (colorState > 7) {
+                    colorState = 1;
+                }
+            }
+            // we need fast updates for the color change
+            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+#endif
+
+#ifdef HAS_DRV2605
+            // Only trigger DRV2605 if vibration alerts are enabled
+            if (moduleConfig.external_notification.alert_message_vibra || moduleConfig.external_notification.alert_bell_vibra) {
+                drv.go();
+            }
+#endif
+        }
+
+        // Play RTTTL over i2s audio interface if enabled as buzzer
+#if defined(HAS_I2S) && !MESHTASTIC_EXCLUDE_RTTTL
+        if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+            if (audioThread->isPlaying()) {
+                // Continue playing
+            } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
+                audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
+            }
+            // we need fast updates to play the RTTTL
+            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+        }
+#endif
+#if defined(HAS_I2S_SPEAKER_NRF52) && !MESHTASTIC_EXCLUDE_RTTTL
+        // Play RTTTL over the I2S speaker (no piezo on this board).
+        if (canBuzz() && buzzerShouldAlert) {
+            if (nrf52RtttlPlayer.isPlaying()) {
+                nrf52RtttlPlayer.play();
+            } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
+                nrf52RtttlPlayer.begin(rtttlConfig.ringtone);
+            }
+            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+        }
+#endif
+#if !MESHTASTIC_EXCLUDE_RTTTL
+        // now let the PWM buzzer play
+        if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio && canBuzz() && buzzerShouldAlert) {
+            if (rtttl::isPlaying()) {
+                rtttl::play();
+            } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
+                // start the song again if we have time left
+                rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+            }
+            // we need fast updates to play the RTTTL
+            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+        }
+#endif
+
+        return delay;
+    }
+}
+
+/**
+ * Based on buzzer mode, return true if we can buzz.
+ */
+bool ExternalNotificationModule::canBuzz()
+{
+    if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DISABLED &&
+        config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_SYSTEM_ONLY) {
+        return true;
+    }
+    return false;
+}
+
+bool ExternalNotificationModule::wantPacket(const meshtastic_MeshPacket *p)
+{
+    return MeshService::isTextPayload(p);
+}
+
+/**
+ * Sets the external notification for the specified index.
+ *
+ * @param index The index of the external notification to change state.
+ * @param on Whether we are turning things on (true) or off (false).
+ */
+void ExternalNotificationModule::setExternalState(uint8_t index, bool on)
+{
+    externalCurrentState[index] = on;
+    externalTurnedOn[index] = millis();
+
+    switch (index) {
+    case 1:
+#ifdef UNPHONE
+        unphone.vibe(on); // the unPhone's vibration motor is on a i2c GPIO expander
+#endif
+        if (moduleConfig.external_notification.output_vibra)
+            digitalWrite(moduleConfig.external_notification.output_vibra, on);
+        break;
+    case 2:
+        // Only control buzzer pin digitally if not using PWM mode
+        if (moduleConfig.external_notification.output_buzzer && !moduleConfig.external_notification.use_pwm)
+            digitalWrite(moduleConfig.external_notification.output_buzzer, on);
+        break;
+    default:
+        if (output > 0)
+            digitalWrite(output, (moduleConfig.external_notification.active ? on : !on));
+#ifdef PCA_LED_NOTIFICATION
+        io.digitalWrite(PCA_LED_NOTIFICATION, on);
+
+#endif
+#ifdef NEOPIXEL_STATUS_NOTIFICATION_PIN
+        notificationPixel.setPixelColor(0, on ? NEOPIXEL_STATUS_NOTIFICATION_COLOR : 0);
+        notificationPixel.show();
+#endif
+        break;
+    }
+
+#if defined(HAS_RGB_LED)
+    if (!on) {
+        red = 0;
+        green = 0;
+        blue = 0;
+        white = 0;
+    }
+    if (ambientLightingThread) {
+        ambientLightingThread->setLighting(moduleConfig.ambient_lighting.current, red, green, blue);
+    }
+#endif
+
+#ifdef HAS_DRV2605
+    // Only trigger DRV2605 when setting vibration motor
+    bool shouldTriggerDRV = false;
+    if (on) {
+        if (index == 1 &&
+            (moduleConfig.external_notification.alert_message_vibra || moduleConfig.external_notification.alert_bell_vibra)) {
+            shouldTriggerDRV = true;
+        }
+    }
+
+    if (shouldTriggerDRV) {
+        drv.go();
+    } else if (!on && index == 1) {
+        drv.stop();
+    }
+#endif
+}
+
+bool ExternalNotificationModule::getExternal(uint8_t index)
+{
+    return externalCurrentState[index];
+}
+
+// Allow other firmware components to determine whether a notification is ongoing
+bool ExternalNotificationModule::nagging()
+{
+    return isNagging;
+}
+
+void ExternalNotificationModule::stopNow()
+{
+    LOG_INFO("Turning off external notification: ");
+    LOG_INFO("Stop RTTTL playback");
+    rtttl::stop();
+#ifdef HAS_I2S
+    LOG_INFO("Stop audioThread playback");
+    audioThread->stop();
+#endif
+#if defined(HAS_I2S_SPEAKER_NRF52)
+    nrf52RtttlPlayer.stop();
+#endif
+    // Turn off all outputs
+    LOG_INFO("Turning off setExternalStates");
+    for (int i = 0; i < 3; i++) {
+        setExternalState(i, false);
+        externalTurnedOn[i] = 0;
+    }
+    setIntervalFromNow(0);
+#ifdef HAS_DRV2605
+    drv.stop();
+#endif
+
+    // Prevent the state machine from immediately re-triggering outputs after a manual stop.
+    // Clearing isNagging disarms the cycle; nagCycleCutoff is never read without it.
+    isNagging = false;
+    buzzerShouldAlert = false;
+
+#ifdef HAS_I2S
+    // GPIO0 is used as mclk for I2S audio and set to OUTPUT by the sound library
+    // T-Deck uses GPIO0 as trackball button, so restore the mode
+#if defined(T_DECK) || (defined(BUTTON_PIN) && BUTTON_PIN == 0)
+    pinMode(0, INPUT);
+#endif
+#endif
+}
+
+ExternalNotificationModule::ExternalNotificationModule()
+    : SinglePortModule("ExternalNotificationModule", meshtastic_PortNum_TEXT_MESSAGE_APP),
+      concurrency::OSThread("ExternalNotification")
+{
+    /*
+        Uncomment the preferences below if you want to use the module
+        without having to configure it from the PythonAPI or WebUI.
+    */
+
+    // moduleConfig.external_notification.alert_message = true;
+    // moduleConfig.external_notification.alert_message_buzzer = true;
+    // moduleConfig.external_notification.alert_message_vibra = true;
+    // moduleConfig.external_notification.use_i2s_as_buzzer = true;
+
+    // moduleConfig.external_notification.active = true;
+    // moduleConfig.external_notification.alert_bell = 1;
+    // moduleConfig.external_notification.output_ms = 1000;
+    // moduleConfig.external_notification.output = 4; // RAK4631 IO4
+    // moduleConfig.external_notification.output_buzzer = 10; // RAK4631 IO6
+    // moduleConfig.external_notification.output_vibra = 28; // RAK4631 IO7
+    // moduleConfig.external_notification.nag_timeout = 300;
+
+    // T-Watch / T-Deck i2s audio as buzzer:
+    // moduleConfig.external_notification.enabled = true;
+    // moduleConfig.external_notification.nag_timeout = 300;
+    // moduleConfig.external_notification.output_ms = 1000;
+    // moduleConfig.external_notification.use_i2s_as_buzzer = true;
+    // moduleConfig.external_notification.alert_message_buzzer = true;
+
+    if (moduleConfig.external_notification.enabled) {
+#if !MESHTASTIC_EXCLUDE_INPUTBROKER
+        if (inputBroker) // put our callback in the inputObserver list
+            inputObserver.observe(inputBroker);
+#endif
+#if !MESHTASTIC_EXCLUDE_RTTTL
+        if (nodeDB->loadProto(rtttlConfigFile, meshtastic_RTTTLConfig_size, sizeof(meshtastic_RTTTLConfig),
+                              &meshtastic_RTTTLConfig_msg, &rtttlConfig) != LoadFileResult::LOAD_SUCCESS) {
+            memset(rtttlConfig.ringtone, 0, sizeof(rtttlConfig.ringtone));
+            // The default ringtone is always loaded from userPrefs.jsonc
+            strncpy(rtttlConfig.ringtone, USERPREFS_RINGTONE_RTTTL, sizeof(rtttlConfig.ringtone));
+        }
+#endif
+
+        LOG_INFO("Init External Notification Module");
+
+        output = moduleConfig.external_notification.output ? moduleConfig.external_notification.output
+                                                           : EXT_NOTIFICATION_MODULE_OUTPUT;
+
+        // Set the direction of a pin
+        if (output > 0) {
+            LOG_INFO("Use Pin %i in digital mode", output);
+            pinMode(output, OUTPUT);
+        }
+#ifdef NEOPIXEL_STATUS_NOTIFICATION_PIN
+        LOG_INFO("Use WS2812 on GPIO %d as notification LED", NEOPIXEL_STATUS_NOTIFICATION_PIN);
+        notificationPixel.begin();
+        notificationPixel.clear();
+        notificationPixel.show();
+#endif
+        setExternalState(0, false);
+        externalTurnedOn[0] = 0;
+        if (moduleConfig.external_notification.output_vibra) {
+            LOG_INFO("Use Pin %i for vibra motor", moduleConfig.external_notification.output_vibra);
+            pinMode(moduleConfig.external_notification.output_vibra, OUTPUT);
+            setExternalState(1, false);
+            externalTurnedOn[1] = 0;
+        }
+        if (moduleConfig.external_notification.output_buzzer && canBuzz()) {
+            if (!moduleConfig.external_notification.use_pwm) {
+                LOG_INFO("Use Pin %i for buzzer", moduleConfig.external_notification.output_buzzer);
+                pinMode(moduleConfig.external_notification.output_buzzer, OUTPUT);
+                setExternalState(2, false);
+                externalTurnedOn[2] = 0;
+            } else {
+                config.device.buzzer_gpio = config.device.buzzer_gpio ? config.device.buzzer_gpio : PIN_BUZZER;
+                // in PWM Mode we force the buzzer pin if it is set
+                LOG_INFO("Use Pin %i in PWM mode", config.device.buzzer_gpio);
+            }
+        }
+    } else {
+        LOG_INFO("External Notification Module Disabled");
+        disable();
+    }
+}
+
+ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshPacket &mp)
+{
+    // Trigger external notification if enabled and not muted; isSilenced is from temporary mute toggles
+    if (moduleConfig.external_notification.enabled && !isSilenced) {
+        if (!isFromUs(&mp)) {
+            // Check if the message contains a bell character. Don't do this loop for every pin, just once.
+            auto &p = mp.decoded;
+            bool containsBell = false;
+            for (size_t i = 0; i < p.payload.size; i++) {
+                if (p.payload.bytes[i] == ASCII_BELL) {
+                    containsBell = true;
+                    break;
+                }
+            }
+
+            const bool isDmToUs = !isBroadcast(mp.to) && isToUs(&mp);
+            const bool is_muted = isMutedForPacket(mp);
+
+            const bool buzzerModeIsDirectOnly =
+                (config.device.buzzer_mode == meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY);
+
+            // Each output evaluates its own alert condition independently:
+            // alert_bell_* fires only when a bell character is present.
+            // alert_message_* fires on any non-muted message.
+
+            // Alert when receiving a bell = alertBell: true
+            // Alert when receiving a message = alertMessage: true
+            const bool genericShouldAlert = (moduleConfig.external_notification.alert_bell && containsBell) ||
+                                            (moduleConfig.external_notification.alert_message && !is_muted);
+
+            // Alert GPIO Vibra when receiving a bell = alertBellVibra: true
+            // Alert GPIO Vibra when receiving a message = alertMessageVibra: true
+            const bool vibraShouldAlert = (moduleConfig.external_notification.alert_bell_vibra && containsBell) ||
+                                          (moduleConfig.external_notification.alert_message_vibra && !is_muted);
+
+            // Alert GPIO Buzzer when receiving a bell = alertBellBuzzer: true
+            // Alert GPIO Buzzer when receiving a message = alertMessageBuzzer: true
+            // If you are already buzzing, keep going
+            buzzerShouldAlert =
+                buzzerShouldAlert || (canBuzz() && ((moduleConfig.external_notification.alert_bell_buzzer && containsBell) ||
+                                                    (moduleConfig.external_notification.alert_message_buzzer && !is_muted)));
+
+            if (genericShouldAlert || vibraShouldAlert || buzzerShouldAlert) {
+                armNagCycle();
+            }
+
+            if (genericShouldAlert) {
+                LOG_INFO("externalNotificationModule - Generic alert");
+                setExternalState(0, true);
+#if HAS_LIBNOTIFY
+                portduinoNotify(mp);
+#endif
+            }
+
+            if (vibraShouldAlert) {
+                LOG_INFO("externalNotificationModule - Vibra alert");
+                triggerVibraOutput();
+            }
+
+            if (buzzerShouldAlert) {
+                LOG_INFO("externalNotificationModule - Buzzer alert");
+                if (buzzerModeIsDirectOnly && !isDmToUs && !containsBell) {
+                    LOG_INFO("Buzzer suppressed: mode DIRECT_MSG_ONLY");
+                } else {
+                    // Buzz if buzzer mode is not in DIRECT_MSG_ONLY or is DM to us
+                    triggerBuzzerOutput();
+                }
+            }
+
+            setIntervalFromNow(0); // run once so we know if we should do something
+        }
+    } else {
+        LOG_INFO("External Notification Module Disabled or muted");
+    }
+
+    return ProcessMessage::CONTINUE; // Let others look at this message also if they want
+}
+
+void ExternalNotificationModule::triggerBuzzerOutput()
+{
+    if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+#if defined(HAS_I2S) && !MESHTASTIC_EXCLUDE_RTTTL
+        audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
+#endif
+    } else if (moduleConfig.external_notification.use_pwm) {
+#if !MESHTASTIC_EXCLUDE_RTTTL
+        rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+#endif
+    } else {
+        setExternalState(2, true);
+    }
+}
+
+void ExternalNotificationModule::triggerVibraOutput()
+{
+#ifdef HAS_DRV2605
+    drv.setWaveform(0, 16);
+    drv.setWaveform(1, 0);
+    drv.setWaveform(2, 16);
+    drv.setWaveform(3, 0);
+    drv.setWaveform(4, 16);
+    drv.setWaveform(5, 0);
+    drv.setWaveform(6, 16);
+    drv.setWaveform(7, 0);
+    drv.go();
+#endif
+    setExternalState(1, true);
+}
+
+void ExternalNotificationModule::armNagCycle()
+{
+    const uint32_t durationMs = moduleConfig.external_notification.nag_timeout
+                                    ? moduleConfig.external_notification.nag_timeout * 1000UL
+                                    : moduleConfig.external_notification.output_ms;
+    nagCycleCutoff = millis() + durationMs;
+    LOG_INFO("Toggling nagCycleCutoff to %lu", nagCycleCutoff);
+    isNagging = true;
+}
+
+void ExternalNotificationModule::startNotification()
+{
+    if (!moduleConfig.external_notification.enabled || isSilenced)
+        return;
+
+    // Waypoint and geofence events are neither direct messages nor bells.
+    const bool buzzerModeIsDirectOnly = (config.device.buzzer_mode == meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY);
+
+    const bool generic = moduleConfig.external_notification.alert_message;
+    const bool vibra = moduleConfig.external_notification.alert_message_vibra;
+    const bool buzzer = canBuzz() && moduleConfig.external_notification.alert_message_buzzer && !buzzerModeIsDirectOnly;
+    if (canBuzz() && moduleConfig.external_notification.alert_message_buzzer && buzzerModeIsDirectOnly)
+        LOG_INFO("Non-message buzzer was suppressed because buzzer mode DIRECT_MSG_ONLY");
+    if (!generic && !vibra && !buzzer)
+        return;
+
+    buzzerShouldAlert |= buzzer;
+
+    armNagCycle();
+
+    if (generic) {
+        LOG_INFO("externalNotificationModule - Generic alert");
+        setExternalState(0, true);
+    }
+    if (vibra) {
+        LOG_INFO("externalNotificationModule - Vibra alert");
+        triggerVibraOutput();
+    }
+    if (buzzer) {
+        LOG_INFO("externalNotificationModule - Buzzer alert");
+        triggerBuzzerOutput();
+    }
+
+    setIntervalFromNow(0); // run once so the nag/stop lifecycle in runOnce() takes over
+}
+/**
+ * @brief An admin message arrived to AdminModule. We are asked whether we want to handle that.
+ *
+ * @param mp The mesh packet arrived.
+ * @param request The AdminMessage request extracted from the packet.
+ * @param response The prepared response
+ * @return AdminMessageHandleResult HANDLED if message was handled
+ *   HANDLED_WITH_RESULT if a result is also prepared.
+ */
+AdminMessageHandleResult ExternalNotificationModule::handleAdminMessageForModule(const meshtastic_MeshPacket &mp,
+                                                                                 meshtastic_AdminMessage *request,
+                                                                                 meshtastic_AdminMessage *response)
+{
+    AdminMessageHandleResult result;
+
+    switch (request->which_payload_variant) {
+#if !MESHTASTIC_EXCLUDE_RTTTL
+    case meshtastic_AdminMessage_get_ringtone_request_tag:
+        LOG_INFO("Client getting ringtone");
+        this->handleGetRingtone(mp, response);
+        result = AdminMessageHandleResult::HANDLED_WITH_RESPONSE;
+        break;
+
+    case meshtastic_AdminMessage_set_ringtone_message_tag:
+        LOG_INFO("Client setting ringtone");
+        this->handleSetRingtone(request->set_canned_message_module_messages);
+        result = AdminMessageHandleResult::HANDLED;
+        break;
+#endif
+
+    default:
+        result = AdminMessageHandleResult::NOT_HANDLED;
+    }
+
+    return result;
+}
+
+#if !MESHTASTIC_EXCLUDE_RTTTL
+void ExternalNotificationModule::handleGetRingtone(const meshtastic_MeshPacket &req, meshtastic_AdminMessage *response)
+{
+    LOG_INFO("*** handleGetRingtone");
+    if (req.decoded.want_response) {
+        response->which_payload_variant = meshtastic_AdminMessage_get_ringtone_response_tag;
+        strncpy(response->get_ringtone_response, rtttlConfig.ringtone, sizeof(response->get_ringtone_response));
+    } // Don't send anything if not instructed to. Better than asserting.
+}
+
+void ExternalNotificationModule::handleSetRingtone(const char *from_msg)
+{
+    int changed = 0;
+
+    if (*from_msg) {
+        changed |= strcmp(rtttlConfig.ringtone, from_msg);
+        strncpy(rtttlConfig.ringtone, from_msg, sizeof(rtttlConfig.ringtone));
+        LOG_INFO("*** from_msg.text:%s", from_msg);
+    }
+
+    if (changed) {
+        nodeDB->saveProto(rtttlConfigFile, meshtastic_RTTTLConfig_size, &meshtastic_RTTTLConfig_msg, &rtttlConfig);
+    }
+}
+#endif
+
+#if !MESHTASTIC_EXCLUDE_INPUTBROKER
+int ExternalNotificationModule::handleInputEvent(const InputEvent *event)
+{
+    // Testing the deadline instead of isNagging was true at boot, and the non-zero return
+    // swallowed the first input event from every later observer.
+    if (isNagging) {
+        stopNow();
+        return 1;
+    }
+    return 0;
+}
+#endif
+
+#if HAS_LIBNOTIFY
+/// Cap on undelivered notifications. A burst of traffic shouldn't grow the queue without bound while
+/// the notification daemon is slow; the oldest entries are the ones worth keeping.
+static constexpr size_t maxQueuedNotifications = 16;
+/// Consecutive show() failures before we back off. One failure can be a daemon restart; a run of
+/// them means there is nothing listening right now.
+static constexpr int maxNotifyFailures = 3;
+/// Backoff bounds. The packaged daemon runs as a system service with no session bus, so "nothing is
+/// listening" is an ordinary steady state rather than an error worth retrying per message - but a
+/// desktop session can appear at any point, so it must never become permanent either.
+static constexpr uint32_t notifyBackoffInitialMs = 30 * 1000;
+static constexpr uint32_t notifyBackoffMaxMs = 15 * 60 * 1000;
+
+/// Copy an untrusted mesh string into something GLib will accept. Embedded NULs become spaces -
+/// they would otherwise truncate the text at the first one - and invalid UTF-8 is replaced, because
+/// g_variant_new_string() rejects it: a GLib CRITICAL by default, and a hard abort under
+/// G_DEBUG=fatal-criticals, which an unauthenticated mesh packet must never be able to trigger.
+static std::string sanitizedMeshText(const char *src, size_t len)
+{
+    std::string out(src, len);
+    for (char &c : out) {
+        if (c == '\0')
+            c = ' ';
+    }
+    out.push_back('\0'); // sanitizeUtf8() works on a NUL-terminated buffer
+    sanitizeUtf8(out.data(), out.size());
+    out.pop_back(); // bad bytes are replaced in place, so the length is unchanged
+    return out;
+}
+
+/// Escape Pango markup in a notification body. Servers advertising "body-markup" parse a markup
+/// subset there, so an unescaped message can inject formatting - and where the server also
+/// advertises body-images or body-hyperlinks, tags that make the daemon fetch a remote URL. The
+/// escaping is unconditional: a server without body-markup renders the entities literally, which is
+/// cosmetic, while failing to escape one that has it is not, and mesh text carries no markup worth
+/// preserving. Only the body needs this; the spec gives the summary no markup.
+///
+/// Runs on the caller's thread rather than the worker's. That does not weaken the rule that the
+/// worker owns every libnotify call: this is a pure GLib string function, touching no libnotify or
+/// DBus state, and GLib has been thread-safe since 2.32.
+static std::string escapedNotificationBody(const std::string &text)
+{
+    gchar *escaped = g_markup_escape_text(text.data(), (gssize)text.size());
+    if (!escaped) {
+        // Fail closed. Returning the input here would hand libnotify the one string this function
+        // exists to neutralize, so drop the body instead - it cannot happen for the already
+        // sanitized input we pass, and if it ever does, losing a body beats injecting one.
+        return "[unprintable]";
+    }
+    std::string out(escaped);
+    g_free(escaped);
+    return out;
+}
+
+void ExternalNotificationModule::portduinoNotify(const meshtastic_MeshPacket &mp)
+{
+    std::string senderName;
+    const meshtastic_NodeInfoLite *sender = nodeDB->getMeshNode(mp.from);
+    if (nodeInfoLiteHasUser(sender)) {
+        if (sender->long_name[0] != '\0') {
+            senderName = sender->long_name;
+        } else {
+            senderName = sender->short_name;
+        }
+    } else {
+        senderName = std::to_string(mp.from);
+    }
+
+    // nodeDB is only safe to touch on this thread, so the strings are resolved here and the worker
+    // gets owned copies.
+    //
+    // Both are attacker-controlled - the body is the raw payload and the name came off the mesh -
+    // so neither reaches libnotify unsanitized. TypeConversions already sanitizes names on the way
+    // into NodeDB, but the abort described above is too sharp an edge to leave resting on an
+    // invariant owned by another file.
+    std::string notificationSummary = "From: " + sanitizedMeshText(senderName.data(), senderName.size());
+    std::string notificationBody =
+        escapedNotificationBody(sanitizedMeshText((const char *)mp.decoded.payload.bytes, mp.decoded.payload.size));
+
+    reportNotifyStatus();
+
+    {
+        std::lock_guard<std::mutex> lock(notifyLock);
+        if (notifyShutdown)
+            return;
+        // Inside a backoff window nothing is queued at all. The first message after the window
+        // expires is the probe that finds out whether the daemon came back.
+        if (notifyRetryArmed && !Throttle::deadlinePassed(notifyRetryAfter))
+            return;
+        if (notifyQueue.size() >= maxQueuedNotifications) {
+            LOG_WARN("Desktop notification queue full, dropping notification");
+            return;
+        }
+        notifyQueue.emplace_back(std::move(notificationSummary), std::move(notificationBody));
+        if (!notifyThread.joinable())
+            notifyThread = std::thread([this] { notifyWorker(); });
+    }
+    notifyWake.notify_one();
+}
+
+void ExternalNotificationModule::reportNotifyStatus()
+{
+    NotifyStatus status;
+    {
+        std::lock_guard<std::mutex> lock(notifyLock);
+        if (!notifyStatus.pending)
+            return;
+        status = notifyStatus;
+        notifyStatus.pending = false;
+    }
+    // Logged once the lock is released: LOG_* formats into RedirectablePrint's shared buffer and
+    // writes the logfile, neither of which belongs in a critical section the worker waits on.
+    if (status.recovered) {
+        LOG_INFO("Desktop notifications working again");
+    } else {
+        LOG_WARN("Desktop notifications unavailable (%s), retry in %us", status.reason, status.retryInMs / 1000);
+    }
+}
+
+void ExternalNotificationModule::notifyWorker()
+{
+    int consecutiveFailures = 0;
+    std::unique_lock<std::mutex> lock(notifyLock);
+    while (true) {
+        notifyWake.wait(lock, [this] { return notifyShutdown || !notifyQueue.empty(); });
+        if (notifyShutdown)
+            return;
+
+        std::pair<std::string, std::string> entry = std::move(notifyQueue.front());
+        notifyQueue.pop_front();
+
+        // Unlocked for the DBus round trip so handleReceived() never blocks behind the daemon.
+        lock.unlock();
+        char errorText[sizeof(NotifyStatus::reason)];
+        const char *failure = nullptr;
+        // Init is attempted per delivery rather than once before the loop, so a retry after a
+        // backoff window can still pick up a session bus that was absent at startup.
+        if (!notify_is_initted() && !notify_init("Meshtasticd")) {
+            failure = "libnotify init failed";
+        } else {
+            NotifyNotification *notification =
+                notify_notification_new(entry.first.c_str(), entry.second.c_str(), "org.meshtastic.meshtasticd");
+            if (notification) {
+                GError *error = nullptr;
+                if (!notify_notification_show(notification, &error)) {
+                    snprintf(errorText, sizeof(errorText), "%s", error && error->message ? error->message : "unknown error");
+                    failure = errorText;
+                    if (error)
+                        g_error_free(error);
+                }
+                g_object_unref(G_OBJECT(notification));
+            } else {
+                failure = "could not create notification";
+            }
+        }
+        lock.lock();
+
+        if (!failure) {
+            consecutiveFailures = 0;
+            notifyBackoffMs = 0;
+            // Only worth a line if we had actually stopped trying.
+            if (notifyRetryArmed) {
+                notifyRetryArmed = false;
+                notifyStatus.pending = true;
+                notifyStatus.recovered = true;
+            }
+            continue;
+        }
+
+        if (++consecutiveFailures < maxNotifyFailures)
+            continue;
+
+        // Back off instead of latching off for the process lifetime. The queue is dropped rather
+        // than held: a burst of popups for messages from fifteen minutes ago is noise, not a
+        // backlog worth delivering.
+        notifyBackoffMs = notifyBackoffMs ? notifyBackoffMs * 2 : notifyBackoffInitialMs;
+        if (notifyBackoffMs > notifyBackoffMaxMs)
+            notifyBackoffMs = notifyBackoffMaxMs;
+        notifyRetryAfter = millis() + notifyBackoffMs;
+        notifyRetryArmed = true;
+        notifyQueue.clear();
+        consecutiveFailures = 0;
+
+        notifyStatus.pending = true;
+        notifyStatus.recovered = false;
+        notifyStatus.retryInMs = notifyBackoffMs;
+        snprintf(notifyStatus.reason, sizeof(notifyStatus.reason), "%s", failure);
+    }
+}
+
+ExternalNotificationModule::~ExternalNotificationModule()
+{
+    {
+        std::lock_guard<std::mutex> lock(notifyLock);
+        notifyShutdown = true;
+        notifyQueue.clear();
+    }
+    notifyWake.notify_one();
+    if (notifyThread.joinable())
+        notifyThread.join();
+    // Only after the join: the worker owns every libnotify call, so tearing down while it is still
+    // running would be a use-after-uninit.
+    if (notify_is_initted())
+        notify_uninit();
+}
+#endif

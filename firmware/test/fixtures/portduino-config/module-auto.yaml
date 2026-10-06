@@ -1,3 +1,0 @@
-# CLEAN. Autodetect: the module is probed at startup, so no pins are required here.
-Lora:
-  Module: auto

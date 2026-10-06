@@ -1,0 +1,18 @@
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Node modules (for backend and frontend)
+node_modules/
+dist/
+build/
+
+# Local Database Files
+*.sqlite
+*.sqlite3
+*.db
+
+# IDE and OS Files
+.vscode/
+.DS_Store

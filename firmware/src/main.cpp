@@ -4,7 +4,7 @@
 #include <math.h>
 #include <string.h>
 #include <TinyGPSPlus.h>
-#include <RadioLib.h>
+#include "lora_manager.h"
 #include <XPowersLib.h>
 #include <U8g2lib.h>
 #include "weather_manager.h"
@@ -16,13 +16,6 @@
 // Dual I2C Environmental Sensors (BME680 & DHT20)
 // ============================================================
 
-#define LORA_SCK       12
-#define LORA_MISO      13
-#define LORA_MOSI      11
-#define LORA_CS        10
-#define LORA_DIO1       1
-#define LORA_RST        5
-#define LORA_BUSY       4
 
 #define GPS_EN_PIN      7
 #define GPS_RX_PIN      9
@@ -37,24 +30,8 @@
 // T-Beam Supreme user/BOOT button (active LOW)
 #define USER_BUTTON_PIN 0
 
-#define NODE_ID        0xA1
-const char NODE_NAME[] = "Vessel-A";
 
-// Must match Board B.
-#define LORA_FREQUENCY  915.0
-#define LORA_BANDWIDTH  125.0
-#define LORA_SPREADING  9
-#define LORA_CODING     7
-#define LORA_SYNC_WORD  0x12
-#define LORA_POWER      17
-#define LORA_PREAMBLE   8
-#define LORA_GAIN       1.8
 
-#define PACKET_MAGIC    0x4D45
-#define PACKET_VERSION  1
-#define FLAG_GPS_FIX                0x01
-#define FLAG_TEMP_HUMIDITY_VALID    0x02
-#define FLAG_PRESSURE_VALID         0x04
 
 const unsigned long TX_INTERVAL = 5000UL;
 // DEVELOPMENT ONLY: set to 0 for real 10-minute sampling before field use.
@@ -64,46 +41,9 @@ const unsigned long GPS_STATUS_INTERVAL = 5000UL;
 const unsigned long OLED_UPDATE_INTERVAL = 500UL;
 const unsigned long UPTIME_PRINT_INTERVAL = 60000UL; // Serial heartbeat every minute
 unsigned long lastWeatherTime = 0;
-#define RX_SEQUENCE_CACHE 256
 
-enum PacketType : uint8_t {
-  PACKET_TELEMETRY = 1,
-  PACKET_SOS = 2
-};
-
-struct __attribute__((packed)) WeatherData {
-  int16_t temperature_x10;
-  uint16_t humidity_x10;
-  uint16_t pressure_x10;
-  int16_t pressureTrend_x10;
-  uint8_t zambrettiState;
-  uint8_t sensorFusionState;
-  uint8_t weatherState;
-};
-
-struct __attribute__((packed)) VesselPacket {
-  uint16_t magic;
-  uint8_t version;
-  uint8_t packetType;
-  uint32_t originNodeId;
-  uint32_t sequenceNumber;
-  uint32_t timestamp;
-  uint8_t hopCount;
-  uint8_t flags;
-  char nodeName[12];
-  int32_t latitude_e7;
-  int32_t longitude_e7;
-  uint32_t shoreDistance_m;
-  uint8_t batteryLevel;
-  WeatherData weather;
-  char message[8];
-};
-static_assert(sizeof(VesselPacket) == 62, "Packet must remain 62 bytes");
 
 // -------------------- Hardware --------------------------------
-SPIClass loraSPI(FSPI);
-Module radioModule(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
-SX1262 radio(&radioModule);
 HardwareSerial GPSSerial(1);
 TinyGPSPlus gps;
 TwoWire PMUWire(1); // PMU stays isolated on hardware bus 1
@@ -137,33 +77,6 @@ double latitude = 0.0;
 double longitude = 0.0;
 unsigned long lastGPSPrint = 0;
 
-// -------------------- Board A transmission --------------------
-uint32_t txSequence = 0;
-uint32_t txCount = 0;
-uint32_t txFailures = 0;
-bool lastTXSuccess = false;
-
-// -------------------- Last Board B received --------------------
-uint32_t rxFromB = 0;
-uint32_t uniqueFromB = 0;
-uint32_t duplicateFromB = 0;
-uint32_t missingFromB = 0;
-uint32_t firstBSequence = 0;
-uint32_t highestBSequence = 0;
-bool haveBSequence = false;
-uint32_t seenBSequences[RX_SEQUENCE_CACHE] = {};
-bool seenBSequenceValid[RX_SEQUENCE_CACHE] = {};
-uint16_t seenBCursor = 0;
-uint32_t invalidPackets = 0;
-
-bool bGPSValid = false;
-double bLatitude = 0.0;
-double bLongitude = 0.0;
-double distanceToBkm = -1.0;
-int16_t lastBRSSI = 0;
-float lastBSNR = 0.0f;
-unsigned long lastBSeen = 0;
-uint8_t bWeatherState = WEATHER_CALIBRATING;
 
 // -------------------- Declarations -----------------------------
 void switchI2C(uint8_t sda, uint8_t scl);
@@ -173,17 +86,6 @@ bool detectOLED();
 void setupGPS();
 void updateGPS();
 void printGPSStatus();
-void setupLoRa();
-void startReceive();
-void createPacket(VesselPacket &p);
-void transmitPacket();
-void processReceivedPacket(const uint8_t *buffer, size_t length, int16_t rssi, float snr);
-void trackBSequence(uint32_t sequence);
-bool bSequenceWasSeen(uint32_t sequence);
-void rememberBSequence(uint32_t sequence);
-void resetBSequenceSession();
-void calculateBSequencePDR();
-float bSequencePDR();
 void handleOLEDButton();
 void updateOLED();
 void oledGPSPage();
@@ -264,23 +166,7 @@ void loop() {
   updateGPS();
   processSerialTestCommands();
 
-  if (digitalRead(LORA_DIO1) == HIGH) {
-    size_t len = radio.getPacketLength();
-    if (len > 0 && len <= sizeof(VesselPacket)) {
-      uint8_t buffer[sizeof(VesselPacket)];
-      int state = radio.readData(buffer, len);
-      if (state == RADIOLIB_ERR_NONE) {
-        int16_t rssi = static_cast<int16_t>(radio.getRSSI());
-        float snr = radio.getSNR();
-        processReceivedPacket(buffer, len, rssi, snr);
-      } else {
-        Serial.print("[RX-A] readData error: ");
-        Serial.println(state);
-        invalidPackets++;
-      }
-    }
-    startReceive();
-  }
+  pollLoRaReceive();
 
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();
@@ -393,229 +279,6 @@ void printGPSStatus() {
     Serial.print("Lat: "); Serial.println(latitude, 7);
     Serial.print("Lon: "); Serial.println(longitude, 7);
   }
-}
-
-// ============================================================
-// LORA
-// ============================================================
-void setupLoRa() {
-  loraSPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
-  int state = radio.begin(LORA_FREQUENCY, LORA_BANDWIDTH, LORA_SPREADING,
-                          LORA_CODING, LORA_SYNC_WORD, LORA_POWER,
-                          LORA_PREAMBLE, LORA_GAIN, false);
-  if (state != RADIOLIB_ERR_NONE) {
-    Serial.print("[LORA-A] Initialization failed: ");
-    Serial.println(state);
-    while (true) delay(1000);
-  }
-  radio.setDio2AsRfSwitch(true);
-  Serial.println("[LORA-A] SX1262 initialized");
-}
-
-void startReceive() {
-  int state = radio.startReceive();
-  if (state != RADIOLIB_ERR_NONE) {
-    Serial.print("[RX-A] startReceive error: ");
-    Serial.println(state);
-  }
-}
-
-// ============================================================
-// TRANSMISSION
-// ============================================================
-void createPacket(VesselPacket &p) {
-  memset(&p, 0, sizeof(p));
-  p.magic = PACKET_MAGIC;
-  p.version = PACKET_VERSION;
-  p.packetType = PACKET_TELEMETRY;
-  p.originNodeId = NODE_ID;
-  p.sequenceNumber = txSequence++;
-  p.timestamp = millis() / 1000UL;
-  p.hopCount = 0;
-  if (gpsHasFix) {
-    p.flags |= FLAG_GPS_FIX;
-    p.latitude_e7 = static_cast<int32_t>(round(latitude * 10000000.0));
-    p.longitude_e7 = static_cast<int32_t>(round(longitude * 10000000.0));
-  }
-  strncpy(p.nodeName, NODE_NAME, sizeof(p.nodeName) - 1);
-  p.shoreDistance_m = 0;
-  p.batteryLevel = 100;
-  // The packet remains 62 bytes. The existing flags byte now also tells a
-  // receiver which weather fields are valid for this sample.
-  if (tempHumidityReadingValid) {
-    p.flags |= FLAG_TEMP_HUMIDITY_VALID;
-    p.weather.temperature_x10 = static_cast<int16_t>(round(temperatureC * 10.0f));
-    p.weather.humidity_x10 = static_cast<uint16_t>(round(humidityPercent * 10.0f));
-  }
-
-  // pressure_x10 is the normalized value used by the weather algorithm.
-  // Do not advertise it as valid unless the full weather input set is valid.
-  if (weatherInputsValid) {
-    p.flags |= FLAG_PRESSURE_VALID;
-    p.weather.pressure_x10 = static_cast<uint16_t>(round(pressureMSL * 10.0f));
-    p.weather.pressureTrend_x10 = static_cast<int16_t>(round(pressureDelta * 10.0f));
-    p.weather.zambrettiState = zambrettiIndex;
-    p.weather.sensorFusionState = sensorFusionState;
-    p.weather.weatherState = weatherState;
-  } else {
-    p.weather.pressure_x10 = 0;
-    p.weather.pressureTrend_x10 = 0;
-    p.weather.zambrettiState = 0;
-    p.weather.sensorFusionState = WEATHER_CALIBRATING;
-    p.weather.weatherState = WEATHER_CALIBRATING;
-  }
-  strncpy(p.message, shortWeatherName(p.weather.weatherState), sizeof(p.message) - 1);
-}
-
-void transmitPacket() {
-  VesselPacket p;
-  createPacket(p);
-  Serial.print("[TX-A] Seq="); Serial.print(p.sequenceNumber);
-  Serial.print(" GPS="); Serial.print((p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
-  Serial.print(" Weather="); Serial.println(weatherName(p.weather.weatherState));
-
-  int state = radio.transmit(reinterpret_cast<uint8_t*>(&p), sizeof(p));
-  if (state == RADIOLIB_ERR_NONE) {
-    lastTXSuccess = true;
-    txCount++;
-    Serial.println("[TX-A] SUCCESS");
-  } else {
-    lastTXSuccess = false;
-    txFailures++;
-    Serial.print("[TX-A] FAILED: "); Serial.println(state);
-  }
-  startReceive();
-}
-
-// ============================================================
-// RECEIVE BOARD B + TRACK REVERSE-LINK PDR
-// ============================================================
-void processReceivedPacket(const uint8_t *buffer, size_t length,
-                           int16_t rssi, float snr) {
-  if (length != sizeof(VesselPacket)) {
-    invalidPackets++;
-    Serial.println("[RX-A] Invalid packet length");
-    return;
-  }
-  VesselPacket p;
-  memcpy(&p, buffer, sizeof(p));
-  if (p.magic != PACKET_MAGIC || p.version != PACKET_VERSION) {
-    invalidPackets++;
-    Serial.println("[RX-A] Invalid packet header");
-    return;
-  }
-  if (p.originNodeId == NODE_ID) return;
-
-  if (p.originNodeId != 0xB1) {
-    Serial.print("[RX-A] Unknown node ID 0x");
-    Serial.println(p.originNodeId, HEX);
-    return;
-  }
-
-  rxFromB++;
-  lastBSeen = millis();
-  lastBRSSI = rssi;
-  lastBSNR = snr;
-  bWeatherState = p.weather.weatherState;
-
-  if (p.flags & FLAG_GPS_FIX) {
-    double lat = p.latitude_e7 / 10000000.0;
-    double lon = p.longitude_e7 / 10000000.0;
-    if (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0 &&
-        !(lat == 0.0 && lon == 0.0)) {
-      bGPSValid = true;
-      bLatitude = lat;
-      bLongitude = lon;
-    } else {
-      bGPSValid = false;
-      distanceToBkm = -1.0;
-    }
-  } else {
-    bGPSValid = false;
-    distanceToBkm = -1.0;
-  }
-
-  trackBSequence(p.sequenceNumber);
-
-  if (gpsHasFix && bGPSValid) {
-    distanceToBkm = TinyGPSPlus::distanceBetween(latitude, longitude,
-                                                  bLatitude, bLongitude) / 1000.0;
-  } else {
-    distanceToBkm = -1.0;
-  }
-
-  Serial.println();
-  Serial.println("========== RX-A: BOARD B PACKET ==========");
-  Serial.print("Node: "); Serial.println(p.nodeName);
-  Serial.print("Sequence: "); Serial.println(p.sequenceNumber);
-  Serial.print("Remote GPS: ");
-  if (bGPSValid) {
-    Serial.print(bLatitude, 7); Serial.print(", "); Serial.println(bLongitude, 7);
-  } else Serial.println("NO FIX");
-  Serial.print("Distance to B: ");
-  if (distanceToBkm >= 0.0) { Serial.print(distanceToBkm, 3); Serial.println(" km"); }
-  else Serial.println("?");
-  Serial.print("RSSI: "); Serial.print(rssi); Serial.println(" dBm");
-  Serial.print("SNR: "); Serial.print(snr, 2); Serial.println(" dB");
-  Serial.print("Observed B->A PDR: "); Serial.print(bSequencePDR()); Serial.println("%");
-  Serial.println("==========================================");
-}
-
-bool bSequenceWasSeen(uint32_t sequence) {
-  for (int i = 0; i < RX_SEQUENCE_CACHE; i++) {
-    if (seenBSequenceValid[i] && seenBSequences[i] == sequence) return true;
-  }
-  return false;
-}
-
-void rememberBSequence(uint32_t sequence) {
-  seenBSequences[seenBCursor] = sequence;
-  seenBSequenceValid[seenBCursor] = true;
-  seenBCursor = (seenBCursor + 1) % RX_SEQUENCE_CACHE;
-}
-
-void resetBSequenceSession() {
-  uniqueFromB = duplicateFromB = missingFromB = 0;
-  firstBSequence = highestBSequence = 0;
-  haveBSequence = false;
-  seenBCursor = 0;
-  memset(seenBSequences, 0, sizeof(seenBSequences));
-  memset(seenBSequenceValid, 0, sizeof(seenBSequenceValid));
-}
-
-void trackBSequence(uint32_t sequence) {
-  if (haveBSequence && sequence == 0 && highestBSequence > 10) {
-    resetBSequenceSession();
-  }
-  if (bSequenceWasSeen(sequence)) {
-    duplicateFromB++;
-    calculateBSequencePDR();
-    return;
-  }
-  rememberBSequence(sequence);
-  uniqueFromB++;
-
-  if (!haveBSequence) {
-    haveBSequence = true;
-    firstBSequence = highestBSequence = sequence;
-  } else {
-    if (sequence < firstBSequence) firstBSequence = sequence;
-    if (sequence > highestBSequence) highestBSequence = sequence;
-  }
-  calculateBSequencePDR();
-}
-
-void calculateBSequencePDR() {
-  if (!haveBSequence) { missingFromB = 0; return; }
-  uint64_t expected = static_cast<uint64_t>(highestBSequence) - firstBSequence + 1ULL;
-  missingFromB = expected > uniqueFromB ? static_cast<uint32_t>(expected - uniqueFromB) : 0;
-}
-
-float bSequencePDR() {
-  if (!haveBSequence) return 0.0f;
-  uint64_t expected = static_cast<uint64_t>(highestBSequence) - firstBSequence + 1ULL;
-  if (expected == 0) return 0.0f;
-  return 100.0f * static_cast<float>(uniqueFromB) / static_cast<float>(expected);
 }
 
 // OLED BUTTON NAVIGATION

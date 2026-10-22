@@ -64,6 +64,16 @@ int16_t lastBRSSI = 0;
 float lastBSNR = 0.0f;
 unsigned long lastBSeen = 0;
 uint8_t bWeatherState = WEATHER_CALIBRATING;
+static const unsigned long NEIGHBOR_TIMEOUT_MS = 15000UL;
+
+bool isVesselBActive() {
+  return rxFromB > 0 && (millis() - lastBSeen <= NEIGHBOR_TIMEOUT_MS);
+}
+
+unsigned long vesselBLastSeenSeconds() {
+  return rxFromB > 0 ? (millis() - lastBSeen) / 1000UL : 0UL;
+}
+
 
 // Helper forward declarations (kept private to this translation unit).
 static void processReceivedPacket(const uint8_t*, size_t, int16_t, float);

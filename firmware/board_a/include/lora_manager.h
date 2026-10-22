@@ -21,3 +21,7 @@ void createPacket(VesselPacket &packet);
 void transmitPacket();
 void transmitSOS(); // Bench SOS: single high-priority packet, no ACK/relay yet
 float bSequencePDR();
+// A packet received in the last 15 seconds means the neighbor is active.
+// Historical GPS/RSSI remain stored but must not be presented as live.
+bool isVesselBActive();
+unsigned long vesselBLastSeenSeconds();

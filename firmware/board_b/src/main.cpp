@@ -181,6 +181,11 @@ struct Neighbor {
   uint16_t seenCursor;
 };
 Neighbor neighbors[MAX_NEIGHBORS];
+// The active table contains only live neighbors. Retain one last-known
+// snapshot in RAM when an entry times out; no flash persistence yet.
+Neighbor lastKnownNeighbor = {};
+bool haveLastKnownNeighbor = false;
+
 
 uint32_t totalValidPacketsReceived = 0;
 uint32_t invalidPackets = 0;
@@ -682,6 +687,9 @@ void removeStaleNeighbors() {
     Neighbor &n = neighbors[i];
     if (n.active && millis() - n.lastSeen > NEIGHBOR_TIMEOUT) {
       Serial.print("[NEIGHBOR] Lost: "); Serial.println(n.nodeName);
+      lastKnownNeighbor = n;
+      lastKnownNeighbor.distanceKm = -1.0; // historical data, never a live distance
+      haveLastKnownNeighbor = true;
       n.active = false;
       n.distanceKm = -1.0;
     }
@@ -811,8 +819,18 @@ void oledNeighborPage() {
   char line[32];
   snprintf(line, sizeof(line), "NEAR: %d", count); u8g2.drawStr(0, 20, line);
   if (first < 0) {
-    u8g2.drawStr(0, 36, "NO VESSELS");
-    u8g2.drawStr(0, 49, "LISTENING...");
+    u8g2.drawStr(0, 32, "ACTIVE: 0 / STALE");
+    if (haveLastKnownNeighbor) {
+      char ago[30];
+      snprintf(ago, sizeof(ago), "LAST %s", lastKnownNeighbor.nodeName);
+      u8g2.drawStr(0, 44, ago);
+      snprintf(ago, sizeof(ago), "SEEN %lus AGO",
+               (millis() - lastKnownNeighbor.lastSeen) / 1000UL);
+      u8g2.drawStr(0, 56, ago);
+    } else {
+      u8g2.drawStr(0, 44, "NEVER SEEN");
+      u8g2.drawStr(0, 56, "LISTENING...");
+    }
     u8g2.sendBuffer(); return;
   }
   const Neighbor &n = neighbors[first];
@@ -902,7 +920,7 @@ void oledRemoteWeatherPage() {
   // There is currently only one expected remote node: Vessel-A.
   const int idx = findNeighbor(0xA1);
   if (idx < 0) {
-    u8g2.drawStr(0, 28, "NO RECENT A DATA");
+    u8g2.drawStr(0, 28, "NO LIVE A WEATHER");
     u8g2.drawStr(0, 43, "WAITING FOR PACKETS");
     u8g2.sendBuffer();
     return;
@@ -944,22 +962,35 @@ void oledSOSPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.drawStr(0, 9, "VESSEL-B SOS RX");
-  const bool fresh = sosAlertActive && (millis() - lastSOSMillis <= SOS_ALERT_MS);
+  const bool recent = sosAlertActive && (millis() - lastSOSMillis <= SOS_ALERT_MS);
   if (!sosAlertActive) {
     u8g2.drawStr(0, 27, "NO SOS RECEIVED");
     u8g2.drawStr(0, 45, "Tap: NEXT PAGE");
   } else {
-    u8g2.drawStr(0, 21, fresh ? "! SOS RECEIVED !" : "LAST SOS (OLD)");
+    u8g2.drawStr(0, 21, recent ? "! SOS RECEIVED !" : "LAST SOS (OLD)");
     char line[32];
     snprintf(line, sizeof(line), "SEQ:%lu", (unsigned long)lastSOSSequence);
     u8g2.drawStr(0, 32, line);
-    if (lastSOSGpsValid) {
-      snprintf(line, sizeof(line), "%.5f", lastSOSLatitude);
-      u8g2.drawStr(0, 43, line);
-      snprintf(line, sizeof(line), "%.5f", lastSOSLongitude);
-      u8g2.drawStr(0, 54, line);
-    } else {
+    if (!lastSOSGpsValid) {
       u8g2.drawStr(0, 45, "GPS: NO VALID FIX");
+      u8g2.drawStr(0, 57, "DIST: UNKNOWN");
+    } else if (recent && myGPSFix) {
+      // This is the distance to the SOS coordinates (not proof that the
+      // distressed vessel is still at that position). Both fixes required.
+      const double km = TinyGPSPlus::distanceBetween(
+        myLatitude, myLongitude, lastSOSLatitude, lastSOSLongitude) / 1000.0;
+      const double bearing = TinyGPSPlus::courseTo(
+        myLatitude, myLongitude, lastSOSLatitude, lastSOSLongitude);
+      snprintf(line, sizeof(line), "TO SOS: %.2f km", km);
+      u8g2.drawStr(0, 45, line);
+      snprintf(line, sizeof(line), "BEARING: %.0f deg", bearing);
+      u8g2.drawStr(0, 57, line);
+    } else {
+      // Old SOS events are historical, not proof of a live link/position.
+      snprintf(line, sizeof(line), "LAT: %.5f", lastSOSLatitude);
+      u8g2.drawStr(0, 43, line);
+      snprintf(line, sizeof(line), "LON: %.5f", lastSOSLongitude);
+      u8g2.drawStr(0, 55, line);
     }
   }
   u8g2.sendBuffer();

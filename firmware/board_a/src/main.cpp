@@ -396,15 +396,33 @@ void oledLinkPage() {
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.drawStr(0, 9, "LINK TO VESSEL-B");
   char line[32];
-  snprintf(line, sizeof(line), "TX:%lu RX:%lu", static_cast<unsigned long>(txCount), static_cast<unsigned long>(rxFromB));
+  snprintf(line, sizeof(line), "TX:%lu RX:%lu",
+           static_cast<unsigned long>(txCount), static_cast<unsigned long>(rxFromB));
   u8g2.drawStr(0, 20, line);
-  u8g2.drawStr(0, 32, bGPSValid ? "B GPS: VALID" : (rxFromB ? "B GPS: NO FIX" : "B: WAITING"));
-  if (distanceToBkm >= 0.0) snprintf(line, sizeof(line), "DIST: %.2f km", distanceToBkm);
-  else strcpy(line, "DIST: ?");
-  u8g2.drawStr(0, 44, line);
-  if (rxFromB > 0) snprintf(line, sizeof(line), "RSSI:%d SNR:%.1f", lastBRSSI, lastBSNR);
-  else strcpy(line, "RSSI: -- SNR: --");
-  u8g2.drawStr(0, 56, line);
+  if (rxFromB == 0) {
+    u8g2.drawStr(0, 33, "B: NEVER SEEN");
+    u8g2.drawStr(0, 46, "DIST: UNKNOWN");
+    u8g2.drawStr(0, 58, "LISTENING...");
+  } else if (!isVesselBActive()) {
+    u8g2.drawStr(0, 32, "B: STALE / LOST");
+    snprintf(line, sizeof(line), "LAST SEEN: %lus", vesselBLastSeenSeconds());
+    u8g2.drawStr(0, 44, line);
+    u8g2.drawStr(0, 56, "DIST: UNKNOWN");
+  } else {
+    u8g2.drawStr(0, 32, bGPSValid ? "B: ACTIVE GPS OK" : "B: ACTIVE NO FIX");
+    // Recalculate with the CURRENT local fix; remote position comes from
+    // a packet received within the timeout, not from the last-known cache.
+    if (gpsHasFix && bGPSValid) {
+      const double km = TinyGPSPlus::distanceBetween(latitude, longitude,
+                                                    bLatitude, bLongitude) / 1000.0;
+      snprintf(line, sizeof(line), "DIST: %.2f km", km);
+    } else {
+      strcpy(line, "DIST: UNKNOWN");
+    }
+    u8g2.drawStr(0, 44, line);
+    snprintf(line, sizeof(line), "RSSI:%d SNR:%.1f", lastBRSSI, lastBSNR);
+    u8g2.drawStr(0, 56, line);
+  }
   u8g2.sendBuffer();
 }
 

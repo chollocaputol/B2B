@@ -128,7 +128,16 @@ unsigned long lastGPSStatus = 0;
 // -------------------- OLED ------------------------------------
 bool oledAvailable = false;
 uint8_t oledAddress = 0x3C;
-uint8_t oledPage = 0; // 0 GPS, 1 neighbors, 2 PDR, 3 remote weather
+uint8_t oledPage = 0; // 0 GPS, 1 neighbors, 2 PDR, 3 remote weather, 4 SOS
+// Alert is locally latched for 60 s; no shore acknowledgment exists yet.
+bool sosAlertActive = false;
+unsigned long lastSOSMillis = 0;
+uint32_t lastSOSSequence = 0;
+bool lastSOSGpsValid = false;
+double lastSOSLatitude = 0.0, lastSOSLongitude = 0.0;
+uint32_t sosUniqueEvents = 0;
+uint32_t sosDuplicateEvents = 0;
+const unsigned long SOS_ALERT_MS = 60000UL;
 unsigned long lastOLEDUpdate = 0;
 int buttonLastReading = HIGH;
 int buttonStableState = HIGH;
@@ -212,6 +221,7 @@ void oledNeighborPage();
 void oledPDRPage();
 void oledRemoteWeatherPage();
 void printReceivedWeather(const VesselPacket &p);
+void oledSOSPage();
 const char *weatherName(uint8_t state);
 void handleOLEDButton();
 
@@ -327,9 +337,9 @@ void handleOLEDButton() {
       reading != buttonStableState) {
     buttonStableState = reading;
     if (buttonStableState == LOW) {
-      oledPage = (oledPage + 1) % 4;
+      oledPage = (oledPage + 1) % 5;
       lastOLEDUpdate = 0;  // Refresh new page at next loop.
-      Serial.printf("[OLED-B] Page %u/4\n", static_cast<unsigned>(oledPage + 1));
+      Serial.printf("[OLED-B] Page %u/5\n", static_cast<unsigned>(oledPage + 1));
     }
   }
 }
@@ -458,7 +468,34 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
     return;
   }
 
+  if (p.packetType != PACKET_TELEMETRY && p.packetType != PACKET_SOS) {
+    invalidPackets++;
+    Serial.println("[RX-B] Unsupported packet type");
+    return;
+  }
   bool isNew = updateNeighbor(p, rssi, snr);
+  if (p.packetType == PACKET_SOS) {
+    if (isNew) {
+      sosUniqueEvents++;
+      sosAlertActive = true;
+      lastSOSMillis = millis();
+      lastSOSSequence = p.sequenceNumber;
+      lastSOSGpsValid = (p.flags & FLAG_GPS_FIX) != 0;
+      lastSOSLatitude = p.latitude_e7 / 10000000.0;
+      lastSOSLongitude = p.longitude_e7 / 10000000.0;
+      oledPage = 4;
+      lastOLEDUpdate = 0;
+      Serial.printf("[SOS-B] NEW SOS origin=0x%lX seq=%lu GPS=%s RSSI=%d SNR=%.2f\n",
+        (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+        lastSOSGpsValid ? "VALID" : "NO_FIX", rssi, snr);
+      if (lastSOSGpsValid) Serial.printf("[SOS-B] POS %.7f, %.7f\n", lastSOSLatitude, lastSOSLongitude);
+      Serial.println("[SOS-B] LOCAL ALERT ONLY; NO ACK, RELAY OR SHORE DELIVERY");
+    } else {
+      sosDuplicateEvents++;
+      Serial.printf("[SOS-B] DUPLICATE SOS seq=%lu ignored\n", (unsigned long)p.sequenceNumber);
+    }
+    return; // Preserve usual telemetry printout and TX schedule on ordinary packets.
+  }
   totalValidPacketsReceived++;
 
   int index = findNeighbor(p.originNodeId);
@@ -740,7 +777,8 @@ void updateOLED() {
   if (oledPage == 0) oledGPSPage();
   else if (oledPage == 1) oledNeighborPage();
   else if (oledPage == 2) oledPDRPage();
-  else oledRemoteWeatherPage();
+  else if (oledPage == 3) oledRemoteWeatherPage();
+  else oledSOSPage();
 }
 
 void oledGPSPage() {
@@ -895,5 +933,34 @@ void oledRemoteWeatherPage() {
   snprintf(line, sizeof(line), "WX:%s",
            n.remotePressureValid ? weatherName(n.weatherState) : "UNAVAILABLE");
   u8g2.drawStr(0, 54, line);
+  u8g2.sendBuffer();
+}
+
+// ============================================================
+// Phase 3.1: local receive-side alert. GPIO0 navigates to this page.
+// No hardware buzzer/LED or forwarding is implemented in this step.
+// ============================================================
+void oledSOSPage() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0, 9, "VESSEL-B SOS RX");
+  const bool fresh = sosAlertActive && (millis() - lastSOSMillis <= SOS_ALERT_MS);
+  if (!sosAlertActive) {
+    u8g2.drawStr(0, 27, "NO SOS RECEIVED");
+    u8g2.drawStr(0, 45, "Tap: NEXT PAGE");
+  } else {
+    u8g2.drawStr(0, 21, fresh ? "! SOS RECEIVED !" : "LAST SOS (OLD)");
+    char line[32];
+    snprintf(line, sizeof(line), "SEQ:%lu", (unsigned long)lastSOSSequence);
+    u8g2.drawStr(0, 32, line);
+    if (lastSOSGpsValid) {
+      snprintf(line, sizeof(line), "%.5f", lastSOSLatitude);
+      u8g2.drawStr(0, 43, line);
+      snprintf(line, sizeof(line), "%.5f", lastSOSLongitude);
+      u8g2.drawStr(0, 54, line);
+    } else {
+      u8g2.drawStr(0, 45, "GPS: NO VALID FIX");
+    }
+  }
   u8g2.sendBuffer();
 }

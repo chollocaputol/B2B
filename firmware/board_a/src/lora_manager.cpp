@@ -186,6 +186,34 @@ void transmitPacket() {
 }
 
 // ============================================================
+// PHASE 3.1: explicit manual distress test (no physical GPIO yet).
+// Generates one SOS using the same wire format and sequence namespace.
+// Requires a fresh GPS fix; when absent, FLAG_GPS_FIX stays clear and
+// coordinates remain zero. A radio TX success is NOT a delivery ACK.
+// ============================================================
+void transmitSOS() {
+  VesselPacket p;
+  createPacket(p);
+  p.packetType = PACKET_SOS;
+  strncpy(p.message, "SOS", sizeof(p.message) - 1);
+  p.message[sizeof(p.message) - 1] = '\0';
+  Serial.printf("[SOS-A] TX request seq=%lu GPS=%s (BENCH TEST)\n",
+                (unsigned long)p.sequenceNumber,
+                (p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
+  int state = radio.transmit(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+  if (state == RADIOLIB_ERR_NONE) {
+    txCount++;
+    lastTXSuccess = true;
+    Serial.println("[SOS-A] RADIO TX SUCCESS - RECEIPT NOT CONFIRMED");
+  } else {
+    txFailures++;
+    lastTXSuccess = false;
+    Serial.printf("[SOS-A] RADIO TX FAILED=%d\n", state);
+  }
+  startReceive();
+}
+
+// ============================================================
 // RECEIVE BOARD B + TRACK REVERSE-LINK PDR
 // ============================================================
 static void processReceivedPacket(const uint8_t *buffer, size_t length,

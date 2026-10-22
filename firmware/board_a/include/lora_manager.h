@@ -19,4 +19,5 @@ void startReceive();
 void pollLoRaReceive();
 void createPacket(VesselPacket &packet);
 void transmitPacket();
+void transmitSOS(); // Bench SOS: single high-priority packet, no ACK/relay yet
 float bSequencePDR();

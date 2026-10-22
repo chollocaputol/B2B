@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "sos_controls.h"
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -140,6 +141,7 @@ void setup() {
                 WEATHER_FAST_TEST ? "ACCELERATED DEVELOPMENT (NOT REAL 100-MIN HISTORY)" : "FIELD",
                 WEATHER_INTERVAL, WEATHER_HISTORY_SIZE);
 
+  SOSControls::begin();
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
   buttonLastReading = digitalRead(USER_BUTTON_PIN);
   buttonStableState = buttonLastReading;
@@ -165,6 +167,12 @@ void setup() {
 void loop() {
   updateGPS();
   processSerialTestCommands();
+  if (SOSControls::pollButton()) {
+    Serial.println("[SOS-BUTTON-A] Deliberate hold recognized");
+    SOSControls::noteLocalSOS();
+    transmitSOS();
+  }
+  SOSControls::updateIndicators();
 
   pollLoRaReceive();
 

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "sos_controls.h"
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -128,11 +129,14 @@ unsigned long lastGPSStatus = 0;
 // -------------------- OLED ------------------------------------
 bool oledAvailable = false;
 uint8_t oledAddress = 0x3C;
-uint8_t oledPage = 0; // 0 GPS, 1 neighbors, 2 PDR, 3 remote weather, 4 SOS
-// Alert is locally latched for 60 s; no shore acknowledgment exists yet.
+uint8_t oledPage = 0; // 0 GPS, 1 neighbors, 2 PDR, 3 remote weather, 4 SOS rescue
+// Last received SOS is retained in RAM; freshness label changes after 60 s.
+// No shore acknowledgment or durable persistence exists yet.
 bool sosAlertActive = false;
 unsigned long lastSOSMillis = 0;
 uint32_t lastSOSSequence = 0;
+uint32_t lastSOSOriginId = 0;
+char lastSOSNodeName[13] = {0};
 bool lastSOSGpsValid = false;
 double lastSOSLatitude = 0.0, lastSOSLongitude = 0.0;
 uint32_t sosUniqueEvents = 0;
@@ -247,11 +251,12 @@ void setup() {
     neighbors[i].weatherState = WEATHER_CALIBRATING;
   }
 
+  SOSControls::begin();
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
   buttonLastReading = digitalRead(USER_BUTTON_PIN);
   buttonStableState = buttonLastReading;
   buttonLastDebounceTime = millis();
-  Serial.println("[OLED-B] Short press GPIO0: next page (GPS / Neighbors / PDR / Weather)");
+  Serial.println("[OLED-B] GPIO0 pages: GPS / Neighbors / PDR / Weather / SOS rescue");
 
   setupPMU();
   setupOLED();
@@ -268,6 +273,7 @@ void setup() {
 // ============================================================
 void loop() {
   updateGPS();
+  SOSControls::updateIndicators();
 
   if (digitalRead(LORA_DIO1) == HIGH) {
     size_t len = radio.getPacketLength();
@@ -482,9 +488,13 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
   if (p.packetType == PACKET_SOS) {
     if (isNew) {
       sosUniqueEvents++;
+      SOSControls::noteReceivedSOS();
       sosAlertActive = true;
       lastSOSMillis = millis();
       lastSOSSequence = p.sequenceNumber;
+      lastSOSOriginId = p.originNodeId;
+      memcpy(lastSOSNodeName, p.nodeName, sizeof(p.nodeName));
+      lastSOSNodeName[sizeof(p.nodeName)] = '\0';
       lastSOSGpsValid = (p.flags & FLAG_GPS_FIX) != 0;
       lastSOSLatitude = p.latitude_e7 / 10000000.0;
       lastSOSLongitude = p.longitude_e7 / 10000000.0;
@@ -792,7 +802,7 @@ void updateOLED() {
 void oledGPSPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-B GPS");
+  u8g2.drawStr(0, 9, "VESSEL-B GPS 1/5");
   u8g2.drawStr(0, 20, myGPSFix ? "GPS: FIX" : "GPS: SEARCH");
   char line[32];
   if (gps.satellites.isValid()) snprintf(line, sizeof(line), "SAT: %lu", gps.satellites.value());
@@ -811,7 +821,7 @@ void oledGPSPage() {
 void oledNeighborPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "NEIGHBORS");
+  u8g2.drawStr(0, 9, "NEIGHBORS 2/5");
   int count = 0, first = -1;
   for (int i = 0; i < MAX_NEIGHBORS; i++) {
     if (neighbors[i].active) { count++; if (first < 0) first = i; }
@@ -847,7 +857,7 @@ void oledNeighborPage() {
 void oledPDRPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "A->B LINK / PDR");
+  u8g2.drawStr(0, 9, "A->B LINK/PDR 3/5");
   int first = -1;
   for (int i = 0; i < MAX_NEIGHBORS; i++) if (neighbors[i].active) { first = i; break; }
   if (first < 0) {
@@ -915,7 +925,7 @@ void printReceivedWeather(const VesselPacket &p) {
 void oledRemoteWeatherPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-A WEATHER");
+  u8g2.drawStr(0, 9, "VESSEL-A WEATHER 4/5");
 
   // There is currently only one expected remote node: Vessel-A.
   const int idx = findNeighbor(0xA1);
@@ -955,43 +965,54 @@ void oledRemoteWeatherPage() {
 }
 
 // ============================================================
-// Phase 3.1: local receive-side alert. GPIO0 navigates to this page.
-// No hardware buzzer/LED or forwarding is implemented in this step.
+// Phase 3.3: rescue-first SOS navigation, retained in RAM.
+// The target is the LAST REPORTED SOS LOCATION, never proof that
+// the distressed vessel is still there. Receiver-to-target range
+// and true-north bearing are recalculated each OLED refresh using
+// receiver GPS only while its position is fresh.
 // ============================================================
 void oledSOSPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-B SOS RX");
-  const bool recent = sosAlertActive && (millis() - lastSOSMillis <= SOS_ALERT_MS);
+  u8g2.drawStr(0, 9, "SOS / RESCUE  5/5");
   if (!sosAlertActive) {
     u8g2.drawStr(0, 27, "NO SOS RECEIVED");
-    u8g2.drawStr(0, 45, "Tap: NEXT PAGE");
+    u8g2.drawStr(0, 47, "BTN: NEXT PAGE");
+    u8g2.sendBuffer();
+    return;
+  }
+
+  const unsigned long elapsed = millis() - lastSOSMillis;
+  const bool recent = elapsed <= SOS_ALERT_MS;
+  char line[40];
+  if (recent) {
+    u8g2.drawStr(0, 20, "SOS NEW / UNRES");
   } else {
-    u8g2.drawStr(0, 21, recent ? "! SOS RECEIVED !" : "LAST SOS (OLD)");
-    char line[32];
-    snprintf(line, sizeof(line), "SEQ:%lu", (unsigned long)lastSOSSequence);
-    u8g2.drawStr(0, 32, line);
-    if (!lastSOSGpsValid) {
-      u8g2.drawStr(0, 45, "GPS: NO VALID FIX");
-      u8g2.drawStr(0, 57, "DIST: UNKNOWN");
-    } else if (recent && myGPSFix) {
-      // This is the distance to the SOS coordinates (not proof that the
-      // distressed vessel is still at that position). Both fixes required.
-      const double km = TinyGPSPlus::distanceBetween(
-        myLatitude, myLongitude, lastSOSLatitude, lastSOSLongitude) / 1000.0;
-      const double bearing = TinyGPSPlus::courseTo(
-        myLatitude, myLongitude, lastSOSLatitude, lastSOSLongitude);
-      snprintf(line, sizeof(line), "TO SOS: %.2f km", km);
-      u8g2.drawStr(0, 45, line);
-      snprintf(line, sizeof(line), "BEARING: %.0f deg", bearing);
-      u8g2.drawStr(0, 57, line);
-    } else {
-      // Old SOS events are historical, not proof of a live link/position.
-      snprintf(line, sizeof(line), "LAT: %.5f", lastSOSLatitude);
-      u8g2.drawStr(0, 43, line);
-      snprintf(line, sizeof(line), "LON: %.5f", lastSOSLongitude);
-      u8g2.drawStr(0, 55, line);
-    }
+    // Age is time since SOS packet reception, not GPS fix age.
+    snprintf(line, sizeof(line), "SOS OLD %lum / UNRES", elapsed / 60000UL);
+    u8g2.drawStr(0, 20, line);
+  }
+  snprintf(line, sizeof(line), "FROM: %.12s", lastSOSNodeName[0] ? lastSOSNodeName : "UNKNOWN");
+  u8g2.drawStr(0, 31, line);
+
+  if (!lastSOSGpsValid) {
+    u8g2.drawStr(0, 43, "SOS GPS: NO FIX");
+    u8g2.drawStr(0, 55, "DIST/BRG: UNKNOWN");
+  } else if (!myGPSFix) {
+    // Do not substitute a stale receiver location for an actual fix.
+    u8g2.drawStr(0, 43, "OWN GPS: NO FIX");
+    u8g2.drawStr(0, 55, "DIST/BRG: UNKNOWN");
+  } else {
+    // This always targets the stored SOS coordinates. If the receiver
+    // moves, both values update; source coordinates do not change.
+    const double km = TinyGPSPlus::distanceBetween(
+      myLatitude, myLongitude, lastSOSLatitude, lastSOSLongitude) / 1000.0;
+    const double bearing = TinyGPSPlus::courseTo(
+      myLatitude, myLongitude, lastSOSLatitude, lastSOSLongitude);
+    snprintf(line, sizeof(line), "TO SOS: %.2f km", km);
+    u8g2.drawStr(0, 43, line);
+    snprintf(line, sizeof(line), "BRG: %.0f deg N", bearing);
+    u8g2.drawStr(0, 55, line);
   }
   u8g2.sendBuffer();
 }

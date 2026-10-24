@@ -704,10 +704,12 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
     if (sosAlertActive && p.originNodeId == lastSOSOriginId &&
         referredOrigin == lastSOSOriginId && referredId == lastSOSSequence &&
         p.sequenceNumber == lastSOSSequence) {
+      const bool alreadyCancelled = sosCancelled;
       sosCancelled = true;
       oledPage = 4;
       lastOLEDUpdate = 0;
-      Serial.printf("[SOS-B] CANCELLED BY SENDER event=(0x%lX,%lu); not confirmed rescued\n",
+      Serial.printf("[SYNC-B] %s cancellation from A event=(0x%lX,%lu); ACK follows; NOT rescue resolved\n",
+        alreadyCancelled ? "DUPLICATE" : "MATCHED",
         (unsigned long)referredOrigin, (unsigned long)referredId);
       acknowledgeCancel(p); // Duplicate valid cancel also gets ACK.
     } else {
@@ -723,8 +725,8 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
       // Replays of older emergencies cannot supersede the last observed ID.
       if (sosAlertActive && p.originNodeId == lastSOSOriginId &&
           p.sequenceNumber < lastSOSSequence) {
-        Serial.println("[SOS-B] Stale SOS event ID rejected");
-        acknowledgeSOS(p);
+        Serial.printf("[SYNC-B] STALE SOS rejected from A event=%lu; latest=%lu; NO ACK\n",
+                      (unsigned long)p.sequenceNumber, (unsigned long)lastSOSSequence);
         return;
       }
       sosUniqueEvents++;

@@ -391,9 +391,11 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     memcpy(&cancelOrigin, p.message+4, 4);
     if (haveBSOS && cancelOrigin == p.originNodeId &&
         cancelId == lastBSOSId && p.sequenceNumber == lastBSOSId) {
+      const bool alreadyCancelled = bSOSCancelled;
       bSOSCancelled = true;
       incomingBSOS.cancelled = true;
-      Serial.printf("[CANCEL-A] Vessel-B sender cancelled SOS event=%lu (NOT rescue resolved)\n",
+      Serial.printf("[SYNC-A] %s cancellation from B event=%lu; ACK follows; NOT rescue resolved\n",
+                    alreadyCancelled ? "DUPLICATE" : "MATCHED",
                     (unsigned long)cancelId);
       VesselPacket ack = {};
       ack.magic=PACKET_MAGIC; ack.version=PACKET_VERSION;
@@ -410,6 +412,14 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   // Phase 3.5.1: A acknowledges SOS originated by B. Incoming SOS
   // is NOT telemetry and must NOT change PDR sequence accounting.
   if (p.packetType == PACKET_SOS) {
+    // Phase 3.5.3: an older event must never overwrite the latest SOS,
+    // and must not receive a misleading acknowledgment. Current-event
+    // retries remain ACKable, including after sender cancellation.
+    if (haveBSOS && p.sequenceNumber < lastBSOSId) {
+      Serial.printf("[SYNC-A] STALE SOS rejected from B event=%lu; latest=%lu; NO ACK\n",
+                    (unsigned long)p.sequenceNumber, (unsigned long)lastBSOSId);
+      return;
+    }
     const bool duplicate = haveBSOS && p.sequenceNumber == lastBSOSId;
     if (!duplicate && (!haveBSOS || p.sequenceNumber > lastBSOSId)) {
       haveBSOS = true;
@@ -426,7 +436,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       Serial.printf("[SOS-A] RECEIVED NEW SOS from Vessel-B id=%lu GPS=%s\n",
         (unsigned long)p.sequenceNumber,
         (p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
-    } else Serial.printf("[SOS-A] DUPLICATE/OLDER SOS from Vessel-B id=%lu\n",
+    } else Serial.printf("[SYNC-A] DUPLICATE CURRENT SOS from Vessel-B id=%lu; ACK again\n",
                           (unsigned long)p.sequenceNumber);
     VesselPacket ack = {};
     ack.magic = PACKET_MAGIC;

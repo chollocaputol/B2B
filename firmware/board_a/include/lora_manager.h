@@ -30,3 +30,16 @@ float bSequencePDR();
 // Historical GPS/RSSI remain stored but must not be presented as live.
 bool isVesselBActive();
 unsigned long vesselBLastSeenSeconds();
+
+// Phase 3.5.2: in-memory last received SOS from Vessel-B (read-only to UI).
+struct ReceivedSOSView {
+  bool known;
+  bool cancelled;
+  bool positionValid;
+  double latitude;
+  double longitude;
+  uint32_t eventId;
+  unsigned long receivedAtMs;
+};
+ReceivedSOSView getReceivedSOSView();
+bool consumeNewReceivedSOS();

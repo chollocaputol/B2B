@@ -106,6 +106,16 @@ static void rememberBSequence(uint32_t);
 static void resetBSequenceSession();
 static void calculateBSequencePDR();
 
+// Received distress record is volatile RAM, never authoritative after reboot.
+static ReceivedSOSView incomingBSOS = {};
+static bool incomingBSOSNew = false;
+ReceivedSOSView getReceivedSOSView() { return incomingBSOS; }
+bool consumeNewReceivedSOS() {
+  bool pending = incomingBSOSNew;
+  incomingBSOSNew = false;
+  return pending;
+}
+
 void pollLoRaReceive() {
   if (digitalRead(LORA_DIO1) == HIGH) {
     size_t len = radio.getPacketLength();
@@ -382,6 +392,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     if (haveBSOS && cancelOrigin == p.originNodeId &&
         cancelId == lastBSOSId && p.sequenceNumber == lastBSOSId) {
       bSOSCancelled = true;
+      incomingBSOS.cancelled = true;
       Serial.printf("[CANCEL-A] Vessel-B sender cancelled SOS event=%lu (NOT rescue resolved)\n",
                     (unsigned long)cancelId);
       VesselPacket ack = {};
@@ -404,6 +415,14 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       haveBSOS = true;
       lastBSOSId = p.sequenceNumber;
       bSOSCancelled = false;
+      incomingBSOS.known = true;
+      incomingBSOS.cancelled = false;
+      incomingBSOS.eventId = p.sequenceNumber;
+      incomingBSOS.receivedAtMs = millis();
+      incomingBSOS.positionValid = (p.flags & FLAG_GPS_FIX) != 0;
+      incomingBSOS.latitude = p.latitude_e7 / 1e7;
+      incomingBSOS.longitude = p.longitude_e7 / 1e7;
+      incomingBSOSNew = true;
       Serial.printf("[SOS-A] RECEIVED NEW SOS from Vessel-B id=%lu GPS=%s\n",
         (unsigned long)p.sequenceNumber,
         (p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");

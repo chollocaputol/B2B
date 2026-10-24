@@ -95,6 +95,7 @@ void oledLinkPage();
 void oledPDRPage();
 void oledAlertPage();
 void oledUptimePage();
+void oledSOSRescuePage();
 void formatUptime(char *out, size_t outSize);
 
 // ============================================================
@@ -180,6 +181,10 @@ void loop() {
   SOSControls::updateIndicators();
 
   pollLoRaReceive();
+  if (consumeNewReceivedSOS()) {
+    oledPage = 6;  // Auto-open incoming SOS rescue page.
+    lastOLEDUpdate = 0;
+  }
   processSOSRetries();
   processCancelRetries();
 
@@ -316,7 +321,7 @@ void handleOLEDButton() {
         alertDemoMode = (alertDemoMode + 1) % 4;
         Serial.printf("[ALERT-DEMO] OLED-only mode: %u (0=LIVE,1=NORMAL,2=FRONT,3=SQUALL)\n", alertDemoMode);
       } else if (duration < BUTTON_LONG_PRESS_MS) {
-        oledPage = (oledPage + 1) % 6;
+        oledPage = (oledPage + 1) % 7;
         // Do not leave a simulated alert active after departing test page.
         if (oledPage != 4) alertDemoMode = 0;
         Serial.printf("[OLED] Page changed to %u\n", oledPage);
@@ -340,13 +345,14 @@ void updateOLED() {
     case 3: oledPDRPage(); break;
     case 4: oledAlertPage(); break;
     case 5: oledUptimePage(); break;
+    case 6: oledSOSRescuePage(); break;
   }
 }
 
 void oledGPSPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-A GPS");
+  u8g2.drawStr(0, 9, "VESSEL-A GPS 1/7");
   u8g2.drawStr(0, 20, gpsHasFix ? "GPS: FIX" : "GPS: SEARCH");
   char line[32];
   if (gps.satellites.isValid()) snprintf(line, sizeof(line), "SAT: %lu", gps.satellites.value());
@@ -367,7 +373,7 @@ void oledWeatherPage() {
   u8g2.setFont(u8g2_font_6x10_tf);
   char line[32];
 
-  snprintf(line, sizeof(line), "WX: %s", shortWeatherName(weatherState));
+  snprintf(line, sizeof(line), "WX 2/7: %s", shortWeatherName(weatherState));
   u8g2.drawStr(0, 9, line);
 
   if (tempHumidityReadingValid) {
@@ -409,7 +415,7 @@ void oledWeatherPage() {
 void oledLinkPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "LINK TO VESSEL-B");
+  u8g2.drawStr(0, 9, "LINK TO B 3/7");
   char line[32];
   snprintf(line, sizeof(line), "TX:%lu RX:%lu",
            static_cast<unsigned long>(txCount), static_cast<unsigned long>(rxFromB));
@@ -444,7 +450,7 @@ void oledLinkPage() {
 void oledPDRPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "REVERSE LINK B->A");
+  u8g2.drawStr(0, 9, "B->A PDR 4/7");
   char line[32];
   snprintf(line, sizeof(line), "UNIQUE:%lu", static_cast<unsigned long>(uniqueFromB)); u8g2.drawStr(0, 20, line);
   snprintf(line, sizeof(line), "MISS:%lu DUP:%lu", static_cast<unsigned long>(missingFromB), static_cast<unsigned long>(duplicateFromB)); u8g2.drawStr(0, 32, line);
@@ -468,7 +474,7 @@ void oledAlertPage() {
 
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, alertDemoMode ? "ALERT DEMO (FAKE)" : "ALERT INDICATORS");
+  u8g2.drawStr(0, 9, alertDemoMode ? "ALERT DEMO 5/7" : "ALERT 5/7");
   char line[30];
   snprintf(line, sizeof(line), "STATE: %s", shortWeatherName(indicatorState));
   u8g2.drawStr(0, 20, line);
@@ -496,16 +502,52 @@ void formatUptime(char *out, size_t outSize) {
 void oledUptimePage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-A UPTIME");
+  u8g2.drawStr(0, 9, "VESSEL-A UPTIME 6/7");
   char line[40];
   formatUptime(line, sizeof(line));
   u8g2.drawStr(0, 22, line);
-  snprintf(line, sizeof(line), "WX: %s", shortWeatherName(weatherState));
+  snprintf(line, sizeof(line), "WX 2/7: %s", shortWeatherName(weatherState));
   u8g2.drawStr(0, 34, line);
   snprintf(line, sizeof(line), "TX:%lu RX:%lu",
            static_cast<unsigned long>(txCount),
            static_cast<unsigned long>(rxFromB));
   u8g2.drawStr(0, 46, line);
   u8g2.drawStr(0, 60, "Tap: NEXT PAGE");
+  u8g2.sendBuffer();
+}
+
+
+// Phase 3.5.2: rescue navigation to last reported Vessel-B SOS position.
+// Bearings are TRUE-north referenced; not bow-relative heading.
+void oledSOSRescuePage() {
+  const ReceivedSOSView sos = getReceivedSOSView();
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0, 9, "SOS / RESCUE 7/7");
+  if (!sos.known) {
+    u8g2.drawStr(0, 23, "NO SOS RECEIVED");
+    u8g2.drawStr(0, 42, "LISTENING: VESSEL-B");
+    u8g2.sendBuffer();
+    return;
+  }
+  char line[38];
+  u8g2.drawStr(0, 20, "FROM: VESSEL-B");
+  const unsigned long ageSec = (millis() - sos.receivedAtMs) / 1000UL;
+  if (sos.cancelled) u8g2.drawStr(0, 31, "CANCEL BY SENDER");
+  else if (ageSec >= 60UL) u8g2.drawStr(0, 31, "OLD / UNRESOLVED");
+  else u8g2.drawStr(0, 31, "SOS / UNRESOLVED");
+  if (gpsHasFix && sos.positionValid) {
+    const double meters = TinyGPSPlus::distanceBetween(latitude, longitude, sos.latitude, sos.longitude);
+    const double brg = TinyGPSPlus::courseTo(latitude, longitude, sos.latitude, sos.longitude);
+    snprintf(line, sizeof(line), "TO SOS: %.2f km", meters / 1000.0);
+    u8g2.drawStr(0, 43, line);
+    snprintf(line, sizeof(line), "BRG: %.0f deg TRUE", brg);
+    u8g2.drawStr(0, 54, line);
+  } else {
+    u8g2.drawStr(0, 43, "DIST: UNKNOWN");
+    u8g2.drawStr(0, 54, "BRG: UNKNOWN");
+  }
+  snprintf(line, sizeof(line), "SOS RX AGE: %lus", ageSec);
+  u8g2.drawStr(0, 63, line);
   u8g2.sendBuffer();
 }

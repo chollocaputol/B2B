@@ -72,7 +72,9 @@ const unsigned long STATUS_INTERVAL = 5000UL;
 // Weather code definitions match the shared packet.
 enum PacketType : uint8_t {
   PACKET_TELEMETRY = 1,
-  PACKET_SOS = 2
+  PACKET_SOS = 2,
+  PACKET_SOS_ACK = 3,
+  PACKET_SOS_CANCEL = 4
 };
 enum WeatherState : uint8_t {
   WEATHER_CALIBRATING = 0,
@@ -132,6 +134,7 @@ uint8_t oledAddress = 0x3C;
 uint8_t oledPage = 0; // 0 GPS, 1 neighbors, 2 PDR, 3 remote weather, 4 SOS rescue
 // Last received SOS is retained in RAM; freshness label changes after 60 s.
 // No shore acknowledgment or durable persistence exists yet.
+bool sosCancelled = false;
 bool sosAlertActive = false;
 unsigned long lastSOSMillis = 0;
 uint32_t lastSOSSequence = 0;
@@ -454,6 +457,24 @@ void startReceive() {
   }
 }
 
+// Direct ACK for original SOS. Duplicate SOS also get ACK.
+void acknowledgeSOS(const VesselPacket &sos) {
+  VesselPacket ack = {};
+  ack.magic = PACKET_MAGIC;
+  ack.version = PACKET_VERSION;
+  ack.packetType = PACKET_SOS_ACK;
+  ack.originNodeId = NODE_ID;
+  ack.sequenceNumber = 0; // ACK is outside telemetry sequence accounting.
+  ack.timestamp = millis() / 1000UL;
+  strncpy(ack.nodeName, NODE_NAME, sizeof(ack.nodeName) - 1);
+  memcpy(ack.message, &sos.sequenceNumber, 4);
+  memcpy(ack.message + 4, &sos.originNodeId, 4);
+  int state = radio.transmit(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+  Serial.printf("[SOS-B] ACK TX origin=0x%lX seq=%lu state=%d\n",
+    (unsigned long)sos.originNodeId, (unsigned long)sos.sequenceNumber, state);
+  startReceive();
+}
+
 // ============================================================
 // RX / SCHEDULE TX
 // ============================================================
@@ -479,17 +500,39 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
     return;
   }
 
-  if (p.packetType != PACKET_TELEMETRY && p.packetType != PACKET_SOS) {
-    invalidPackets++;
-    Serial.println("[RX-B] Unsupported packet type");
+  if (p.packetType == PACKET_SOS_CANCEL) {
+    uint32_t referredId = 0, referredOrigin = 0;
+    memcpy(&referredId, p.message, 4);
+    memcpy(&referredOrigin, p.message + 4, 4);
+    if (sosAlertActive && p.originNodeId == lastSOSOriginId &&
+        referredOrigin == lastSOSOriginId && referredId == lastSOSSequence &&
+        p.sequenceNumber == lastSOSSequence) {
+      sosCancelled = true;
+      oledPage = 4;
+      lastOLEDUpdate = 0;
+      Serial.printf("[SOS-B] CANCELLED BY SENDER event=(0x%lX,%lu); not confirmed rescued\n",
+        (unsigned long)referredOrigin, (unsigned long)referredId);
+    } else {
+      Serial.println("[SOS-B] Unmatched CANCEL rejected");
+    }
     return;
   }
-  bool isNew = updateNeighbor(p, rssi, snr);
   if (p.packetType == PACKET_SOS) {
-    if (isNew) {
+    // Emergency IDs are independent of ordinary telemetry sequence tracking.
+    const bool duplicate = sosAlertActive &&
+      lastSOSOriginId == p.originNodeId && lastSOSSequence == p.sequenceNumber;
+    if (!duplicate) {
+      // Replays of older emergencies cannot supersede the last observed ID.
+      if (sosAlertActive && p.originNodeId == lastSOSOriginId &&
+          p.sequenceNumber < lastSOSSequence) {
+        Serial.println("[SOS-B] Stale SOS event ID rejected");
+        acknowledgeSOS(p);
+        return;
+      }
       sosUniqueEvents++;
       SOSControls::noteReceivedSOS();
       sosAlertActive = true;
+      sosCancelled = false;
       lastSOSMillis = millis();
       lastSOSSequence = p.sequenceNumber;
       lastSOSOriginId = p.originNodeId;
@@ -500,17 +543,22 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
       lastSOSLongitude = p.longitude_e7 / 10000000.0;
       oledPage = 4;
       lastOLEDUpdate = 0;
-      Serial.printf("[SOS-B] NEW SOS origin=0x%lX seq=%lu GPS=%s RSSI=%d SNR=%.2f\n",
+      Serial.printf("[SOS-B] NEW EMERGENCY origin=0x%lX id=%lu GPS=%s\n",
         (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
-        lastSOSGpsValid ? "VALID" : "NO_FIX", rssi, snr);
-      if (lastSOSGpsValid) Serial.printf("[SOS-B] POS %.7f, %.7f\n", lastSOSLatitude, lastSOSLongitude);
-      Serial.println("[SOS-B] LOCAL ALERT ONLY; NO ACK, RELAY OR SHORE DELIVERY");
+        lastSOSGpsValid ? "VALID" : "NO_FIX");
     } else {
       sosDuplicateEvents++;
-      Serial.printf("[SOS-B] DUPLICATE SOS seq=%lu ignored\n", (unsigned long)p.sequenceNumber);
+      Serial.printf("[SOS-B] DUPLICATE emergency id=%lu ignored\n", (unsigned long)p.sequenceNumber);
     }
-    return; // Preserve usual telemetry printout and TX schedule on ordinary packets.
+    acknowledgeSOS(p);
+    return;
   }
+  if (p.packetType != PACKET_TELEMETRY) {
+    invalidPackets++;
+    Serial.println("[RX-B] Unsupported packet type");
+    return;
+  }
+  bool isNew = updateNeighbor(p, rssi, snr);
   totalValidPacketsReceived++;
 
   int index = findNeighbor(p.originNodeId);
@@ -985,7 +1033,9 @@ void oledSOSPage() {
   const unsigned long elapsed = millis() - lastSOSMillis;
   const bool recent = elapsed <= SOS_ALERT_MS;
   char line[40];
-  if (recent) {
+  if (sosCancelled) {
+    u8g2.drawStr(0, 20, "CANCEL BY SENDER");
+  } else if (recent) {
     u8g2.drawStr(0, 20, "SOS NEW / UNRES");
   } else {
     // Age is time since SOS packet reception, not GPS fix age.

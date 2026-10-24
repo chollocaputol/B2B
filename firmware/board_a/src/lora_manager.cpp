@@ -5,6 +5,7 @@
 #include <TinyGPSPlus.h>
 #include <math.h>
 #include <string.h>
+#include <Preferences.h>
 
 // Source firmware: Board A, 915 MHz, RadioLib SX1262.
 #define LORA_SCK       12
@@ -42,6 +43,19 @@ uint32_t txSequence = 0;
 uint32_t txCount = 0;
 uint32_t txFailures = 0;
 bool lastTXSuccess = false;
+
+// Phase 3.4.1: single pending SOS, bounded retries, and direct-neighbor ACK.
+static Preferences emergencyPrefs;
+static bool nvsReady = false;
+static uint32_t nextEmergencyId = 0;
+static bool activeEmergency = false; // independent of ACK / retry state
+static uint32_t activeEmergencyId = 0;
+static bool sosPending = false;
+static VesselPacket pendingSOS = {};
+static unsigned long lastSOSAttempt = 0;
+static uint8_t sosAttempts = 0;
+static constexpr uint8_t SOS_MAX_ATTEMPTS = 4; // initial + up to 3 retries
+static constexpr unsigned long SOS_RETRY_MS = 4500UL;
 
 // -------------------- Last Board B received --------------------
 uint32_t rxFromB = 0;
@@ -201,26 +215,101 @@ void transmitPacket() {
 // Requires a fresh GPS fix; when absent, FLAG_GPS_FIX stays clear and
 // coordinates remain zero. A radio TX success is NOT a delivery ACK.
 // ============================================================
-void transmitSOS() {
-  VesselPacket p;
-  createPacket(p);
-  p.packetType = PACKET_SOS;
-  strncpy(p.message, "SOS", sizeof(p.message) - 1);
-  p.message[sizeof(p.message) - 1] = '\0';
-  Serial.printf("[SOS-A] TX request seq=%lu GPS=%s (BENCH TEST)\n",
-                (unsigned long)p.sequenceNumber,
-                (p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
-  int state = radio.transmit(reinterpret_cast<uint8_t*>(&p), sizeof(p));
-  if (state == RADIOLIB_ERR_NONE) {
-    txCount++;
-    lastTXSuccess = true;
-    Serial.println("[SOS-A] RADIO TX SUCCESS - RECEIPT NOT CONFIRMED");
-  } else {
-    txFailures++;
-    lastTXSuccess = false;
+static void sendPendingSOS() {
+  if (!sosPending) return;
+  const unsigned long now = millis();
+  ++sosAttempts;
+  lastSOSAttempt = now;
+  Serial.printf("[SOS-A] ATTEMPT %u/%u id=(0x%lX,%lu) GPS=%s\n",
+    sosAttempts, SOS_MAX_ATTEMPTS, (unsigned long)pendingSOS.originNodeId,
+    (unsigned long)pendingSOS.sequenceNumber,
+    (pendingSOS.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
+  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&pendingSOS), sizeof(pendingSOS));
+  if (state == RADIOLIB_ERR_NONE) { ++txCount; lastTXSuccess = true;
+    Serial.println("[SOS-A] RADIO TX SUCCESS; AWAITING B ACK");
+  } else { ++txFailures; lastTXSuccess = false;
     Serial.printf("[SOS-A] RADIO TX FAILED=%d\n", state);
   }
   startReceive();
+}
+
+void setupEmergencyIdentity() {
+  nvsReady = emergencyPrefs.begin("sos-identity", false);
+  if (!nvsReady) {
+    Serial.println("[SOS-ID] ERROR NVS unavailable; SOS ID persistence unavailable");
+    return;
+  }
+  nextEmergencyId = emergencyPrefs.getUInt("nextId", 1);
+  Serial.printf("[SOS-ID] Next persistent ID=%lu\n", (unsigned long)nextEmergencyId);
+}
+
+void transmitSOS() {
+  if (activeEmergency || sosPending) {
+    Serial.println("[SOS-A] EXISTING UNRESOLVED SOS; cancel deliberately before starting a new one");
+    return;
+  }
+  if (!nvsReady || nextEmergencyId == UINT32_MAX) {
+    Serial.println("[SOS-ID] SOS blocked: persistent identity unavailable/exhausted");
+    return;
+  }
+  // Reserve ID in NVS BEFORE transmission. Telemetry keeps its own sequence series.
+  const uint32_t selectedId = nextEmergencyId;
+  if (emergencyPrefs.putUInt("nextId", selectedId + 1) != sizeof(uint32_t)) {
+    Serial.println("[SOS-ID] SOS blocked: NVS ID reservation failed");
+    return;
+  }
+  nextEmergencyId = selectedId + 1;
+  createPacket(pendingSOS);
+  pendingSOS.sequenceNumber = selectedId;
+  activeEmergencyId = selectedId;
+  activeEmergency = true;
+  pendingSOS.packetType = PACKET_SOS;
+  strncpy(pendingSOS.message, "SOS", sizeof(pendingSOS.message) - 1);
+  pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
+  sosPending = true;
+  sosAttempts = 0;
+  sendPendingSOS();
+}
+
+void cancelActiveSOS() {
+  if (!activeEmergency) {
+    Serial.println("[SOS-A] No active emergency to cancel");
+    return;
+  }
+  // DEVELOPMENT ONLY: one unauthenticated cancellation frame; not a rescue confirmation.
+  VesselPacket cancel = {};
+  cancel.magic = PACKET_MAGIC;
+  cancel.version = PACKET_VERSION;
+  cancel.packetType = PACKET_SOS_CANCEL;
+  cancel.originNodeId = NODE_ID;
+  cancel.sequenceNumber = activeEmergencyId;
+  cancel.timestamp = millis() / 1000UL;
+  strncpy(cancel.nodeName, NODE_NAME, sizeof(cancel.nodeName) - 1);
+  memcpy(cancel.message, &activeEmergencyId, sizeof(activeEmergencyId));
+  const uint32_t origin = NODE_ID;
+  memcpy(cancel.message + 4, &origin, sizeof(origin));
+  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&cancel), sizeof(cancel));
+  startReceive();
+  Serial.printf("[SOS-A] CANCEL TX event=%lu state=%d (DELIVERY UNCONFIRMED)\n",
+    (unsigned long)activeEmergencyId, state);
+  // A deliberate operator cancellation releases the LOCAL activation lock.
+  // IMPORTANT: local cancellation does NOT prove the other vessel received it.
+  // In particular, a disconnected receiver may still show UNRESOLVED.
+  // Reliable cancellation delivery/ACK and persistence are future work.
+  sosPending = false;  // Stop retrying the cancelled SOS.
+  activeEmergency = false;
+  Serial.printf("[SOS-A] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE DELIVERY NOT CONFIRMED\n",
+                (unsigned long)activeEmergencyId);
+}
+
+void processSOSRetries() {
+  if (!sosPending || (millis() - lastSOSAttempt < SOS_RETRY_MS)) return;
+  if (sosAttempts >= SOS_MAX_ATTEMPTS) {
+    Serial.printf("[SOS-A] UNCONFIRMED after %u attempts; emergency NOT resolved\n", sosAttempts);
+    sosPending = false; // Transmission session ended; not emergency resolution.
+    return;
+  }
+  sendPendingSOS();
 }
 
 // ============================================================
@@ -246,6 +335,20 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     Serial.print("[RX-A] Unknown node ID 0x");
     Serial.println(p.originNodeId, HEX);
     return;
+  }
+
+  if (p.packetType == PACKET_SOS_ACK) {
+    if (sosPending && matchesSOSAck(p, pendingSOS.sequenceNumber, pendingSOS.originNodeId)) {
+      Serial.printf("[SOS-A] ACK RECEIVED from Vessel-B for SOS seq=%lu after %u attempt(s)\n",
+        (unsigned long)pendingSOS.sequenceNumber, sosAttempts);
+      sosPending = false;
+    } else {
+      Serial.println("[SOS-A] Ignored unrelated or expired SOS ACK");
+    }
+    return; // ACK is not ordinary telemetry; do not affect telemetry PDR.
+  }
+  if (p.packetType != PACKET_TELEMETRY && p.packetType != PACKET_SOS) {
+    ++invalidPackets; return;
   }
 
   rxFromB++;

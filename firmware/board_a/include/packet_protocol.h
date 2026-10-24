@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <string.h>
 
 #define PACKET_MAGIC    0x4D45
 #define PACKET_VERSION  1
@@ -9,7 +10,9 @@
 
 enum PacketType : uint8_t {
   PACKET_TELEMETRY = 1,
-  PACKET_SOS = 2
+  PACKET_SOS = 2,
+  PACKET_SOS_ACK = 3,
+  PACKET_SOS_CANCEL = 4
 };
 
 struct __attribute__((packed)) WeatherData {
@@ -40,3 +43,17 @@ struct __attribute__((packed)) VesselPacket {
   char message[8];
 };
 static_assert(sizeof(VesselPacket) == 62, "Packet must remain 62 bytes");
+
+// ACK payload is placed in message[8]: 4-byte original SOS sequence
+// followed by 4-byte original SOS origin node ID. Same 62-byte frame.
+inline void encodeSOSAck(VesselPacket &ack, uint32_t sosSeq, uint32_t sosOrigin) {
+  memcpy(ack.message, &sosSeq, sizeof(sosSeq));
+  memcpy(ack.message + 4, &sosOrigin, sizeof(sosOrigin));
+}
+inline bool matchesSOSAck(const VesselPacket &ack, uint32_t sosSeq, uint32_t sosOrigin) {
+  if (ack.packetType != PACKET_SOS_ACK) return false;
+  uint32_t ackSeq = 0, ackOrigin = 0;
+  memcpy(&ackSeq, ack.message, sizeof(ackSeq));
+  memcpy(&ackOrigin, ack.message + 4, sizeof(ackOrigin));
+  return ackSeq == sosSeq && ackOrigin == sosOrigin;
+}

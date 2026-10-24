@@ -153,6 +153,7 @@ void setup() {
   setupSensors();
   setupGPS();
   setupLoRa();
+  setupEmergencyIdentity();
   startReceive();
 
   lastWeatherTime = millis();
@@ -175,6 +176,7 @@ void loop() {
   SOSControls::updateIndicators();
 
   pollLoRaReceive();
+  processSOSRetries();
 
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();

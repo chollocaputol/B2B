@@ -1,5 +1,5 @@
 #include "weather_manager.h"
-#include "lora_manager.h" // Phase 3 bench-only SOS command
+#include "lora_manager.h"
 #include <Wire.h>
 #include <math.h>
 #include <string.h>
@@ -434,8 +434,8 @@ void processSerialTestCommands() {
       testLine[testLineLength] = '\0';
       for (uint8_t i = 0; i < testLineLength; ++i)
         if (testLine[i] >= 'a' && testLine[i] <= 'z') testLine[i] -= ('a' - 'A');
-      if (strcmp(testLine, "SOS") == 0) {
-        transmitSOS();
+      if (strcmp(testLine, "CANCEL SOS") == 0) {
+        cancelActiveSOS();
       } else if (strcmp(testLine, "TEST HELP") == 0) {
         Serial.println("[TEST] Commands: TEST ALL | NORMAL | FRONT | SQUALL | BOTH | CALIB | Z");
         Serial.println("[TEST] Synthetic tests do not overwrite live weather or LoRa payloads");

@@ -19,7 +19,10 @@ void startReceive();
 void pollLoRaReceive();
 void createPacket(VesselPacket &packet);
 void transmitPacket();
-void transmitSOS(); // Bench SOS: single high-priority packet, no ACK/relay yet
+void setupEmergencyIdentity();
+void cancelActiveSOS();
+void transmitSOS(); // Starts bounded SOS send-and-ACK session
+void processSOSRetries();
 float bSequencePDR();
 // A packet received in the last 15 seconds means the neighbor is active.
 // Historical GPS/RSSI remain stored but must not be presented as live.

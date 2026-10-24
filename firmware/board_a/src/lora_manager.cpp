@@ -57,6 +57,15 @@ static uint8_t sosAttempts = 0;
 static constexpr uint8_t SOS_MAX_ATTEMPTS = 4; // initial + up to 3 retries
 static constexpr unsigned long SOS_RETRY_MS = 4500UL;
 
+// Cancellation transaction is independent of any newer SOS. RAM only.
+static bool cancelPending = false;
+static VesselPacket pendingCancel = {};
+static uint8_t cancelAttempts = 0;
+static unsigned long lastCancelAttempt = 0;
+static constexpr uint8_t CANCEL_MAX_ATTEMPTS = 4;
+static constexpr unsigned long CANCEL_RETRY_MS = 4500UL;
+
+
 // -------------------- Last Board B received --------------------
 uint32_t rxFromB = 0;
 uint32_t uniqueFromB = 0;
@@ -271,35 +280,57 @@ void transmitSOS() {
   sendPendingSOS();
 }
 
+// One cancellation in flight. Refuse a second until ACK or timeout,
+// rather than silently replacing the older event's cancellation.
+static void sendPendingCancel() {
+  if (!cancelPending) return;
+  ++cancelAttempts;
+  lastCancelAttempt = millis();
+  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
+  startReceive();
+  Serial.printf("[CANCEL-A] ATTEMPT %u/%u event=%lu radio=%d; ACK PENDING\n",
+    cancelAttempts, CANCEL_MAX_ATTEMPTS,
+    (unsigned long)pendingCancel.sequenceNumber, state);
+}
+
 void cancelActiveSOS() {
   if (!activeEmergency) {
     Serial.println("[SOS-A] No active emergency to cancel");
     return;
   }
-  // DEVELOPMENT ONLY: one unauthenticated cancellation frame; not a rescue confirmation.
-  VesselPacket cancel = {};
-  cancel.magic = PACKET_MAGIC;
-  cancel.version = PACKET_VERSION;
-  cancel.packetType = PACKET_SOS_CANCEL;
-  cancel.originNodeId = NODE_ID;
-  cancel.sequenceNumber = activeEmergencyId;
-  cancel.timestamp = millis() / 1000UL;
-  strncpy(cancel.nodeName, NODE_NAME, sizeof(cancel.nodeName) - 1);
-  memcpy(cancel.message, &activeEmergencyId, sizeof(activeEmergencyId));
+  if (cancelPending) {
+    Serial.println("[CANCEL-A] Previous cancel pending; cannot queue another cancellation yet");
+    return;
+  }
+  memset(&pendingCancel, 0, sizeof(pendingCancel));
+  pendingCancel.magic = PACKET_MAGIC;
+  pendingCancel.version = PACKET_VERSION;
+  pendingCancel.packetType = PACKET_SOS_CANCEL;
+  pendingCancel.originNodeId = NODE_ID;
+  pendingCancel.sequenceNumber = activeEmergencyId;
+  pendingCancel.timestamp = millis() / 1000UL;
+  strncpy(pendingCancel.nodeName, NODE_NAME, sizeof(pendingCancel.nodeName) - 1);
+  memcpy(pendingCancel.message, &activeEmergencyId, 4);
   const uint32_t origin = NODE_ID;
-  memcpy(cancel.message + 4, &origin, sizeof(origin));
-  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&cancel), sizeof(cancel));
-  startReceive();
-  Serial.printf("[SOS-A] CANCEL TX event=%lu state=%d (DELIVERY UNCONFIRMED)\n",
-    (unsigned long)activeEmergencyId, state);
-  // A deliberate operator cancellation releases the LOCAL activation lock.
-  // IMPORTANT: local cancellation does NOT prove the other vessel received it.
-  // In particular, a disconnected receiver may still show UNRESOLVED.
-  // Reliable cancellation delivery/ACK and persistence are future work.
-  sosPending = false;  // Stop retrying the cancelled SOS.
-  activeEmergency = false;
-  Serial.printf("[SOS-A] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE DELIVERY NOT CONFIRMED\n",
-                (unsigned long)activeEmergencyId);
+  memcpy(pendingCancel.message + 4, &origin, 4);
+  cancelPending = true;
+  cancelAttempts = 0;
+  sosPending = false; // Deliberate cancellation stops the prior SOS retries.
+  activeEmergency = false; // New SOS can begin before this cancel is ACKed.
+  Serial.printf("[SOS-A] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE NOT YET CONFIRMED\n",
+    (unsigned long)activeEmergencyId);
+  sendPendingCancel();
+}
+
+void processCancelRetries() {
+  if (!cancelPending || millis() - lastCancelAttempt < CANCEL_RETRY_MS) return;
+  if (cancelAttempts >= CANCEL_MAX_ATTEMPTS) {
+    Serial.printf("[CANCEL-A] UNCONFIRMED after %u attempts event=%lu; REMOTE STATE UNKNOWN\n",
+      cancelAttempts, (unsigned long)pendingCancel.sequenceNumber);
+    cancelPending = false;
+    return;
+  }
+  sendPendingCancel();
 }
 
 void processSOSRetries() {
@@ -337,6 +368,20 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     return;
   }
 
+  if (p.packetType == PACKET_SOS_CANCEL_ACK) {
+    uint32_t ackId = 0, ackOrigin = 0;
+    memcpy(&ackId, p.message, 4);
+    memcpy(&ackOrigin, p.message + 4, 4);
+    if (cancelPending && ackOrigin == NODE_ID &&
+        ackId == pendingCancel.sequenceNumber) {
+      Serial.printf("[CANCEL-A] ACK RECEIVED from Vessel-B for event=%lu after %u attempt(s)\n",
+        (unsigned long)ackId, cancelAttempts);
+      cancelPending = false;
+    } else {
+      Serial.println("[CANCEL-A] Ignored unrelated/late cancellation ACK");
+    }
+    return; // Control packet, not telemetry PDR.
+  }
   if (p.packetType == PACKET_SOS_ACK) {
     if (sosPending && matchesSOSAck(p, pendingSOS.sequenceNumber, pendingSOS.originNodeId)) {
       Serial.printf("[SOS-A] ACK RECEIVED from Vessel-B for SOS seq=%lu after %u attempt(s)\n",

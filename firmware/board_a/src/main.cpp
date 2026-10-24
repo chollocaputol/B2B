@@ -177,6 +177,7 @@ void loop() {
 
   pollLoRaReceive();
   processSOSRetries();
+  processCancelRetries();
 
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();

@@ -23,6 +23,7 @@ void setupEmergencyIdentity();
 void cancelActiveSOS();
 void transmitSOS(); // Starts bounded SOS send-and-ACK session
 void processSOSRetries();
+void processCancelRetries();
 float bSequencePDR();
 // A packet received in the last 15 seconds means the neighbor is active.
 // Historical GPS/RSSI remain stored but must not be presented as live.

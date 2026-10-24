@@ -74,7 +74,8 @@ enum PacketType : uint8_t {
   PACKET_TELEMETRY = 1,
   PACKET_SOS = 2,
   PACKET_SOS_ACK = 3,
-  PACKET_SOS_CANCEL = 4
+  PACKET_SOS_CANCEL = 4,
+  PACKET_SOS_CANCEL_ACK = 5
 };
 enum WeatherState : uint8_t {
   WEATHER_CALIBRATING = 0,
@@ -475,6 +476,24 @@ void acknowledgeSOS(const VesselPacket &sos) {
   startReceive();
 }
 
+// A cancellation ACK confirms that this receiver applied the matching
+// cancellation; it is NOT an SOS rescue-resolution confirmation.
+void acknowledgeCancel(const VesselPacket &cancel) {
+  VesselPacket ack = {};
+  ack.magic = PACKET_MAGIC;
+  ack.version = PACKET_VERSION;
+  ack.packetType = PACKET_SOS_CANCEL_ACK;
+  ack.originNodeId = NODE_ID;
+  ack.timestamp = millis() / 1000UL;
+  strncpy(ack.nodeName, NODE_NAME, sizeof(ack.nodeName) - 1);
+  memcpy(ack.message, &cancel.sequenceNumber, 4);
+  memcpy(ack.message + 4, &cancel.originNodeId, 4);
+  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+  Serial.printf("[CANCEL-B] ACK TX event=%lu state=%d\n",
+    (unsigned long)cancel.sequenceNumber, state);
+  startReceive();
+}
+
 // ============================================================
 // RX / SCHEDULE TX
 // ============================================================
@@ -512,6 +531,7 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
       lastOLEDUpdate = 0;
       Serial.printf("[SOS-B] CANCELLED BY SENDER event=(0x%lX,%lu); not confirmed rescued\n",
         (unsigned long)referredOrigin, (unsigned long)referredId);
+      acknowledgeCancel(p); // Duplicate valid cancel also gets ACK.
     } else {
       Serial.println("[SOS-B] Unmatched CANCEL rejected");
     }

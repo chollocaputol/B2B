@@ -12,7 +12,8 @@ enum PacketType : uint8_t {
   PACKET_TELEMETRY = 1,
   PACKET_SOS = 2,
   PACKET_SOS_ACK = 3,
-  PACKET_SOS_CANCEL = 4
+  PACKET_SOS_CANCEL = 4,
+  PACKET_SOS_CANCEL_ACK = 5
 };
 
 struct __attribute__((packed)) WeatherData {

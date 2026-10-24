@@ -27,14 +27,23 @@
 
 namespace SOSControls
 {
-  static constexpr unsigned long HOLD_MS = 1500UL;
+  // Use the emergency state AT PRESS START. One continuous hold can never
+  // generate both a new SOS (1.5 s) and its cancellation (5 s).
+  static constexpr unsigned long SOS_HOLD_MS = 1500UL;
+  static constexpr unsigned long CANCEL_HOLD_MS = 5000UL;
   static constexpr unsigned long DEBOUNCE_MS = 45UL;
-  static constexpr unsigned long COOLDOWN_MS = 3000UL;
   static bool stablePressed = false, lastRawPressed = false, firedInHold = false;
-  static unsigned long changedAt = 0, pressStartedAt = 0, lastFiredAt = 0;
-  static bool everFired = false, localAlert = false, remoteAlert = false;
+  static bool cancelModeAtPress = false;
+  static unsigned long changedAt = 0, pressStartedAt = 0;
+  static bool localAlert = false, remoteAlert = false;
   static unsigned long localAlertAt = 0, remoteAlertAt = 0;
 
+  enum class ButtonAction : uint8_t
+  {
+    None,
+    StartSOS,
+    CancelSOS
+  };
   inline void begin()
   {
     if (SOS_BUTTON_GPIO >= 0)
@@ -49,7 +58,11 @@ namespace SOSControls
       pinMode(SOS_BUZZER_GPIO, OUTPUT);
       digitalWrite(SOS_BUZZER_GPIO, LOW);
     }
-    Serial.printf("[SOS-CONTROLS] button=%d LED=%d buzzer=%d (negative=disabled)\n", SOS_BUTTON_GPIO, SOS_LED_GPIO, SOS_BUZZER_GPIO);
+    stablePressed = false;
+    lastRawPressed = false;
+    firedInHold = false;
+    changedAt = millis();
+    Serial.printf("[SOS-CONTROLS] button=%d LED=%d buzzer=%d\n", SOS_BUTTON_GPIO, SOS_LED_GPIO, SOS_BUZZER_GPIO);
   }
   inline void noteLocalSOS()
   {
@@ -61,38 +74,39 @@ namespace SOSControls
     remoteAlert = true;
     remoteAlertAt = millis();
   }
-  // Returns true exactly once for a deliberate, continuously held press.
-  inline bool pollButton()
+  // Caller supplies its own active-emergency flag; captured only on debounced
+  // press edge. Release is mandatory before any further action.
+  inline ButtonAction pollAction(bool emergencyActive)
   {
     if (SOS_BUTTON_GPIO < 0)
-      return false;
-    unsigned long now = millis();
-    bool rawPressed = (digitalRead(SOS_BUTTON_GPIO) == LOW);
+      return ButtonAction::None;
+    const unsigned long now = millis();
+    const bool rawPressed = (digitalRead(SOS_BUTTON_GPIO) == LOW);
     if (rawPressed != lastRawPressed)
     {
       lastRawPressed = rawPressed;
       changedAt = now;
     }
     if (now - changedAt < DEBOUNCE_MS)
-      return false;
+      return ButtonAction::None;
     if (stablePressed != rawPressed)
     {
       stablePressed = rawPressed;
       if (stablePressed)
       {
         pressStartedAt = now;
+        cancelModeAtPress = emergencyActive;
         firedInHold = false;
+        Serial.println(cancelModeAtPress ? "[SOS-BUTTON] Hold 5s to CANCEL local SOS" : "[SOS-BUTTON] Hold 1.5s to SEND SOS");
       }
     }
-    if (stablePressed && !firedInHold && now - pressStartedAt >= HOLD_MS &&
-        (!everFired || now - lastFiredAt >= COOLDOWN_MS))
+    if (stablePressed && !firedInHold &&
+        now - pressStartedAt >= (cancelModeAtPress ? CANCEL_HOLD_MS : SOS_HOLD_MS))
     {
       firedInHold = true;
-      everFired = true;
-      lastFiredAt = now;
-      return true;
+      return cancelModeAtPress ? ButtonAction::CancelSOS : ButtonAction::StartSOS;
     }
-    return false;
+    return ButtonAction::None;
   }
   inline void updateIndicators()
   {

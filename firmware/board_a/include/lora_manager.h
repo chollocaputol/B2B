@@ -20,6 +20,7 @@ void pollLoRaReceive();
 void createPacket(VesselPacket &packet);
 void transmitPacket();
 void setupEmergencyIdentity();
+bool hasActiveLocalSOS();
 void cancelActiveSOS();
 void transmitSOS(); // Starts bounded SOS send-and-ACK session
 void processSOSRetries();

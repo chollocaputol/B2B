@@ -168,10 +168,14 @@ void setup() {
 void loop() {
   updateGPS();
   processSerialTestCommands();
-  if (SOSControls::pollButton()) {
-    Serial.println("[SOS-BUTTON-A] Deliberate hold recognized");
+  const auto action = SOSControls::pollAction(hasActiveLocalSOS());
+  if (action == SOSControls::ButtonAction::StartSOS) {
+    Serial.println("[SOS-BUTTON-A] Deliberate 1.5s SOS hold recognized");
     SOSControls::noteLocalSOS();
     transmitSOS();
+  } else if (action == SOSControls::ButtonAction::CancelSOS) {
+    Serial.println("[SOS-BUTTON-A] Deliberate 5s CANCEL hold recognized");
+    cancelActiveSOS();
   }
   SOSControls::updateIndicators();
 

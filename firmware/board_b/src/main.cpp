@@ -8,6 +8,7 @@
 #include <RadioLib.h>
 #include <XPowersLib.h>
 #include <U8g2lib.h>
+#include <Preferences.h>
 
 // ============================================================
 // BOARD B - VESSEL-B
@@ -206,6 +207,35 @@ bool lastTXSuccess = false;
 bool txScheduleStarted = false;
 unsigned long nextTransmitAt = 0;
 
+// Phase 3.5.1: Vessel-B originates its own SOS using serial `SOS`.
+// Keep the physical button disabled until wired/verified on Vessel-B.
+static Preferences bEmergencyPrefs;
+static bool bEmergencyNvsOK = false;
+static uint32_t bNextEmergencyId = 0;
+static bool bEmergencyActive = false;
+static bool bSOSPending = false;
+static VesselPacket bPendingSOS = {};
+static uint8_t bSOSAttempts = 0;
+static unsigned long bLastSOSAttempt = 0;
+static constexpr uint8_t B_SOS_MAX_ATTEMPTS = 4;
+static constexpr unsigned long B_SOS_RETRY_MS = 4500UL;
+static String bSerialLine;
+// Local cancellation transaction is independent of any newer SOS (RAM-only).
+static bool bCancelPending = false;
+static VesselPacket bPendingCancel = {};
+static uint8_t bCancelAttempts = 0;
+static unsigned long bLastCancelAttempt = 0;
+static constexpr uint8_t B_CANCEL_MAX_ATTEMPTS = 4;
+static constexpr unsigned long B_CANCEL_RETRY_MS = 4500UL;
+void cancelVesselBSOS();
+void pollVesselBCancel();
+void sendVesselBCancel();
+
+void startVesselBSOS();
+void pollVesselBSOS();
+void handleVesselBSerial();
+void sendVesselBSOS();
+
 // -------------------- Declarations -----------------------------
 void setupPMU();
 void setupOLED();
@@ -256,6 +286,12 @@ void setup() {
   }
 
   SOSControls::begin();
+  bEmergencyNvsOK = bEmergencyPrefs.begin("sos-b-identity", false);
+  if (bEmergencyNvsOK) {
+    bNextEmergencyId = bEmergencyPrefs.getUInt("nextId", 1);
+    Serial.printf("[SOS-ID-B] Next emergency ID=%lu\n", (unsigned long)bNextEmergencyId);
+  } else Serial.println("[SOS-ID-B] NVS unavailable; SOS disabled");
+  Serial.println("[SOS-B] GPIO2: hold 1.5s SOS, separate 5s hold CANCEL. Serial: SOS / CANCEL SOS");
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
   buttonLastReading = digitalRead(USER_BUTTON_PIN);
   buttonStableState = buttonLastReading;
@@ -278,6 +314,17 @@ void setup() {
 void loop() {
   updateGPS();
   SOSControls::updateIndicators();
+  handleVesselBSerial();
+  const auto action = SOSControls::pollAction(bEmergencyActive);
+  if (action == SOSControls::ButtonAction::StartSOS) {
+    Serial.println("[SOS-BUTTON-B] Deliberate 1.5s SOS hold recognized");
+    startVesselBSOS();
+  } else if (action == SOSControls::ButtonAction::CancelSOS) {
+    Serial.println("[SOS-BUTTON-B] Deliberate 5s CANCEL hold recognized");
+    cancelVesselBSOS();
+  }
+  pollVesselBSOS();
+  pollVesselBCancel();
 
   if (digitalRead(LORA_DIO1) == HIGH) {
     size_t len = radio.getPacketLength();
@@ -458,6 +505,113 @@ void startReceive() {
   }
 }
 
+// Phase 3.5.1: one local SOS event at a time, with four bounded attempts.
+void sendVesselBSOS() {
+  if (!bSOSPending) return;
+  bLastSOSAttempt = millis();
+  ++bSOSAttempts;
+  const int rc = radio.transmit(reinterpret_cast<uint8_t*>(&bPendingSOS), sizeof(bPendingSOS));
+  startReceive();
+  Serial.printf("[SOS-B] ATTEMPT %u/%u id=(0x%lX,%lu) radio=%d; ACK PENDING\n",
+    bSOSAttempts, B_SOS_MAX_ATTEMPTS,
+    (unsigned long)bPendingSOS.originNodeId, (unsigned long)bPendingSOS.sequenceNumber, rc);
+}
+void startVesselBSOS() {
+  if (bEmergencyActive || bSOSPending) {
+    Serial.println("[SOS-B] EXISTING UNRESOLVED SOS; second event blocked");
+    return;
+  }
+  if (!bEmergencyNvsOK || bNextEmergencyId == UINT32_MAX) {
+    Serial.println("[SOS-B] NVS identity unavailable; SOS blocked");
+    return;
+  }
+  const uint32_t id = bNextEmergencyId;
+  if (bEmergencyPrefs.putUInt("nextId", id + 1) != sizeof(uint32_t)) {
+    Serial.println("[SOS-B] NVS ID reservation failed");
+    return;
+  }
+  bNextEmergencyId = id + 1;
+  createTXPacket(bPendingSOS);
+  bPendingSOS.packetType = PACKET_SOS;
+  bPendingSOS.sequenceNumber = id;
+  memset(bPendingSOS.message, 0, sizeof(bPendingSOS.message));
+  memcpy(bPendingSOS.message, "SOS", 3);
+  bEmergencyActive = true;
+  bSOSPending = true;
+  bSOSAttempts = 0;
+  SOSControls::noteLocalSOS();
+  sendVesselBSOS();
+}
+void pollVesselBSOS() {
+  if (!bSOSPending || millis() - bLastSOSAttempt < B_SOS_RETRY_MS) return;
+  if (bSOSAttempts >= B_SOS_MAX_ATTEMPTS) {
+    Serial.println("[SOS-B] UNCONFIRMED after 4 attempts; emergency remains unresolved");
+    bSOSPending = false;
+    return;
+  }
+  sendVesselBSOS();
+}
+void sendVesselBCancel() {
+  if (!bCancelPending) return;
+  ++bCancelAttempts;
+  bLastCancelAttempt = millis();
+  const int rc = radio.transmit(reinterpret_cast<uint8_t*>(&bPendingCancel), sizeof(bPendingCancel));
+  startReceive();
+  Serial.printf("[CANCEL-B] ATTEMPT %u/%u event=%lu radio=%d; ACK PENDING\n",
+                bCancelAttempts, B_CANCEL_MAX_ATTEMPTS,
+                (unsigned long)bPendingCancel.sequenceNumber, rc);
+}
+void cancelVesselBSOS() {
+  if (!bEmergencyActive) {
+    Serial.println("[SOS-B] No active local emergency to cancel");
+    return;
+  }
+  if (bCancelPending) {
+    Serial.println("[CANCEL-B] Previous cancellation pending; try again after ACK/timeout");
+    return;
+  }
+  memset(&bPendingCancel, 0, sizeof(bPendingCancel));
+  bPendingCancel.magic = PACKET_MAGIC;
+  bPendingCancel.version = PACKET_VERSION;
+  bPendingCancel.packetType = PACKET_SOS_CANCEL;
+  bPendingCancel.originNodeId = NODE_ID;
+  bPendingCancel.sequenceNumber = bPendingSOS.sequenceNumber;
+  bPendingCancel.timestamp = millis()/1000UL;
+  strncpy(bPendingCancel.nodeName, NODE_NAME, sizeof(bPendingCancel.nodeName)-1);
+  memcpy(bPendingCancel.message, &bPendingSOS.sequenceNumber, 4);
+  const uint32_t origin = NODE_ID;
+  memcpy(bPendingCancel.message+4, &origin, 4);
+  bCancelPending = true;
+  bCancelAttempts = 0;
+  bEmergencyActive = false;
+  bSOSPending = false;
+  Serial.printf("[SOS-B] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE UNCONFIRMED\n",
+                (unsigned long)bPendingCancel.sequenceNumber);
+  sendVesselBCancel();
+}
+void pollVesselBCancel() {
+  if (!bCancelPending || millis()-bLastCancelAttempt < B_CANCEL_RETRY_MS) return;
+  if (bCancelAttempts >= B_CANCEL_MAX_ATTEMPTS) {
+    Serial.printf("[CANCEL-B] UNCONFIRMED after 4 attempts event=%lu; REMOTE STATE UNKNOWN\n",
+                  (unsigned long)bPendingCancel.sequenceNumber);
+    bCancelPending = false;
+    return;
+  }
+  sendVesselBCancel();
+}
+void handleVesselBSerial() {
+  while (Serial.available()) {
+    char c = static_cast<char>(Serial.read());
+    if (c == '\r' || c == '\n') {
+      bSerialLine.trim();
+      if (bSerialLine.equalsIgnoreCase("SOS")) startVesselBSOS();
+      else if (bSerialLine.equalsIgnoreCase("CANCEL SOS")) cancelVesselBSOS();
+      else if (bSerialLine.length()) Serial.printf("[SOS-B] Unknown command: %s\n", bSerialLine.c_str());
+      bSerialLine = "";
+    } else if (bSerialLine.length() < 32) bSerialLine += c;
+  }
+}
+
 // Direct ACK for original SOS. Duplicate SOS also get ACK.
 void acknowledgeSOS(const VesselPacket &sos) {
   VesselPacket ack = {};
@@ -519,6 +673,30 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
     return;
   }
 
+  if (p.packetType == PACKET_SOS_CANCEL_ACK) {
+    uint32_t referredId = 0, referredOrigin = 0;
+    memcpy(&referredId, p.message, 4);
+    memcpy(&referredOrigin, p.message+4, 4);
+    if (bCancelPending && p.originNodeId == 0xA1 &&
+        referredOrigin == NODE_ID && referredId == bPendingCancel.sequenceNumber) {
+      Serial.printf("[CANCEL-B] ACK RECEIVED from Vessel-A for event=%lu after %u attempt(s)\n",
+                    (unsigned long)referredId, bCancelAttempts);
+      bCancelPending = false;
+    } else Serial.println("[CANCEL-B] Ignored unrelated/late cancel ACK");
+    return;
+  }
+  if (p.packetType == PACKET_SOS_ACK) {
+    uint32_t referredId = 0, referredOrigin = 0;
+    memcpy(&referredId, p.message, 4);
+    memcpy(&referredOrigin, p.message + 4, 4);
+    if (bSOSPending && p.originNodeId == 0xA1 && referredOrigin == NODE_ID &&
+        referredId == bPendingSOS.sequenceNumber) {
+      Serial.printf("[SOS-B] ACK RECEIVED from Vessel-A for SOS id=%lu after %u attempt(s)\n",
+        (unsigned long)referredId, bSOSAttempts);
+      bSOSPending = false;
+    } else Serial.println("[SOS-B] Ignored unmatched/late SOS ACK");
+    return;
+  }
   if (p.packetType == PACKET_SOS_CANCEL) {
     uint32_t referredId = 0, referredOrigin = 0;
     memcpy(&referredId, p.message, 4);

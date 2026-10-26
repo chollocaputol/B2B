@@ -1,4 +1,5 @@
 #include "lora_manager.h"
+#include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
 #include <SPI.h>
 #include <RadioLib.h>
@@ -53,6 +54,7 @@ static uint32_t activeEmergencyId = 0;
 static bool sosPending = false;
 static VesselPacket pendingSOS = {};
 static unsigned long lastSOSAttempt = 0;
+static uint32_t nextSOSTxAt = 0;
 static uint8_t sosAttempts = 0;
 static constexpr uint8_t SOS_MAX_ATTEMPTS = 4; // initial + up to 3 retries
 static constexpr unsigned long SOS_RETRY_MS = 4500UL;
@@ -62,6 +64,7 @@ static bool cancelPending = false;
 static VesselPacket pendingCancel = {};
 static uint8_t cancelAttempts = 0;
 static unsigned long lastCancelAttempt = 0;
+static uint32_t nextCancelTxAt = 0;
 static constexpr uint8_t CANCEL_MAX_ATTEMPTS = 4;
 static constexpr unsigned long CANCEL_RETRY_MS = 4500UL;
 
@@ -250,6 +253,7 @@ static void sendPendingSOS() {
     Serial.printf("[SOS-A] RADIO TX FAILED=%d\n", state);
   }
   startReceive();
+  nextSOSTxAt = millis() + SOS_RETRY_MS + ControlRetry::sosSlotDelayMs(NODE_ID, pendingSOS.sequenceNumber, sosAttempts);
 }
 
 void setupEmergencyIdentity() {
@@ -287,7 +291,8 @@ void transmitSOS() {
   pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
   sosPending = true;
   sosAttempts = 0;
-  sendPendingSOS();
+  nextSOSTxAt = millis() + ControlRetry::sosSlotDelayMs(NODE_ID, pendingSOS.sequenceNumber, 0);
+  Serial.printf("[SOS-A] Scheduled first attempt in %lu ms\n", (unsigned long)(nextSOSTxAt - millis()));
 }
 
 // One cancellation in flight. Refuse a second until ACK or timeout,
@@ -298,6 +303,7 @@ static void sendPendingCancel() {
   lastCancelAttempt = millis();
   const int state = radio.transmit(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
   startReceive();
+  nextCancelTxAt = millis() + CANCEL_RETRY_MS + ControlRetry::slotDelayMs(NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
   Serial.printf("[CANCEL-A] ATTEMPT %u/%u event=%lu radio=%d; ACK PENDING\n",
     cancelAttempts, CANCEL_MAX_ATTEMPTS,
     (unsigned long)pendingCancel.sequenceNumber, state);
@@ -331,11 +337,12 @@ void cancelActiveSOS() {
   activeEmergency = false; // New SOS can begin before this cancel is ACKed.
   Serial.printf("[SOS-A] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE NOT YET CONFIRMED\n",
     (unsigned long)activeEmergencyId);
-  sendPendingCancel();
+  nextCancelTxAt = millis() + ControlRetry::slotDelayMs(NODE_ID, pendingCancel.sequenceNumber, 0);
+  Serial.printf("[CANCEL-A] Scheduled first cancellation in %lu ms\n", (unsigned long)(nextCancelTxAt - millis()));
 }
 
 void processCancelRetries() {
-  if (!cancelPending || millis() - lastCancelAttempt < CANCEL_RETRY_MS) return;
+  if (!cancelPending || !ControlRetry::due(millis(), nextCancelTxAt)) return;
   if (cancelAttempts >= CANCEL_MAX_ATTEMPTS) {
     Serial.printf("[CANCEL-A] UNCONFIRMED after %u attempts event=%lu; REMOTE STATE UNKNOWN\n",
       cancelAttempts, (unsigned long)pendingCancel.sequenceNumber);
@@ -346,7 +353,7 @@ void processCancelRetries() {
 }
 
 void processSOSRetries() {
-  if (!sosPending || (millis() - lastSOSAttempt < SOS_RETRY_MS)) return;
+  if (!sosPending || !ControlRetry::due(millis(), nextSOSTxAt)) return;
   if (sosAttempts >= SOS_MAX_ATTEMPTS) {
     Serial.printf("[SOS-A] UNCONFIRMED after %u attempts; emergency NOT resolved\n", sosAttempts);
     sosPending = false; // Transmission session ended; not emergency resolution.

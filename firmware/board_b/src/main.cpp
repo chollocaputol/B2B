@@ -1,3 +1,4 @@
+#include "../../shared/control_retry_schedule.h"
 #include <Arduino.h>
 #include "sos_controls.h"
 #include <Wire.h>
@@ -217,6 +218,7 @@ static bool bSOSPending = false;
 static VesselPacket bPendingSOS = {};
 static uint8_t bSOSAttempts = 0;
 static unsigned long bLastSOSAttempt = 0;
+static uint32_t bNextSOSTxAt = 0;
 static constexpr uint8_t B_SOS_MAX_ATTEMPTS = 4;
 static constexpr unsigned long B_SOS_RETRY_MS = 4500UL;
 static String bSerialLine;
@@ -225,6 +227,7 @@ static bool bCancelPending = false;
 static VesselPacket bPendingCancel = {};
 static uint8_t bCancelAttempts = 0;
 static unsigned long bLastCancelAttempt = 0;
+static uint32_t bNextCancelTxAt = 0;
 static constexpr uint8_t B_CANCEL_MAX_ATTEMPTS = 4;
 static constexpr unsigned long B_CANCEL_RETRY_MS = 4500UL;
 void cancelVesselBSOS();
@@ -512,6 +515,7 @@ void sendVesselBSOS() {
   ++bSOSAttempts;
   const int rc = radio.transmit(reinterpret_cast<uint8_t*>(&bPendingSOS), sizeof(bPendingSOS));
   startReceive();
+  bNextSOSTxAt = millis() + B_SOS_RETRY_MS + ControlRetry::sosSlotDelayMs(NODE_ID, bPendingSOS.sequenceNumber, bSOSAttempts);
   Serial.printf("[SOS-B] ATTEMPT %u/%u id=(0x%lX,%lu) radio=%d; ACK PENDING\n",
     bSOSAttempts, B_SOS_MAX_ATTEMPTS,
     (unsigned long)bPendingSOS.originNodeId, (unsigned long)bPendingSOS.sequenceNumber, rc);
@@ -540,10 +544,11 @@ void startVesselBSOS() {
   bSOSPending = true;
   bSOSAttempts = 0;
   SOSControls::noteLocalSOS();
-  sendVesselBSOS();
+  bNextSOSTxAt = millis() + ControlRetry::sosSlotDelayMs(NODE_ID, bPendingSOS.sequenceNumber, 0);
+  Serial.printf("[SOS-B] Scheduled first attempt in %lu ms\n", (unsigned long)(bNextSOSTxAt - millis()));
 }
 void pollVesselBSOS() {
-  if (!bSOSPending || millis() - bLastSOSAttempt < B_SOS_RETRY_MS) return;
+  if (!bSOSPending || !ControlRetry::due(millis(), bNextSOSTxAt)) return;
   if (bSOSAttempts >= B_SOS_MAX_ATTEMPTS) {
     Serial.println("[SOS-B] UNCONFIRMED after 4 attempts; emergency remains unresolved");
     bSOSPending = false;
@@ -557,6 +562,7 @@ void sendVesselBCancel() {
   bLastCancelAttempt = millis();
   const int rc = radio.transmit(reinterpret_cast<uint8_t*>(&bPendingCancel), sizeof(bPendingCancel));
   startReceive();
+  bNextCancelTxAt = millis() + B_CANCEL_RETRY_MS + ControlRetry::slotDelayMs(NODE_ID, bPendingCancel.sequenceNumber, bCancelAttempts);
   Serial.printf("[CANCEL-B] ATTEMPT %u/%u event=%lu radio=%d; ACK PENDING\n",
                 bCancelAttempts, B_CANCEL_MAX_ATTEMPTS,
                 (unsigned long)bPendingCancel.sequenceNumber, rc);
@@ -587,10 +593,11 @@ void cancelVesselBSOS() {
   bSOSPending = false;
   Serial.printf("[SOS-B] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE UNCONFIRMED\n",
                 (unsigned long)bPendingCancel.sequenceNumber);
-  sendVesselBCancel();
+  bNextCancelTxAt = millis() + ControlRetry::slotDelayMs(NODE_ID, bPendingCancel.sequenceNumber, 0);
+  Serial.printf("[CANCEL-B] Scheduled first cancellation in %lu ms\n", (unsigned long)(bNextCancelTxAt - millis()));
 }
 void pollVesselBCancel() {
-  if (!bCancelPending || millis()-bLastCancelAttempt < B_CANCEL_RETRY_MS) return;
+  if (!bCancelPending || !ControlRetry::due(millis(), bNextCancelTxAt)) return;
   if (bCancelAttempts >= B_CANCEL_MAX_ATTEMPTS) {
     Serial.printf("[CANCEL-B] UNCONFIRMED after 4 attempts event=%lu; REMOTE STATE UNKNOWN\n",
                   (unsigned long)bPendingCancel.sequenceNumber);

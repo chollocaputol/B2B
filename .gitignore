@@ -16,3 +16,8 @@ build/
 # IDE and OS Files
 .vscode/
 .DS_Store
+# Local package-manager cache
+.pnpm-store/
+
+# Local design notes and previews
+/docs/

@@ -1,3 +1,4 @@
+#include "../../shared/relay_policy.h"
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
@@ -374,6 +375,18 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
   VesselPacket p;
   memcpy(&p, buffer, sizeof(p));
+  // Phase 5.1 relay policy diagnostics ONLY: no forwarding/radio TX here.
+  // Inspect valid-size frames; existing SOS handlers remain authoritative.
+  static RelayPolicy::Cache relaySeen;
+  const RelayPolicy::Decision relayDecision =
+      RelayPolicy::inspect(p, NODE_ID, relaySeen);
+  if (p.packetType == PACKET_SOS || p.packetType == PACKET_SOS_CANCEL) {
+    Serial.printf("[RELAY51] origin=0x%lX event=%lu type=%u hops=%u decision=%s; FORWARD=OFF\n",
+                  (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+                  (unsigned)p.packetType, (unsigned)p.hopCount,
+                  RelayPolicy::name(relayDecision));
+  }
+
   if (p.magic != PACKET_MAGIC || p.version != PACKET_VERSION) {
     invalidPackets++;
     Serial.println("[RX-A] Invalid packet header");

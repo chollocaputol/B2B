@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "../../shared/control_retry_schedule.h"
 #include "../../shared/relay_policy.h"
+#include "../../shared/relay_queue.h"
 #include "sos_controls.h"
 #include <Wire.h>
 #include <SPI.h>
@@ -685,6 +686,25 @@ void processReceivedPacket(const uint8_t *buffer, size_t length,
     Serial.println("[RX-B] Invalid packet header");
     return;
   }
+  // Phase 5.2.1 - prepare a bounded relay frame, but DO NOT transmit it.
+  // This is an intentionally non-deployable dry-run while unique identity,
+  // relay-source authentication, and end-to-end SOS semantics are finalized.
+  static Relay52::Queue<VesselPacket> relay52Queue;
+  const Relay52::Admit relay52Result = relay52Queue.receive(p, NODE_ID);
+  if (p.packetType == PACKET_SOS || p.packetType == PACKET_SOS_CANCEL) {
+    Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u hops=%u result=%s queued=%u TX=OFF\n",
+      (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+      (unsigned)p.packetType, (unsigned)p.hopCount,
+      Relay52::name(relay52Result), (unsigned)relay52Queue.size());
+    // Drain only to diagnostics to avoid a persistent full queue on a two-node bench.
+    VesselPacket prepared;
+    if (relay52Queue.pop(prepared)) {
+      Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu outgoing_hops=%u TX=OFF\n",
+        (unsigned long)prepared.originNodeId,
+        (unsigned long)prepared.sequenceNumber, (unsigned)prepared.hopCount);
+    }
+  }
+
   if (p.originNodeId == NODE_ID) return;
 
   if (p.originNodeId != 0xA1) {

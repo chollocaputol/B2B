@@ -2,6 +2,7 @@
 #include "../../shared/control_retry_schedule.h"
 #include "../../shared/relay_policy.h"
 #include "../../shared/relay_queue.h"
+#include "../../shared/packet_protocol.h"
 #include "sos_controls.h"
 #include <Wire.h>
 #include <SPI.h>
@@ -53,12 +54,7 @@ const char NODE_NAME[] = "Vessel-B";
 #define LORA_PREAMBLE   8
 #define LORA_GAIN       1.8
 
-#define PACKET_MAGIC    0x4D45
-#define PACKET_VERSION  1
-#define FLAG_GPS_FIX                0x01
 // Same validity flags as Board A packet_protocol.h (no packet-size change).
-#define FLAG_TEMP_HUMIDITY_VALID    0x02
-#define FLAG_PRESSURE_VALID         0x04
 
 const unsigned long TX_INTERVAL = 5000UL;
 const unsigned long TX_OFFSET_AFTER_FIRST_A_PACKET = 2500UL;
@@ -74,13 +70,6 @@ const unsigned long STATUS_INTERVAL = 5000UL;
 #define SEQUENCE_CACHE_SIZE 256
 
 // Weather code definitions match the shared packet.
-enum PacketType : uint8_t {
-  PACKET_TELEMETRY = 1,
-  PACKET_SOS = 2,
-  PACKET_SOS_ACK = 3,
-  PACKET_SOS_CANCEL = 4,
-  PACKET_SOS_CANCEL_ACK = 5
-};
 enum WeatherState : uint8_t {
   WEATHER_CALIBRATING = 0,
   WEATHER_NORMAL = 1,
@@ -88,34 +77,7 @@ enum WeatherState : uint8_t {
   WEATHER_SQUALL = 3
 };
 
-struct __attribute__((packed)) WeatherData {
-  int16_t temperature_x10;
-  uint16_t humidity_x10;
-  uint16_t pressure_x10;
-  int16_t pressureTrend_x10;
-  uint8_t zambrettiState;
-  uint8_t sensorFusionState;
-  uint8_t weatherState;
-};
 
-struct __attribute__((packed)) VesselPacket {
-  uint16_t magic;
-  uint8_t version;
-  uint8_t packetType;
-  uint32_t originNodeId;
-  uint32_t sequenceNumber;
-  uint32_t timestamp; // Uptime seconds in current development firmware, not UTC.
-  uint8_t hopCount;
-  uint8_t flags;
-  char nodeName[12];
-  int32_t latitude_e7;
-  int32_t longitude_e7;
-  uint32_t shoreDistance_m;
-  uint8_t batteryLevel;
-  WeatherData weather;
-  char message[8];
-};
-static_assert(sizeof(VesselPacket) == 62, "Packet must remain 62 bytes");
 
 // -------------------- Hardware --------------------------------
 SPIClass loraSPI(FSPI);

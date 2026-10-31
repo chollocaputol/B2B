@@ -1,3 +1,4 @@
+#include "../../shared/tbeam_pins.h"
 #include <Arduino.h>
 #include "sos_controls.h"
 #include <Wire.h>
@@ -18,20 +19,8 @@
 // ============================================================
 
 
-#define GPS_EN_PIN      7
-#define GPS_RX_PIN      9
-#define GPS_TX_PIN      8
-#define GPS_PPS_PIN     6
-
-#define OLED_SDA_PIN   17
-#define OLED_SCL_PIN   18
-#define PMU_SDA_PIN    42
-#define PMU_SCL_PIN    41
-
 // T-Beam Supreme user/BOOT button (active LOW)
 #define USER_BUTTON_PIN 0
-
-
 
 
 const unsigned long TX_INTERVAL = 5000UL;

@@ -1,3 +1,4 @@
+#include "../../shared/tbeam_pins.h"
 #include <Arduino.h>
 #include "../../shared/control_retry_schedule.h"
 #include "../../shared/relay_policy.h"
@@ -23,23 +24,6 @@
 // final controlled-test PDR measurement.
 // ============================================================
 
-#define LORA_SCK       12
-#define LORA_MISO      13
-#define LORA_MOSI      11
-#define LORA_CS        10
-#define LORA_DIO1       1
-#define LORA_RST        5
-#define LORA_BUSY       4
-
-#define GPS_EN_PIN      7
-#define GPS_RX_PIN      9
-#define GPS_TX_PIN      8
-#define GPS_PPS_PIN     6
-
-#define OLED_SDA_PIN   17
-#define OLED_SCL_PIN   18
-#define PMU_SDA_PIN    42
-#define PMU_SCL_PIN    41
 
 #define NODE_ID        0xB1
 const char NODE_NAME[] = "Vessel-B";
@@ -76,7 +60,6 @@ enum WeatherState : uint8_t {
   WEATHER_FRONT = 2,
   WEATHER_SQUALL = 3
 };
-
 
 
 // -------------------- Hardware --------------------------------

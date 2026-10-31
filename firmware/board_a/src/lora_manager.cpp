@@ -1,3 +1,4 @@
+#include "../../shared/tbeam_pins.h"
 #include "../../shared/relay_policy.h"
 #include "../../shared/relay_queue.h"
 #include "lora_manager.h"
@@ -11,13 +12,7 @@
 #include <Preferences.h>
 
 // Source firmware: Board A, 915 MHz, RadioLib SX1262.
-#define LORA_SCK       12
-#define LORA_MISO      13
-#define LORA_MOSI      11
-#define LORA_CS        10
-#define LORA_DIO1       1
-#define LORA_RST        5
-#define LORA_BUSY       4
+
 
 // Must match Board B.
 #define LORA_FREQUENCY  915.0

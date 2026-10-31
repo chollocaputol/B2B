@@ -28,7 +28,7 @@ inline bool poll(HardwareSerial& port, TinyGPSPlus& parser,
   return fresh;
 }
 
-inline void printStatus(const char* tag, const TinyGPSPlus& parser,
+inline void printStatus(const char* tag, TinyGPSPlus& parser,
                         bool fix, double latitude, double longitude) {
   Serial.println();
   Serial.printf("[GPS-%s]\n", tag);

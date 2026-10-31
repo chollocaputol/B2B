@@ -1,4 +1,5 @@
 #include "../../shared/tbeam_pins.h"
+#include "../../shared/tbeam_hardware_service.h"
 #include "../../shared/gps_service.h"
 #include <Arduino.h>
 #include "sos_controls.h"
@@ -220,15 +221,7 @@ void loop() {
 // HARDWARE INITIALIZATION
 // ============================================================
 void setupPMU() {
-  PMUWire.begin(PMU_SDA_PIN, PMU_SCL_PIN);
-  if (!pmu.init(PMUWire, PMU_SDA_PIN, PMU_SCL_PIN)) {
-    Serial.println("[PMU] Initialization failed");
-    return;
-  }
-  pmu.setALDO1Voltage(3300);
-  pmu.enableALDO1();
-  pmu.setALDO4Voltage(3300);
-  pmu.enableALDO4();
+  if (!TBeamHardware::beginPower(PMUWire, pmu)) return;
   Serial.println("[PMU] Initialized; OLED and GPS rails enabled");
 }
 
@@ -247,11 +240,7 @@ void setupOLED() {
 }
 
 bool detectOLED() {
-  Wire.beginTransmission(0x3C);
-  if (Wire.endTransmission() == 0) { oledAddress = 0x3C; return true; }
-  Wire.beginTransmission(0x3D);
-  if (Wire.endTransmission() == 0) { oledAddress = 0x3D; return true; }
-  return false;
+  return TBeamHardware::detectOLEDAddress(Wire, oledAddress);
 }
 
 // ============================================================

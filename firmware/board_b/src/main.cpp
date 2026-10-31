@@ -1,4 +1,5 @@
 #include "../../shared/tbeam_pins.h"
+#include "../../shared/oled_button_debounce.h"
 #include "../../shared/tbeam_hardware_service.h"
 #include "../../shared/gps_service.h"
 #include <Arduino.h>
@@ -343,13 +344,8 @@ void loop() {
 // ============================================================
 void handleOLEDButton() {
   const int reading = digitalRead(USER_BUTTON_PIN);
-  if (reading != buttonLastReading) {
-    buttonLastDebounceTime = millis();
-    buttonLastReading = reading;
-  }
-  if (millis() - buttonLastDebounceTime >= BUTTON_DEBOUNCE_MS &&
-      reading != buttonStableState) {
-    buttonStableState = reading;
+  if (OLEDButton::stableEdge(reading, buttonLastReading, buttonStableState,
+                             buttonLastDebounceTime, millis(), BUTTON_DEBOUNCE_MS)) {
     if (buttonStableState == LOW) {
       oledPage = (oledPage + 1) % 5;
       lastOLEDUpdate = 0;  // Refresh new page at next loop.

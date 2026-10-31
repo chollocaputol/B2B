@@ -1,4 +1,5 @@
 #include "../../shared/tbeam_pins.h"
+#include "../../shared/oled_button_debounce.h"
 #include "../../shared/tbeam_hardware_service.h"
 #include "../../shared/gps_service.h"
 #include <Arduino.h>
@@ -264,13 +265,9 @@ void printGPSStatus() {
 // GPIO0 user button is active LOW. Debouncing prevents one physical
 // press from skipping multiple pages. Page changes only on a new press.
 void handleOLEDButton() {
-  int reading = digitalRead(USER_BUTTON_PIN);
-  if (reading != buttonLastReading) {
-    buttonLastDebounceTime = millis();
-    buttonLastReading = reading;
-  }
-  if (millis() - buttonLastDebounceTime >= BUTTON_DEBOUNCE_MS && reading != buttonStableState) {
-    buttonStableState = reading;
+  const int reading = digitalRead(USER_BUTTON_PIN);
+  if (OLEDButton::stableEdge(reading, buttonLastReading, buttonStableState,
+                             buttonLastDebounceTime, millis(), BUTTON_DEBOUNCE_MS)) {
     if (buttonStableState == LOW) {
       buttonPressStartedAt = millis();
     } else {

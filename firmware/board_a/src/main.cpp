@@ -1,4 +1,5 @@
 #include "../../shared/tbeam_pins.h"
+#include "../../shared/gps_service.h"
 #include <Arduino.h>
 #include "sos_controls.h"
 #include <Wire.h>
@@ -257,37 +258,16 @@ bool detectOLED() {
 // GPS
 // ============================================================
 void setupGPS() {
-  pinMode(GPS_EN_PIN, OUTPUT);
-  digitalWrite(GPS_EN_PIN, HIGH);
-  pinMode(GPS_PPS_PIN, INPUT);
-  GPSSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  Serial.println("[GPS-A] L76K enabled");
+  GPSService::begin(GPSSerial, "A");
 }
 
 void updateGPS() {
-  while (GPSSerial.available()) gps.encode(GPSSerial.read());
-  gpsHasFix = gps.location.isValid() && gps.location.age() < 3000;
-  if (gpsHasFix) {
-    latitude = gps.location.lat();
-    longitude = gps.location.lng();
-    haveLastKnownPosition = true;
-  }
+  gpsHasFix = GPSService::poll(GPSSerial, gps, latitude, longitude);
+  if (gpsHasFix) haveLastKnownPosition = true;
 }
 
 void printGPSStatus() {
-  Serial.println();
-  Serial.println("[GPS-A]");
-  Serial.print("Fix: "); Serial.println(gpsHasFix ? "YES" : "NO");
-  Serial.print("Satellites: ");
-  if (gps.satellites.isValid()) Serial.println(gps.satellites.value());
-  else Serial.println("?");
-  Serial.print("HDOP: ");
-  if (gps.hdop.isValid()) Serial.println(gps.hdop.hdop(), 1);
-  else Serial.println("?");
-  if (gpsHasFix) {
-    Serial.print("Lat: "); Serial.println(latitude, 7);
-    Serial.print("Lon: "); Serial.println(longitude, 7);
-  }
+  GPSService::printStatus("A", gps, gpsHasFix, latitude, longitude);
 }
 
 // OLED BUTTON NAVIGATION

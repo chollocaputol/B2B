@@ -21,3 +21,6 @@ build/
 
 # Local design notes and previews
 /docs/
+
+# Firmware installer backups
+*.bak

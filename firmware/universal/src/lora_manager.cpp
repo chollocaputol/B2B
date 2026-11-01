@@ -212,17 +212,31 @@ bool consumeNewReceivedSOS() {
   return pending;
 }
 
+// PHASE 5.2.2C-3G-1: receive health diagnostics (no recovery TX).
+static uint32_t diagIrqCount = 0;
+static uint32_t diagReadOk = 0;
+static uint32_t diagReadErr = 0;
+static uint32_t diagInvalidLen = 0;
+static uint32_t diagStartReceiveErr = 0;
+static uint32_t diagLastRxMs = 0;
+static void printPeerReceiveDiagnostics();
+
 void pollLoRaReceive() {
   if (digitalRead(LORA_DIO1) == HIGH) {
+    ++diagIrqCount;
     size_t len = radio.getPacketLength();
+    if (len == 0 || len > sizeof(VesselPacket)) ++diagInvalidLen;
     if (len > 0 && len <= sizeof(VesselPacket)) {
       uint8_t buffer[sizeof(VesselPacket)];
       int state = radio.readData(buffer, len);
       if (state == RADIOLIB_ERR_NONE) {
+        ++diagReadOk;
+        diagLastRxMs = millis();
         int16_t rssi = static_cast<int16_t>(radio.getRSSI());
         float snr = radio.getSNR();
         processReceivedPacket(buffer, len, rssi, snr);
       } else {
+        ++diagReadErr;
         Serial.print("[RX-A] readData error: ");
         Serial.println(state);
         invalidPackets++;
@@ -230,6 +244,39 @@ void pollLoRaReceive() {
     }
     startReceive();
   }
+  printPeerReceiveDiagnostics();
+}
+
+// Every 15 seconds, print RX activity and active peers. This intentionally
+// never calls radio.startReceive(), resets the radio, or transmits anything.
+static void printPeerReceiveDiagnostics() {
+  static uint32_t lastPrintMs = 0;
+  const uint32_t now = millis();
+  if (uint32_t(now - lastPrintMs) < 15000UL) return;
+  lastPrintMs = now;
+  size_t active = 0;
+  for (uint32_t id = 1; id <= 9999; ++id) {
+    const auto* p = peerTelemetry.find(id);
+    if (p && p->active(now)) ++active;
+  }
+  Serial.printf("[RX-DIAG] ms=%lu dio1=%d irq=%lu readOK=%lu readERR=%lu invalidLen=%lu rxStartERR=%lu lastRXAgeMs=%ld known=%u active=%u peers=",
+    (unsigned long)now, digitalRead(LORA_DIO1),
+    (unsigned long)diagIrqCount, (unsigned long)diagReadOk,
+    (unsigned long)diagReadErr, (unsigned long)diagInvalidLen,
+    (unsigned long)diagStartReceiveErr,
+    diagReadOk ? (long)uint32_t(now-diagLastRxMs) : -1L,
+    (unsigned)peerTelemetry.count(), (unsigned)active);
+  bool any = false;
+  for (uint32_t id = 1; id <= 9999; ++id) {
+    const auto* p = peerTelemetry.find(id);
+    if (!p || !p->active(now)) continue;
+    if (any) Serial.print(',');
+    Serial.printf("%lu:%lus", (unsigned long)id,
+                  (unsigned long)(uint32_t(now-p->lastSeenMs)/1000UL));
+    any = true;
+  }
+  if (!any) Serial.print("none");
+  Serial.println();
 }
 
 // ============================================================
@@ -252,6 +299,7 @@ void setupLoRa() {
 void startReceive() {
   int state = radio.startReceive();
   if (state != RADIOLIB_ERR_NONE) {
+    ++diagStartReceiveErr;
     Serial.print("[RX-A] startReceive error: ");
     Serial.println(state);
   }

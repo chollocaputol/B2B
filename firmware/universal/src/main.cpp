@@ -28,6 +28,19 @@
 
 
 const unsigned long TX_INTERVAL = 5000UL;
+// PHASE 3G-2: randomized telemetry slots, SOS handling unchanged.
+// Guardrail: 4.25s..5.75s telemetry intervals, initial 1..5 seconds.
+static constexpr uint32_t TELEMETRY_JITTER_MS = 750UL;
+static constexpr uint32_t TELEMETRY_INITIAL_MIN_MS = 1000UL;
+static constexpr uint32_t TELEMETRY_INITIAL_MAX_MS = 5000UL;
+static uint32_t nextTelemetryAtMs = 0;
+
+static uint32_t nextTelemetryIntervalMs() {
+  // Arduino random(max) has exclusive upper bound.
+  const long swing = random(-(long)TELEMETRY_JITTER_MS, (long)TELEMETRY_JITTER_MS + 1L);
+  return TX_INTERVAL + swing;
+}
+
 // DEVELOPMENT ONLY: set to 0 for real 10-minute sampling before field use.
 #define WEATHER_FAST_TEST 1
 const unsigned long WEATHER_INTERVAL = WEATHER_FAST_TEST ? 5000UL : 600000UL;
@@ -300,6 +313,16 @@ void setup() {
   setupEmergencyIdentity();
   startReceive();
 
+  // Each boot receives a different first telemetry slot. Subsequent intervals
+  // vary independently; no change to SOS timing or packet serialization.
+  randomSeed(esp_random());
+  const uint32_t firstTxDelayMs = random(TELEMETRY_INITIAL_MIN_MS,
+                                          TELEMETRY_INITIAL_MAX_MS + 1UL);
+  nextTelemetryAtMs = millis() + firstTxDelayMs;
+  Serial.printf("[TX-SCHED] origin=%lu firstInMs=%lu jitterMs=+/- %lu\n",
+    (unsigned long)VesselIdentity::nodeId(),
+    (unsigned long)firstTxDelayMs, (unsigned long)TELEMETRY_JITTER_MS);
+
   lastWeatherTime = millis();
   lastOLEDUpdate = millis();
   Serial.printf("[UNIVERSAL] %s (ID %lu): firmware initialized; relay forwarding OFF; multi-vessel validation PENDING\n",
@@ -339,9 +362,12 @@ void loop() {
     processWeather();
   }
 
-  static unsigned long lastTransmit = 0;
-  if (millis() - lastTransmit >= TX_INTERVAL) {
-    lastTransmit = millis();
+  if ((int32_t)(millis() - nextTelemetryAtMs) >= 0) {
+    const uint32_t intervalMs = nextTelemetryIntervalMs();
+    // Schedule relative to current time instead of catching up in a TX burst.
+    nextTelemetryAtMs = millis() + intervalMs;
+    Serial.printf("[TX-SCHED] origin=%lu nextInMs=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(), (unsigned long)intervalMs);
     transmitPacket();
   }
 

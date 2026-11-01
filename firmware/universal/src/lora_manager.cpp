@@ -189,7 +189,21 @@ static void resetBSequenceSession();
 static void calculateBSequencePDR();
 
 // Received distress record is volatile RAM, never authoritative after reboot.
+static MultiPeerSOS::Table peerSOSTable;
 static ReceivedSOSView incomingBSOS = {};
+size_t getSOSRecordCount() {return peerSOSTable.count();}
+size_t getActiveSOSCount() {return peerSOSTable.activeCount();}
+bool getSOSRecordByIndex(size_t index,SOSRecordSnapshot &out) {
+ out=SOSRecordSnapshot{};
+ const auto* slot=peerSOSTable.at(index);
+ if(!slot)return false;
+ out.known=true;out.originId=slot->origin;out.eventId=slot->event;
+ out.receivedAtMs=slot->receivedAtMs;out.cancelled=slot->cancelled;
+ out.positionValid=slot->positionValid;out.latitude=slot->latitude;
+ out.longitude=slot->longitude;
+ return true;
+}
+
 static bool incomingBSOSNew = false;
 ReceivedSOSView getReceivedSOSView() { return incomingBSOS; }
 bool consumeNewReceivedSOS() {
@@ -500,7 +514,6 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
 
   // Phase 5.2.2C-2D: per-origin SOS state; still no relay TX.
-  static MultiPeerSOS::Table peerSOSTable;
   if (p.packetType == PACKET_SOS_CANCEL) {
     uint32_t cancelId=0, cancelOrigin=0;
     memcpy(&cancelId,p.message,4);
@@ -531,6 +544,13 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,MultiPeerSOS::name(result));
     if(result==MultiPeerSOS::Result::Stale||result==MultiPeerSOS::Result::Full)return;
     if(result==MultiPeerSOS::Result::New){
+      bool validPosition = (p.flags & FLAG_GPS_FIX)!=0;
+      const double latitudeSOS=p.latitude_e7/1e7;
+      const double longitudeSOS=p.longitude_e7/1e7;
+      validPosition = validPosition && latitudeSOS >= -90.0 && latitudeSOS <= 90.0 &&
+        longitudeSOS >= -180.0 && longitudeSOS <= 180.0 &&
+        !(latitudeSOS==0.0 && longitudeSOS==0.0);
+      peerSOSTable.setPositionForNew(p.originNodeId,p.sequenceNumber,millis(),validPosition,latitudeSOS,longitudeSOS);
       incomingBSOS.known=true;incomingBSOS.cancelled=false;
       incomingBSOS.originId=p.originNodeId;incomingBSOS.eventId=p.sequenceNumber;
       incomingBSOS.receivedAtMs=millis();incomingBSOS.positionValid=(p.flags&FLAG_GPS_FIX)!=0;

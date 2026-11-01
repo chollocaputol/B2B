@@ -56,5 +56,14 @@ struct ReceivedSOSView {
   uint32_t eventId;
   unsigned long receivedAtMs;
 };
+// Read-only RAM SOS record snapshot; events keyed by origin and latest event ID.
+struct SOSRecordSnapshot {
+ uint32_t originId=0,eventId=0,receivedAtMs=0;
+ bool known=false,cancelled=false,positionValid=false;
+ double latitude=0,longitude=0;
+};
+size_t getSOSRecordCount();
+size_t getActiveSOSCount();
+bool getSOSRecordByIndex(size_t index,SOSRecordSnapshot &out);
 ReceivedSOSView getReceivedSOSView();
 bool consumeNewReceivedSOS();

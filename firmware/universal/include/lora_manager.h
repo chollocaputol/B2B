@@ -24,6 +24,7 @@ struct PeerDisplaySnapshot {
 };
 bool getLivePeerSnapshot(PeerDisplaySnapshot &out);
 size_t getTrackedPeerCount();
+uint32_t getTotalPeerTelemetryReceived();
 
 void setupLoRa();
 void startReceive();

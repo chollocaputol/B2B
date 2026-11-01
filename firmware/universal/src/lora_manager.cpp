@@ -144,6 +144,15 @@ bool getLivePeerSnapshot(PeerDisplaySnapshot &out) {
   return true;
 }
 size_t getTrackedPeerCount() { return peerTelemetry.count(); }
+uint32_t getTotalPeerTelemetryReceived() {
+  uint64_t total = 0;
+  for (uint32_t id=1; id<=9999; ++id) {
+    const auto* peer = peerTelemetry.find(id);
+    if (peer) total += peer->received;
+  }
+  return total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
+}
+
 
 // Helper forward declarations (kept private to this translation unit).
 static void processReceivedPacket(const uint8_t*, size_t, int16_t, float);
@@ -565,53 +574,14 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       peer ? peer->pdrEstimate() : 0.0f);
   }
 
-  rxFromB++;
-  lastBSeen = millis();
-  lastBRSSI = rssi;
-  lastBSNR = snr;
-  bWeatherState = p.weather.weatherState;
-
-  if (p.flags & FLAG_GPS_FIX) {
-    double lat = p.latitude_e7 / 10000000.0;
-    double lon = p.longitude_e7 / 10000000.0;
-    if (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0 &&
-        !(lat == 0.0 && lon == 0.0)) {
-      bGPSValid = true;
-      bLatitude = lat;
-      bLongitude = lon;
-    } else {
-      bGPSValid = false;
-      distanceToBkm = -1.0;
-    }
-  } else {
-    bGPSValid = false;
-    distanceToBkm = -1.0;
+  // Phase 5.2.2C-2H: do not mix multiple vessel sequences into the
+  // historical Board-B-only counters; the authoritative state is peerTelemetry.
+  if (p.packetType == PACKET_TELEMETRY) {
+    Serial.printf("[RX-PEER] origin=%lu seq=%lu RSSI=%d SNR=%.2f\n",
+      (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+      rssi, snr);
   }
 
-  trackBSequence(p.sequenceNumber);
-
-  if (gpsHasFix && bGPSValid) {
-    distanceToBkm = TinyGPSPlus::distanceBetween(latitude, longitude,
-                                                  bLatitude, bLongitude) / 1000.0;
-  } else {
-    distanceToBkm = -1.0;
-  }
-
-  Serial.println();
-  Serial.println("========== RX-A: BOARD B PACKET ==========");
-  Serial.print("Node: "); Serial.println(p.nodeName);
-  Serial.print("Sequence: "); Serial.println(p.sequenceNumber);
-  Serial.print("Remote GPS: ");
-  if (bGPSValid) {
-    Serial.print(bLatitude, 7); Serial.print(", "); Serial.println(bLongitude, 7);
-  } else Serial.println("NO FIX");
-  Serial.print("Distance to B: ");
-  if (distanceToBkm >= 0.0) { Serial.print(distanceToBkm, 3); Serial.println(" km"); }
-  else Serial.println("?");
-  Serial.print("RSSI: "); Serial.print(rssi); Serial.println(" dBm");
-  Serial.print("SNR: "); Serial.print(snr, 2); Serial.println(" dB");
-  Serial.print("Observed B->A PDR: "); Serial.print(bSequencePDR()); Serial.println("%");
-  Serial.println("==========================================");
 }
 
 static bool bSequenceWasSeen(uint32_t sequence) {

@@ -205,11 +205,11 @@ void loop() {
     lastUptimePrint = millis();
     char uptimeText[40];
     formatUptime(uptimeText, sizeof(uptimeText));
-    Serial.printf("[UPTIME-A] %s | Weather=%s | TX_OK=%lu | TX_FAIL=%lu | RX_LEGACY=%lu\n",
+    Serial.printf("[UPTIME-A] %s | Weather=%s | TX_OK=%lu | TX_FAIL=%lu | RX_TELEMETRY=%lu\n",
                   uptimeText, weatherName(weatherState),
                   static_cast<unsigned long>(txCount),
                   static_cast<unsigned long>(txFailures),
-                  static_cast<unsigned long>(rxFromB));
+                  static_cast<unsigned long>(getTotalPeerTelemetryReceived()));
   }
 
   handleOLEDButton();
@@ -471,7 +471,7 @@ void oledUptimePage() {
   u8g2.drawStr(0, 34, line);
   snprintf(line, sizeof(line), "TX:%lu RX:%lu",
            static_cast<unsigned long>(txCount),
-           static_cast<unsigned long>(rxFromB));
+           static_cast<unsigned long>(getTotalPeerTelemetryReceived()));
   u8g2.drawStr(0, 46, line);
   u8g2.drawStr(0, 60, "Tap: NEXT PAGE");
   u8g2.sendBuffer();

@@ -62,6 +62,72 @@ const unsigned long BUTTON_LONG_PRESS_MS = 900UL;
 // OLED-only alert demonstrations: 0 = LIVE, 1 = NORMAL, 2 = FRONT, 3 = SQUALL.
 // These NEVER modify real weatherState, radio telemetry, or sensor history.
 uint8_t alertDemoMode = 0;
+// 0 = AUTO (latest active peer). Nonzero = manually selected vessel.
+uint32_t selectedOLEDPeerId = 0;
+bool selectedOLEDPeer(PeerDisplaySnapshot &out) {
+  if (!selectedOLEDPeerId) return getLivePeerSnapshot(out);
+  if (getPeerSnapshotById(selectedOLEDPeerId,out) && out.active) return true;
+  out=PeerDisplaySnapshot{};return false;
+}
+// Menu list is captured on opening; incoming telemetry cannot change its cursor.
+static constexpr uint8_t kMenuPeersMax = 10;
+bool oledPeerMenuOpen = false;
+uint32_t oledMenuPeerIds[kMenuPeersMax] = {};
+uint8_t oledMenuPeerCount = 0;
+uint8_t oledMenuCursor = 0; // 0=Auto, 1..N=vessels, N+1=Back
+void openOLEDPeerMenu() {
+  oledMenuPeerCount = 0;
+  oledMenuCursor = 0;
+  uint32_t previous = 0;
+  while (oledMenuPeerCount < kMenuPeersMax) {
+    uint32_t id = 0;
+    if (!nextActivePeerId(previous, id) || id <= previous) break;
+    oledMenuPeerIds[oledMenuPeerCount++] = id;
+    previous = id;
+  }
+  oledPeerMenuOpen = true;
+  Serial.printf("[OLED-MENU] OPEN peers=%u\n", (unsigned)oledMenuPeerCount);
+}
+void advanceOLEDPeerMenu() {
+  oledMenuCursor = (oledMenuCursor + 1) % (oledMenuPeerCount + 2);
+  Serial.printf("[OLED-MENU] CURSOR %u\n", (unsigned)oledMenuCursor);
+}
+void confirmOLEDPeerMenu() {
+  if (oledMenuCursor == 0) {
+    selectedOLEDPeerId = 0;
+    Serial.println("[OLED-MENU] CHOSEN AUTO");
+  } else if (oledMenuCursor == oledMenuPeerCount + 1) {
+    Serial.println("[OLED-MENU] BACK (selection unchanged)");
+  } else {
+    uint32_t id = oledMenuPeerIds[oledMenuCursor - 1];
+    PeerDisplaySnapshot peer;
+    if (!getPeerSnapshotById(id, peer) || !peer.active) {
+      Serial.printf("[OLED-MENU] ID=%lu inactive; menu remains open\n", (unsigned long)id);
+      return;
+    }
+    selectedOLEDPeerId = id;
+    Serial.printf("[OLED-MENU] CHOSEN ID=%lu\n", (unsigned long)id);
+  }
+  oledPeerMenuOpen = false;
+}
+void drawOLEDPeerMenu() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0, 9, "SELECT VESSEL 3/7");
+  const uint8_t choices = oledMenuPeerCount + 2;
+  const uint8_t first = oledMenuCursor >= 3 ? oledMenuCursor - 3 : 0;
+  for (uint8_t row = 0; row < 4 && first + row < choices; ++row) {
+    uint8_t index = first + row;
+    char label[24] = {};
+    if (index == 0) strcpy(label, "Auto");
+    else if (index == oledMenuPeerCount + 1) strcpy(label, "Back");
+    else snprintf(label, sizeof(label), "Vessel-%03lu", (unsigned long)oledMenuPeerIds[index - 1]);
+    char line[29];
+    snprintf(line, sizeof(line), "%c %s", index == oledMenuCursor ? '>' : ' ', label);
+    u8g2.drawStr(0, 21 + row * 12, line);
+  }
+  u8g2.sendBuffer();
+}
 
 
 // -------------------- GPS -------------------------------------
@@ -275,7 +341,12 @@ void handleOLEDButton() {
       buttonPressStartedAt = millis();
     } else {
       unsigned long duration = millis() - buttonPressStartedAt;
-      if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
+      if (oledPage == 2 && duration >= BUTTON_LONG_PRESS_MS) {
+        if (oledPeerMenuOpen) confirmOLEDPeerMenu();
+        else openOLEDPeerMenu();
+      } else if (oledPeerMenuOpen && oledPage == 2 && duration < BUTTON_LONG_PRESS_MS) {
+        advanceOLEDPeerMenu();
+      } else if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
         alertDemoMode = (alertDemoMode + 1) % 4;
         Serial.printf("[ALERT-DEMO] OLED-only mode: %u (0=LIVE,1=NORMAL,2=FRONT,3=SQUALL)\n", alertDemoMode);
       } else if (duration < BUTTON_LONG_PRESS_MS) {
@@ -372,16 +443,17 @@ void oledWeatherPage() {
 }
 
 void oledLinkPage() {
+  if (oledPeerMenuOpen) { drawOLEDPeerMenu(); return; }
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0,9,"LIVE PEER 3/7");
+  u8g2.drawStr(0,9,selectedOLEDPeerId ? "SELECT PEER 3/7" : "LIVE PEER 3/7");
   char line[32];
   PeerDisplaySnapshot peer;
-  if (!getLivePeerSnapshot(peer)) {
+  if (!selectedOLEDPeer(peer)) {
     snprintf(line,sizeof(line),"KNOWN:%u ACTIVE:0",(unsigned)getTrackedPeerCount());
     u8g2.drawStr(0,22,line);
-    u8g2.drawStr(0,39,"NO LIVE TELEMETRY");
-    u8g2.drawStr(0,56,"LISTENING...");
+    u8g2.drawStr(0,39,selectedOLEDPeerId ? "SELECTED PEER LOST" : "NO LIVE TELEMETRY");
+    u8g2.drawStr(0,56,"HOLD: CYCLE PEER");
   } else {
     snprintf(line,sizeof(line),"ID:%lu OF %u",(unsigned long)peer.id,(unsigned)getTrackedPeerCount());
     u8g2.drawStr(0,21,line);
@@ -404,8 +476,8 @@ void oledPDRPage() {
   u8g2.drawStr(0,9,"PEER PDR 4/7");
   char line[32];
   PeerDisplaySnapshot peer;
-  if (!getLivePeerSnapshot(peer)) {
-    u8g2.drawStr(0,28,"NO LIVE PEER");
+  if (!selectedOLEDPeer(peer)) {
+    u8g2.drawStr(0,28,selectedOLEDPeerId ? "SELECTED PEER LOST" : "NO LIVE PEER");
     u8g2.drawStr(0,44,"PDR: UNKNOWN");
   } else {
     snprintf(line,sizeof(line),"ID:%lu UNIQUE:%lu",(unsigned long)peer.id,(unsigned long)peer.unique);

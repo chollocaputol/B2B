@@ -143,6 +143,32 @@ bool getLivePeerSnapshot(PeerDisplaySnapshot &out) {
   out.ageSeconds = uint32_t(now-chosen->lastSeenMs)/1000UL;
   return true;
 }
+bool getPeerSnapshotById(uint32_t id, PeerDisplaySnapshot &out) {
+  out=PeerDisplaySnapshot{};
+  const auto* x=peerTelemetry.find(id);
+  if(!x) return false;
+  const uint32_t now=millis();
+  out.present=true;out.active=x->active(now);out.id=x->id;
+  out.gpsValid=out.active && x->gpsValid;
+  out.latitude=x->latitude;out.longitude=x->longitude;
+  out.rssi=x->rssi;out.snr=x->snr;
+  out.unique=x->unique;out.duplicates=x->duplicates;
+  out.missing=x->missingEstimate();out.pdr=x->pdrEstimate();
+  out.ageSeconds=uint32_t(now-x->lastSeenMs)/1000UL;
+  return true;
+}
+bool nextActivePeerId(uint32_t current, uint32_t &next) {
+  uint32_t first=0, after=0;
+  for(uint32_t id=1;id<=9999;++id) {
+    const auto* x=peerTelemetry.find(id);
+    if(!x || !x->active(millis())) continue;
+    if(!first)first=id;
+    if(id>current && !after) after=id;
+  }
+  if(!first)return false;
+  next=after ? after:first;
+  return true;
+}
 size_t getTrackedPeerCount() { return peerTelemetry.count(); }
 uint32_t getTotalPeerTelemetryReceived() {
   uint64_t total = 0;

@@ -23,6 +23,8 @@ struct PeerDisplaySnapshot {
   float snr = 0, pdr = 0;
 };
 bool getLivePeerSnapshot(PeerDisplaySnapshot &out);
+bool getPeerSnapshotById(uint32_t id, PeerDisplaySnapshot &out);
+bool nextActivePeerId(uint32_t current, uint32_t &next);
 size_t getTrackedPeerCount();
 uint32_t getTotalPeerTelemetryReceived();
 

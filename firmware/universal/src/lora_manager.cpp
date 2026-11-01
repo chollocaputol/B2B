@@ -5,6 +5,7 @@
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
+#include "../../shared/multi_peer_sos.h"
 #include <SPI.h>
 #include <RadioLib.h>
 #include <TinyGPSPlus.h>
@@ -428,76 +429,52 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     return;
   }
 
-  // Track B's most recently seen emergency for matching its cancellation.
-  // RAM only: after reboot the old event is not recoverable until Phase 4.
-  static uint32_t lastBSOSId = 0;
-  static bool haveBSOS = false;
-  static bool bSOSCancelled = false;
+  // Phase 5.2.2C-2D: per-origin SOS state; still no relay TX.
+  static MultiPeerSOS::Table peerSOSTable;
   if (p.packetType == PACKET_SOS_CANCEL) {
     uint32_t cancelId=0, cancelOrigin=0;
-    memcpy(&cancelId, p.message, 4);
-    memcpy(&cancelOrigin, p.message+4, 4);
-    if (haveBSOS && cancelOrigin == p.originNodeId &&
-        cancelId == lastBSOSId && p.sequenceNumber == lastBSOSId) {
-      const bool alreadyCancelled = bSOSCancelled;
-      bSOSCancelled = true;
-      incomingBSOS.cancelled = true;
-      Serial.printf("[SYNC-A] %s cancellation from B event=%lu; ACK follows; NOT rescue resolved\n",
-                    alreadyCancelled ? "DUPLICATE" : "MATCHED",
-                    (unsigned long)cancelId);
-      VesselPacket ack = {};
-      ack.magic=PACKET_MAGIC; ack.version=PACKET_VERSION;
-      ack.packetType=PACKET_SOS_CANCEL_ACK; ack.originNodeId=NODE_ID;
-      ack.timestamp=millis()/1000UL;
-      strncpy(ack.nodeName, NODE_NAME, sizeof(ack.nodeName)-1);
-      encodeSOSAck(ack, cancelId, cancelOrigin);
-      const int rc=transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
-      startReceive();
-      Serial.printf("[CANCEL-A] ACK TX for B event=%lu radio=%d\n", (unsigned long)cancelId, rc);
-    } else Serial.println("[CANCEL-A] Unmatched B cancellation rejected");
+    memcpy(&cancelId,p.message,4);
+    memcpy(&cancelOrigin,p.message+4,4);
+    if (cancelOrigin!=p.originNodeId || cancelId!=p.sequenceNumber) {
+      Serial.println("[PEER-SOS] CANCEL_MISMATCH payload; NO ACK");return;
+    }
+    const auto result=peerSOSTable.cancel(p.originNodeId,cancelId,millis());
+    Serial.printf("[PEER-SOS] CANCEL origin=%lu event=%lu result=%s\n",
+      (unsigned long)p.originNodeId,(unsigned long)cancelId,MultiPeerSOS::name(result));
+    if (result!=MultiPeerSOS::Result::Cancelled && result!=MultiPeerSOS::Result::CancelDuplicate)return;
+    if (incomingBSOS.known && incomingBSOS.originId==p.originNodeId &&
+        incomingBSOS.eventId==cancelId)incomingBSOS.cancelled=true;
+    VesselPacket ack={};ack.magic=PACKET_MAGIC;ack.version=PACKET_VERSION;
+    ack.packetType=PACKET_SOS_CANCEL_ACK;ack.originNodeId=NODE_ID;
+    ack.timestamp=millis()/1000UL;
+    strncpy(ack.nodeName,NODE_NAME,sizeof(ack.nodeName)-1);
+    encodeSOSAck(ack,cancelId,cancelOrigin);
+    const int rc=transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack),sizeof(ack));
+    startReceive();
+    Serial.printf("[PEER-SOS] CANCEL ACK origin=%lu event=%lu radio=%d; NOT RESCUE RESOLVED\n",
+      (unsigned long)p.originNodeId,(unsigned long)cancelId,rc);
     return;
   }
-  // Phase 3.5.1: A acknowledges SOS originated by B. Incoming SOS
-  // is NOT telemetry and must NOT change PDR sequence accounting.
   if (p.packetType == PACKET_SOS) {
-    // Phase 3.5.3: an older event must never overwrite the latest SOS,
-    // and must not receive a misleading acknowledgment. Current-event
-    // retries remain ACKable, including after sender cancellation.
-    if (haveBSOS && p.sequenceNumber < lastBSOSId) {
-      Serial.printf("[SYNC-A] STALE SOS rejected from B event=%lu; latest=%lu; NO ACK\n",
-                    (unsigned long)p.sequenceNumber, (unsigned long)lastBSOSId);
-      return;
+    const auto result=peerSOSTable.receiveSOS(p.originNodeId,p.sequenceNumber,millis());
+    Serial.printf("[PEER-SOS] SOS origin=%lu event=%lu result=%s\n",
+      (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,MultiPeerSOS::name(result));
+    if(result==MultiPeerSOS::Result::Stale||result==MultiPeerSOS::Result::Full)return;
+    if(result==MultiPeerSOS::Result::New){
+      incomingBSOS.known=true;incomingBSOS.cancelled=false;
+      incomingBSOS.originId=p.originNodeId;incomingBSOS.eventId=p.sequenceNumber;
+      incomingBSOS.receivedAtMs=millis();incomingBSOS.positionValid=(p.flags&FLAG_GPS_FIX)!=0;
+      incomingBSOS.latitude=p.latitude_e7/1e7;incomingBSOS.longitude=p.longitude_e7/1e7;
+      incomingBSOSNew=true;
     }
-    const bool duplicate = haveBSOS && p.sequenceNumber == lastBSOSId;
-    if (!duplicate && (!haveBSOS || p.sequenceNumber > lastBSOSId)) {
-      haveBSOS = true;
-      lastBSOSId = p.sequenceNumber;
-      bSOSCancelled = false;
-      incomingBSOS.known = true;
-      incomingBSOS.cancelled = false;
-      incomingBSOS.eventId = p.sequenceNumber;
-      incomingBSOS.receivedAtMs = millis();
-      incomingBSOS.positionValid = (p.flags & FLAG_GPS_FIX) != 0;
-      incomingBSOS.latitude = p.latitude_e7 / 1e7;
-      incomingBSOS.longitude = p.longitude_e7 / 1e7;
-      incomingBSOSNew = true;
-      Serial.printf("[SOS-A] RECEIVED NEW SOS from Vessel-B id=%lu GPS=%s\n",
-        (unsigned long)p.sequenceNumber,
-        (p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
-    } else Serial.printf("[SYNC-A] DUPLICATE CURRENT SOS from Vessel-B id=%lu; ACK again\n",
-                          (unsigned long)p.sequenceNumber);
-    VesselPacket ack = {};
-    ack.magic = PACKET_MAGIC;
-    ack.version = PACKET_VERSION;
-    ack.packetType = PACKET_SOS_ACK;
-    ack.originNodeId = NODE_ID;
-    ack.timestamp = millis() / 1000UL;
-    strncpy(ack.nodeName, NODE_NAME, sizeof(ack.nodeName) - 1);
-    encodeSOSAck(ack, p.sequenceNumber, p.originNodeId);
-    const int rc = transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+    VesselPacket ack={};ack.magic=PACKET_MAGIC;ack.version=PACKET_VERSION;
+    ack.packetType=PACKET_SOS_ACK;ack.originNodeId=NODE_ID;ack.timestamp=millis()/1000UL;
+    strncpy(ack.nodeName,NODE_NAME,sizeof(ack.nodeName)-1);
+    encodeSOSAck(ack,p.sequenceNumber,p.originNodeId);
+    const int rc=transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack),sizeof(ack));
     startReceive();
-    Serial.printf("[SOS-A] ACK TX for B id=%lu radio=%d\n",
-                  (unsigned long)p.sequenceNumber, rc);
+    Serial.printf("[PEER-SOS] SOS ACK origin=%lu event=%lu radio=%d (direct-neighbor receipt)\n",
+      (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,rc);
     return;
   }
   if (p.packetType == PACKET_SOS_CANCEL_ACK) {

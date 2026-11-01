@@ -38,6 +38,7 @@ struct ReceivedSOSView {
   bool positionValid;
   double latitude;
   double longitude;
+  uint32_t originId;
   uint32_t eventId;
   unsigned long receivedAtMs;
 };

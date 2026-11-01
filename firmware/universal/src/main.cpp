@@ -372,34 +372,26 @@ void oledWeatherPage() {
 void oledLinkPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "LINK TO B 3/7");
+  u8g2.drawStr(0,9,"LIVE PEER 3/7");
   char line[32];
-  snprintf(line, sizeof(line), "TX:%lu RX:%lu",
-           static_cast<unsigned long>(txCount), static_cast<unsigned long>(rxFromB));
-  u8g2.drawStr(0, 20, line);
-  if (rxFromB == 0) {
-    u8g2.drawStr(0, 33, "B: NEVER SEEN");
-    u8g2.drawStr(0, 46, "DIST: UNKNOWN");
-    u8g2.drawStr(0, 58, "LISTENING...");
-  } else if (!isVesselBActive()) {
-    u8g2.drawStr(0, 32, "B: STALE / LOST");
-    snprintf(line, sizeof(line), "LAST SEEN: %lus", vesselBLastSeenSeconds());
-    u8g2.drawStr(0, 44, line);
-    u8g2.drawStr(0, 56, "DIST: UNKNOWN");
+  PeerDisplaySnapshot peer;
+  if (!getLivePeerSnapshot(peer)) {
+    snprintf(line,sizeof(line),"KNOWN:%u ACTIVE:0",(unsigned)getTrackedPeerCount());
+    u8g2.drawStr(0,22,line);
+    u8g2.drawStr(0,39,"NO LIVE TELEMETRY");
+    u8g2.drawStr(0,56,"LISTENING...");
   } else {
-    u8g2.drawStr(0, 32, bGPSValid ? "B: ACTIVE GPS OK" : "B: ACTIVE NO FIX");
-    // Recalculate with the CURRENT local fix; remote position comes from
-    // a packet received within the timeout, not from the last-known cache.
-    if (gpsHasFix && bGPSValid) {
-      const double km = TinyGPSPlus::distanceBetween(latitude, longitude,
-                                                    bLatitude, bLongitude) / 1000.0;
-      snprintf(line, sizeof(line), "DIST: %.2f km", km);
-    } else {
-      strcpy(line, "DIST: UNKNOWN");
-    }
-    u8g2.drawStr(0, 44, line);
-    snprintf(line, sizeof(line), "RSSI:%d SNR:%.1f", lastBRSSI, lastBSNR);
-    u8g2.drawStr(0, 56, line);
+    snprintf(line,sizeof(line),"ID:%lu OF %u",(unsigned long)peer.id,(unsigned)getTrackedPeerCount());
+    u8g2.drawStr(0,21,line);
+    if (gpsHasFix && peer.gpsValid) {
+      const double km=TinyGPSPlus::distanceBetween(latitude,longitude,peer.latitude,peer.longitude)/1000.0;
+      snprintf(line,sizeof(line),"DIST:%.2f km",km);
+    } else snprintf(line,sizeof(line),"DIST: UNKNOWN");
+    u8g2.drawStr(0,34,line);
+    snprintf(line,sizeof(line),"RSSI:%d SNR:%.1f",(int)peer.rssi,peer.snr);
+    u8g2.drawStr(0,47,line);
+    snprintf(line,sizeof(line),"LAST:%lus",(unsigned long)peer.ageSeconds);
+    u8g2.drawStr(0,60,line);
   }
   u8g2.sendBuffer();
 }
@@ -407,12 +399,22 @@ void oledLinkPage() {
 void oledPDRPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "B->A PDR 4/7");
+  u8g2.drawStr(0,9,"PEER PDR 4/7");
   char line[32];
-  snprintf(line, sizeof(line), "UNIQUE:%lu", static_cast<unsigned long>(uniqueFromB)); u8g2.drawStr(0, 20, line);
-  snprintf(line, sizeof(line), "MISS:%lu DUP:%lu", static_cast<unsigned long>(missingFromB), static_cast<unsigned long>(duplicateFromB)); u8g2.drawStr(0, 32, line);
-  snprintf(line, sizeof(line), "PDR: %.1f%%", bSequencePDR()); u8g2.drawStr(0, 44, line);
-  snprintf(line, sizeof(line), "TX FAIL:%lu", static_cast<unsigned long>(txFailures)); u8g2.drawStr(0, 56, line);
+  PeerDisplaySnapshot peer;
+  if (!getLivePeerSnapshot(peer)) {
+    u8g2.drawStr(0,28,"NO LIVE PEER");
+    u8g2.drawStr(0,44,"PDR: UNKNOWN");
+  } else {
+    snprintf(line,sizeof(line),"ID:%lu UNIQUE:%lu",(unsigned long)peer.id,(unsigned long)peer.unique);
+    u8g2.drawStr(0,21,line);
+    snprintf(line,sizeof(line),"MISS:%lu DUP:%lu",(unsigned long)peer.missing,(unsigned long)peer.duplicates);
+    u8g2.drawStr(0,34,line);
+    snprintf(line,sizeof(line),"PDR EST:%.1f%%",peer.pdr);
+    u8g2.drawStr(0,47,line);
+  }
+  snprintf(line,sizeof(line),"TX FAIL:%lu",(unsigned long)txFailures);
+  u8g2.drawStr(0,60,line);
   u8g2.sendBuffer();
 }
 // ============================================================

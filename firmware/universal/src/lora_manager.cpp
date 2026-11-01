@@ -79,6 +79,8 @@ static constexpr uint8_t CANCEL_MAX_ATTEMPTS = 4;
 static constexpr unsigned long CANCEL_RETRY_MS = 4500UL;
 
 
+static MultiPeerTelemetry::Table peerTelemetry;
+
 // -------------------- Last Board B received --------------------
 uint32_t rxFromB = 0;
 uint32_t uniqueFromB = 0;
@@ -110,6 +112,38 @@ unsigned long vesselBLastSeenSeconds() {
   return rxFromB > 0 ? (millis() - lastBSeen) / 1000UL : 0UL;
 }
 
+
+
+// Phase 5.2.2C-2F: snapshot a live peer for display. No TX or neighbor mutation.
+// Iterate numerical identities: at most 9999 small bounded lookup operations.
+// Selection is most recently updated ACTIVE peer; ties prefer lower ID.
+bool getLivePeerSnapshot(PeerDisplaySnapshot &out) {
+  out = PeerDisplaySnapshot{};
+  const uint32_t now = millis();
+  const MultiPeerTelemetry::Peer* chosen = nullptr;
+  for (uint32_t id=1; id<=9999; ++id) {
+    const auto* peer = peerTelemetry.find(id);
+    if (!peer || !peer->active(now)) continue;
+    if (!chosen || uint32_t(now-peer->lastSeenMs)<uint32_t(now-chosen->lastSeenMs) ||
+        (peer->lastSeenMs==chosen->lastSeenMs && peer->id<chosen->id)) chosen=peer;
+  }
+  if (!chosen) return false;
+  out.present = true;
+  out.id = chosen->id;
+  out.active = true;
+  out.gpsValid = chosen->gpsValid;
+  out.latitude = chosen->latitude;
+  out.longitude = chosen->longitude;
+  out.rssi = chosen->rssi;
+  out.snr = chosen->snr;
+  out.unique = chosen->unique;
+  out.duplicates = chosen->duplicates;
+  out.missing = chosen->missingEstimate();
+  out.pdr = chosen->pdrEstimate();
+  out.ageSeconds = uint32_t(now-chosen->lastSeenMs)/1000UL;
+  return true;
+}
+size_t getTrackedPeerCount() { return peerTelemetry.count(); }
 
 // Helper forward declarations (kept private to this translation unit).
 static void processReceivedPacket(const uint8_t*, size_t, int16_t, float);
@@ -509,7 +543,6 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   // 5.2.2C-2E: observe telemetry by numerical vessel ID independently.
   // Legacy Board-A-derived UI counters remain until the next migration.
   if (p.packetType == PACKET_TELEMETRY) {
-    static MultiPeerTelemetry::Table peers;
     bool validPosition = false;
     double peerLat = 0.0, peerLon = 0.0;
     if (p.flags & FLAG_GPS_FIX) {
@@ -519,13 +552,13 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
                       peerLon >= -180.0 && peerLon <= 180.0 &&
                       !(peerLat == 0.0 && peerLon == 0.0);
     }
-    const MultiPeerTelemetry::Result result = peers.observe(
+    const MultiPeerTelemetry::Result result = peerTelemetry.observe(
         p.originNodeId, p.sequenceNumber, millis(), rssi, snr,
         validPosition, peerLat, peerLon, p.weather.weatherState);
-    const MultiPeerTelemetry::Peer* peer = peers.find(p.originNodeId);
+    const MultiPeerTelemetry::Peer* peer = peerTelemetry.find(p.originNodeId);
     Serial.printf("[PEER-TLM] id=%lu seq=%lu result=%s peers=%u unique=%lu dup=%lu missing=%lu pdr=%.1f%%\n",
       (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
-      MultiPeerTelemetry::name(result), (unsigned)peers.count(),
+      MultiPeerTelemetry::name(result), (unsigned)peerTelemetry.count(),
       (unsigned long)(peer ? peer->unique : 0),
       (unsigned long)(peer ? peer->duplicates : 0),
       (unsigned long)(peer ? peer->missingEstimate() : 0),

@@ -14,6 +14,17 @@ extern float lastBSNR;
 extern unsigned long lastBSeen;
 extern uint8_t bWeatherState;
 
+// Read-only OLED snapshot of the most recent active telemetry peer.
+struct PeerDisplaySnapshot {
+  bool present = false, active = false, gpsValid = false;
+  uint32_t id = 0, unique = 0, duplicates = 0, missing = 0, ageSeconds = 0;
+  double latitude = 0, longitude = 0;
+  int16_t rssi = 0;
+  float snr = 0, pdr = 0;
+};
+bool getLivePeerSnapshot(PeerDisplaySnapshot &out);
+size_t getTrackedPeerCount();
+
 void setupLoRa();
 void startReceive();
 void pollLoRaReceive();

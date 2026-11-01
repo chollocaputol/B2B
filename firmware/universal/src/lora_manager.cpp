@@ -1,4 +1,5 @@
 #include "../../shared/tbeam_pins.h"
+#include "../../shared/vessel_identity.h"
 #include "../../shared/relay_policy.h"
 #include "../../shared/relay_queue.h"
 #include "lora_manager.h"
@@ -23,8 +24,8 @@
 #define LORA_POWER      17
 #define LORA_PREAMBLE   8
 #define LORA_GAIN       1.8
-#define NODE_ID 0xA1
-static const char NODE_NAME[] = "Vessel-A";
+#define NODE_ID (VesselIdentity::nodeId())
+#define NODE_NAME (VesselIdentity::label())
 #define RX_SEQUENCE_CACHE 256
 
 // GPS coordinates are owned by main.cpp; no GPS parsing is moved here.
@@ -35,6 +36,16 @@ extern double longitude;
 SPIClass loraSPI(FSPI);
 Module radioModule(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
 SX1262 radio(&radioModule);
+
+
+// Never transmit under an absent/invalid identity, including automatic ACKs.
+static int transmitWithIdentity(const uint8_t* data, size_t length) {
+  if (!VesselIdentity::ready()) {
+    Serial.println("[IDENTITY] TX BLOCKED: provisioned identity required");
+    return -999;
+  }
+  return radio.transmit(const_cast<uint8_t*>(data), length);
+}
 
 // -------------------- Board A transmission --------------------
 uint32_t txSequence = 0;
@@ -209,13 +220,14 @@ void createPacket(VesselPacket &p) {
 }
 
 void transmitPacket() {
+  if (!VesselIdentity::ready()) return;
   VesselPacket p;
   createPacket(p);
   Serial.print("[TX-A] Seq="); Serial.print(p.sequenceNumber);
   Serial.print(" GPS="); Serial.print((p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
   Serial.print(" Weather="); Serial.println(weatherName(p.weather.weatherState));
 
-  int state = radio.transmit(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+  int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&p), sizeof(p));
   if (state == RADIOLIB_ERR_NONE) {
     lastTXSuccess = true;
     txCount++;
@@ -243,7 +255,7 @@ static void sendPendingSOS() {
     sosAttempts, SOS_MAX_ATTEMPTS, (unsigned long)pendingSOS.originNodeId,
     (unsigned long)pendingSOS.sequenceNumber,
     (pendingSOS.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
-  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&pendingSOS), sizeof(pendingSOS));
+  const int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&pendingSOS), sizeof(pendingSOS));
   if (state == RADIOLIB_ERR_NONE) { ++txCount; lastTXSuccess = true;
     Serial.println("[SOS-A] RADIO TX SUCCESS; AWAITING B ACK");
   } else { ++txFailures; lastTXSuccess = false;
@@ -264,6 +276,7 @@ void setupEmergencyIdentity() {
 }
 
 void transmitSOS() {
+  if (!VesselIdentity::ready()) { Serial.println("[IDENTITY] SOS BLOCKED: not provisioned"); return; }
   if (activeEmergency || sosPending) {
     Serial.println("[SOS-A] EXISTING UNRESOLVED SOS; cancel deliberately before starting a new one");
     return;
@@ -298,7 +311,7 @@ static void sendPendingCancel() {
   if (!cancelPending) return;
   ++cancelAttempts;
   lastCancelAttempt = millis();
-  const int state = radio.transmit(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
+  const int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
   startReceive();
   nextCancelTxAt = millis() + CANCEL_RETRY_MS + ControlRetry::slotDelayMs(NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
   Serial.printf("[CANCEL-A] ATTEMPT %u/%u event=%lu radio=%d; ACK PENDING\n",
@@ -409,8 +422,8 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
 
   if (p.originNodeId == NODE_ID) return;
 
-  if (p.originNodeId != 0xB1) {
-    Serial.print("[RX-A] Unknown node ID 0x");
+  if (p.originNodeId < 1 || p.originNodeId > 9999) {
+    Serial.print("[RX-A] Reject invalid numeric node ID 0x");
     Serial.println(p.originNodeId, HEX);
     return;
   }
@@ -438,7 +451,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       ack.timestamp=millis()/1000UL;
       strncpy(ack.nodeName, NODE_NAME, sizeof(ack.nodeName)-1);
       encodeSOSAck(ack, cancelId, cancelOrigin);
-      const int rc=radio.transmit(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+      const int rc=transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
       startReceive();
       Serial.printf("[CANCEL-A] ACK TX for B event=%lu radio=%d\n", (unsigned long)cancelId, rc);
     } else Serial.println("[CANCEL-A] Unmatched B cancellation rejected");
@@ -481,7 +494,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     ack.timestamp = millis() / 1000UL;
     strncpy(ack.nodeName, NODE_NAME, sizeof(ack.nodeName) - 1);
     encodeSOSAck(ack, p.sequenceNumber, p.originNodeId);
-    const int rc = radio.transmit(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+    const int rc = transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
     startReceive();
     Serial.printf("[SOS-A] ACK TX for B id=%lu radio=%d\n",
                   (unsigned long)p.sequenceNumber, rc);

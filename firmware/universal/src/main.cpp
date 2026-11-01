@@ -1,4 +1,5 @@
 #include "../../shared/tbeam_pins.h"
+#include "../../shared/vessel_identity.h"
 #include "../../shared/oled_button_debounce.h"
 #include "../../shared/tbeam_hardware_service.h"
 #include "../../shared/gps_service.h"
@@ -145,6 +146,7 @@ void setup() {
   setupOLED();
   setupSensors();
   setupGPS();
+  VesselIdentity::load();
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();

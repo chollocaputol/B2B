@@ -130,6 +130,89 @@ void drawOLEDPeerMenu() {
 }
 
 
+// PHASE 3F-2 SOS MENU: display-only. Records remain managed by LoRa receiver.
+// The menu freezes active origin+event identifiers on opening; no TX is triggered.
+static constexpr uint8_t kSOSMenuCapacity = 10;
+static uint32_t sosMenuOrigins[kSOSMenuCapacity] = {};
+static uint32_t sosMenuEvents[kSOSMenuCapacity] = {};
+static uint8_t sosMenuCount = 0, sosMenuCursor = 0;
+static bool sosMenuOpen = false;
+static uint32_t selectedSOSOrigin = 0, selectedSOSEvent = 0; // zero = AUTO
+
+bool findSOSRecord(uint32_t origin, uint32_t event, SOSRecordSnapshot &out) {
+  for (size_t i=0; i<kSOSMenuCapacity; ++i) {
+    SOSRecordSnapshot current;
+    if (getSOSRecordByIndex(i,current) && current.known &&
+        current.originId==origin && current.eventId==event) {
+      out=current;return true;
+    }
+  }
+  out=SOSRecordSnapshot{};return false;
+}
+void openSOSMenu() {
+  sosMenuCount=0;sosMenuCursor=0;
+  for (size_t i=0;i<kSOSMenuCapacity;++i) {
+    SOSRecordSnapshot rec;
+    if (getSOSRecordByIndex(i,rec) && rec.known && !rec.cancelled) {
+      sosMenuOrigins[sosMenuCount]=rec.originId;
+      sosMenuEvents[sosMenuCount]=rec.eventId;
+      if (++sosMenuCount>=kSOSMenuCapacity) break;
+    }
+  }
+  sosMenuOpen=true;
+  Serial.printf("[SOS-MENU] OPEN active=%u\n",(unsigned)sosMenuCount);
+}
+void advanceSOSMenu() {
+  sosMenuCursor=(sosMenuCursor+1)%(sosMenuCount+2); // AUTO, active records, BACK
+}
+void confirmSOSMenu() {
+  if (sosMenuCursor==0) {
+    selectedSOSOrigin=0;selectedSOSEvent=0;
+    Serial.println("[SOS-MENU] CHOSEN AUTO");
+  } else if (sosMenuCursor==sosMenuCount+1) {
+    Serial.println("[SOS-MENU] BACK");
+  } else {
+    const uint8_t i=sosMenuCursor-1;
+    SOSRecordSnapshot rec;
+    if (!findSOSRecord(sosMenuOrigins[i],sosMenuEvents[i],rec)||rec.cancelled) {
+      Serial.println("[SOS-MENU] EVENT NO LONGER ACTIVE; CHOOSE AGAIN");
+      openSOSMenu();return;
+    }
+    selectedSOSOrigin=rec.originId;selectedSOSEvent=rec.eventId;
+    Serial.printf("[SOS-MENU] CHOSEN origin=%lu event=%lu\n",
+      (unsigned long)selectedSOSOrigin,(unsigned long)selectedSOSEvent);
+  }
+  sosMenuOpen=false;
+}
+void drawSOSMenu() {
+  u8g2.clearBuffer();u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0,9,"ACTIVE SOS MENU 7/7");
+  const uint8_t choices=sosMenuCount+2;
+  const uint8_t first=sosMenuCursor>=3?sosMenuCursor-3:0;
+  for(uint8_t row=0;row<4 && first+row<choices;++row) {
+    const uint8_t idx=first+row;
+    char label[30]={};
+    if(idx==0)strcpy(label,"Auto (newest)");
+    else if(idx==sosMenuCount+1)strcpy(label,"Back");
+    else snprintf(label,sizeof(label),"V%03lu SOS#%lu",
+      (unsigned long)sosMenuOrigins[idx-1],(unsigned long)sosMenuEvents[idx-1]);
+    char line[34];snprintf(line,sizeof(line),"%c %s",idx==sosMenuCursor?'>':' ',label);
+    u8g2.drawStr(0,21+row*12,line);
+  }
+  u8g2.sendBuffer();
+}
+// In AUTO mode, show latest ACTIVE event, not the most recently cancelled one.
+bool displaySOSRecord(SOSRecordSnapshot &out) {
+  if (selectedSOSOrigin) return findSOSRecord(selectedSOSOrigin,selectedSOSEvent,out);
+  bool have=false;
+  for(size_t i=0;i<kSOSMenuCapacity;++i) {
+    SOSRecordSnapshot rec;
+    if (!getSOSRecordByIndex(i,rec)||!rec.known||rec.cancelled)continue;
+    if(!have || (int32_t)(rec.receivedAtMs-out.receivedAtMs)>0) {out=rec;have=true;}
+  }
+  return have;
+}
+
 // -------------------- GPS -------------------------------------
 bool gpsHasFix = false;
 bool haveLastKnownPosition = false;
@@ -243,7 +326,9 @@ void loop() {
 
   pollLoRaReceive();
   if (consumeNewReceivedSOS()) {
-    oledPage = 6;  // Auto-open incoming SOS rescue page.
+    oledPage = 6;  // New SOS overrides any page/selection.
+    sosMenuOpen = false;
+    selectedSOSOrigin=0;selectedSOSEvent=0;
     lastOLEDUpdate = 0;
   }
   processSOSRetries();
@@ -346,6 +431,10 @@ void handleOLEDButton() {
         else openOLEDPeerMenu();
       } else if (oledPeerMenuOpen && oledPage == 2 && duration < BUTTON_LONG_PRESS_MS) {
         advanceOLEDPeerMenu();
+      } else if (oledPage == 6 && duration >= BUTTON_LONG_PRESS_MS) {
+        if (sosMenuOpen) confirmSOSMenu(); else openSOSMenu();
+      } else if (oledPage == 6 && sosMenuOpen && duration < BUTTON_LONG_PRESS_MS) {
+        advanceSOSMenu();
       } else if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
         alertDemoMode = (alertDemoMode + 1) % 4;
         Serial.printf("[ALERT-DEMO] OLED-only mode: %u (0=LIVE,1=NORMAL,2=FRONT,3=SQUALL)\n", alertDemoMode);
@@ -553,35 +642,35 @@ void oledUptimePage() {
 // Phase 3.5.2: rescue navigation to last reported Vessel-B SOS position.
 // Bearings are TRUE-north referenced; not bow-relative heading.
 void oledSOSRescuePage() {
-  const ReceivedSOSView sos = getReceivedSOSView();
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "SOS / RESCUE 7/7");
-  if (!sos.known) {
-    u8g2.drawStr(0, 23, "NO SOS RECEIVED");
-    u8g2.drawStr(0, 42, "LISTENING: ALL PEERS");
-    u8g2.sendBuffer();
-    return;
+  if(sosMenuOpen){drawSOSMenu();return;}
+  SOSRecordSnapshot sos;
+  const bool present=displaySOSRecord(sos);
+  u8g2.clearBuffer();u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0,9,"SOS / RESCUE 7/7");
+  if(!present) {
+    u8g2.drawStr(0,23,selectedSOSOrigin?"EVENT REPLACED":"NO ACTIVE SOS");
+    u8g2.drawStr(0,42,"Hold: SELECT SOS");
+    u8g2.sendBuffer();return;
   }
-  char line[38];
-  snprintf(line, sizeof(line), "FROM: VESSEL-%03lu", (unsigned long)sos.originId);
-  u8g2.drawStr(0, 20, line);
-  const unsigned long ageSec = (millis() - sos.receivedAtMs) / 1000UL;
-  if (sos.cancelled) u8g2.drawStr(0, 31, "CANCEL BY SENDER");
-  else if (ageSec >= 60UL) u8g2.drawStr(0, 31, "OLD / UNRESOLVED");
-  else u8g2.drawStr(0, 31, "SOS / UNRESOLVED");
-  if (gpsHasFix && sos.positionValid) {
-    const double meters = TinyGPSPlus::distanceBetween(latitude, longitude, sos.latitude, sos.longitude);
-    const double brg = TinyGPSPlus::courseTo(latitude, longitude, sos.latitude, sos.longitude);
-    snprintf(line, sizeof(line), "TO SOS: %.2f km", meters / 1000.0);
-    u8g2.drawStr(0, 43, line);
-    snprintf(line, sizeof(line), "BRG: %.0f deg TRUE", brg);
-    u8g2.drawStr(0, 54, line);
+  char line[40];
+  snprintf(line,sizeof(line),"FROM: VESSEL-%03lu",(unsigned long)sos.originId);
+  u8g2.drawStr(0,20,line);
+  snprintf(line,sizeof(line),"EVENT:%lu %s",(unsigned long)sos.eventId,
+           selectedSOSOrigin?"SELECT":"AUTO");
+  u8g2.drawStr(0,30,line);
+  if(sos.cancelled)u8g2.drawStr(0,40,"CANCEL BY SENDER");
+  else if(millis()-sos.receivedAtMs>=60000UL)u8g2.drawStr(0,40,"OLD / UNRESOLVED");
+  else u8g2.drawStr(0,40,"SOS / UNRESOLVED");
+  if(gpsHasFix && sos.positionValid) {
+    const double meters=TinyGPSPlus::distanceBetween(latitude,longitude,sos.latitude,sos.longitude);
+    const double bearing=TinyGPSPlus::courseTo(latitude,longitude,sos.latitude,sos.longitude);
+    snprintf(line,sizeof(line),"DIST: %.2f km",meters/1000.0);
+    u8g2.drawStr(0,51,line);
+    snprintf(line,sizeof(line),"BRG: %.0f deg TRUE",bearing);
+    u8g2.drawStr(0,62,line);
   } else {
-    u8g2.drawStr(0, 43, "DIST: UNKNOWN");
-    u8g2.drawStr(0, 54, "BRG: UNKNOWN");
+    u8g2.drawStr(0,51,"DIST: UNKNOWN");
+    u8g2.drawStr(0,62,"BRG: UNKNOWN");
   }
-  snprintf(line, sizeof(line), "SOS RX AGE: %lus", ageSec);
-  u8g2.drawStr(0, 63, line);
   u8g2.sendBuffer();
 }

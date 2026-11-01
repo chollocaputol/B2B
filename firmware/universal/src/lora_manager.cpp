@@ -5,6 +5,7 @@
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
+#include "../../shared/multi_peer_telemetry.h"
 #include "../../shared/multi_peer_sos.h"
 #include <SPI.h>
 #include <RadioLib.h>
@@ -503,6 +504,32 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
   if (p.packetType != PACKET_TELEMETRY && p.packetType != PACKET_SOS) {
     ++invalidPackets; return;
+  }
+
+  // 5.2.2C-2E: observe telemetry by numerical vessel ID independently.
+  // Legacy Board-A-derived UI counters remain until the next migration.
+  if (p.packetType == PACKET_TELEMETRY) {
+    static MultiPeerTelemetry::Table peers;
+    bool validPosition = false;
+    double peerLat = 0.0, peerLon = 0.0;
+    if (p.flags & FLAG_GPS_FIX) {
+      peerLat = p.latitude_e7 / 10000000.0;
+      peerLon = p.longitude_e7 / 10000000.0;
+      validPosition = peerLat >= -90.0 && peerLat <= 90.0 &&
+                      peerLon >= -180.0 && peerLon <= 180.0 &&
+                      !(peerLat == 0.0 && peerLon == 0.0);
+    }
+    const MultiPeerTelemetry::Result result = peers.observe(
+        p.originNodeId, p.sequenceNumber, millis(), rssi, snr,
+        validPosition, peerLat, peerLon, p.weather.weatherState);
+    const MultiPeerTelemetry::Peer* peer = peers.find(p.originNodeId);
+    Serial.printf("[PEER-TLM] id=%lu seq=%lu result=%s peers=%u unique=%lu dup=%lu missing=%lu pdr=%.1f%%\n",
+      (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+      MultiPeerTelemetry::name(result), (unsigned)peers.count(),
+      (unsigned long)(peer ? peer->unique : 0),
+      (unsigned long)(peer ? peer->duplicates : 0),
+      (unsigned long)(peer ? peer->missingEstimate() : 0),
+      peer ? peer->pdrEstimate() : 0.0f);
   }
 
   rxFromB++;

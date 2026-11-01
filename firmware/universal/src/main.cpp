@@ -17,7 +17,7 @@
 #include <esp_timer.h>  // 64-bit uptime counter
 
 // ============================================================
-// BOARD A - VESSEL-A
+// UNIVERSAL - NUMERIC VESSEL IDENTITY
 // T-Beam Supreme | L76K GPS | SX1262 | SH1106 OLED
 // Dual I2C Environmental Sensors (BME680 & DHT20)
 // ============================================================
@@ -129,7 +129,7 @@ void setup() {
   Serial.begin(115200);
   delay(1200);
   Serial.println();
-  Serial.println("=== BOARD A: SCHEDULED TX + RX ===");
+  Serial.println("=== UNIVERSAL VESSEL: SCHEDULED TX + RX ===");
   Serial.println("Packet: 62 bytes | TX interval: 5 seconds");
   Serial.printf("[WEATHER] %s, sample interval %lu ms; history %u samples\n",
                 WEATHER_FAST_TEST ? "ACCELERATED DEVELOPMENT (NOT REAL 100-MIN HISTORY)" : "FIELD",
@@ -153,7 +153,8 @@ void setup() {
 
   lastWeatherTime = millis();
   lastOLEDUpdate = millis();
-  Serial.println("[A] Ready: sends own telemetry and listens for Board B.");
+  Serial.printf("[UNIVERSAL] %s (ID %lu): firmware initialized; relay forwarding OFF; multi-vessel validation PENDING\n",
+                VesselIdentity::label(), (unsigned long)VesselIdentity::nodeId());
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 
@@ -204,7 +205,7 @@ void loop() {
     lastUptimePrint = millis();
     char uptimeText[40];
     formatUptime(uptimeText, sizeof(uptimeText));
-    Serial.printf("[UPTIME-A] %s | Weather=%s | TX_OK=%lu | TX_FAIL=%lu | RX_B=%lu\n",
+    Serial.printf("[UPTIME-A] %s | Weather=%s | TX_OK=%lu | TX_FAIL=%lu | RX_LEGACY=%lu\n",
                   uptimeText, weatherName(weatherState),
                   static_cast<unsigned long>(txCount),
                   static_cast<unsigned long>(txFailures),
@@ -309,9 +310,10 @@ void updateOLED() {
 void oledGPSPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-A GPS 1/7");
-  u8g2.drawStr(0, 20, gpsHasFix ? "GPS: FIX" : "GPS: SEARCH");
   char line[32];
+  snprintf(line, sizeof(line), "%s GPS 1/7", VesselIdentity::ready() ? VesselIdentity::label() : "NO ID");
+  u8g2.drawStr(0, 9, line);
+  u8g2.drawStr(0, 20, gpsHasFix ? "GPS: FIX" : "GPS: SEARCH");
   if (gps.satellites.isValid()) snprintf(line, sizeof(line), "SAT: %lu", gps.satellites.value());
   else strcpy(line, "SAT: ?");
   u8g2.drawStr(0, 32, line);
@@ -461,7 +463,7 @@ void formatUptime(char *out, size_t outSize) {
 void oledUptimePage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL-A UPTIME 6/7");
+  u8g2.drawStr(0, 9, "VESSEL UPTIME 6/7");
   char line[40];
   formatUptime(line, sizeof(line));
   u8g2.drawStr(0, 22, line);
@@ -485,12 +487,13 @@ void oledSOSRescuePage() {
   u8g2.drawStr(0, 9, "SOS / RESCUE 7/7");
   if (!sos.known) {
     u8g2.drawStr(0, 23, "NO SOS RECEIVED");
-    u8g2.drawStr(0, 42, "LISTENING: VESSEL-B");
+    u8g2.drawStr(0, 42, "LISTENING: ALL PEERS");
     u8g2.sendBuffer();
     return;
   }
   char line[38];
-  u8g2.drawStr(0, 20, "FROM: VESSEL-B");
+  snprintf(line, sizeof(line), "FROM: VESSEL-%03lu", (unsigned long)sos.originId);
+  u8g2.drawStr(0, 20, line);
   const unsigned long ageSec = (millis() - sos.receivedAtMs) / 1000UL;
   if (sos.cancelled) u8g2.drawStr(0, 31, "CANCEL BY SENDER");
   else if (ageSec >= 60UL) u8g2.drawStr(0, 31, "OLD / UNRESOLVED");

@@ -9,12 +9,13 @@ namespace MultiPeerTelemetry {
 static constexpr size_t kMaxPeers = 10;
 static constexpr size_t kRecentSequences = 64;
 static constexpr uint32_t kActiveMs = 15000;
-enum class Result : uint8_t { NewPeer, Unique, Duplicate, Full, Invalid };
+enum class Result : uint8_t { NewPeer, Unique, Duplicate, Restart, Full, Invalid };
 inline const char* name(Result x) {
  switch(x) {
  case Result::NewPeer:return "NEW_PEER";
  case Result::Unique:return "UNIQUE";
  case Result::Duplicate:return "DUPLICATE";
+ case Result::Restart:return "RESTART";
  case Result::Full:return "FULL";
  case Result::Invalid:return "INVALID";
  }
@@ -24,6 +25,8 @@ struct Peer {
  bool used=false;
  uint32_t id=0,received=0,unique=0,duplicates=0,firstSequence=0,highestSequence=0;
  uint32_t lastSeenMs=0;
+ uint32_t lastRemoteUptimeSec=0, session=1;
+ bool uptimeObserved=false;
  uint32_t recent[kRecentSequences]{};
  size_t cursor=0, recentCount=0;
  int16_t rssi=0;
@@ -52,7 +55,8 @@ public:
  }
  size_t count() const { size_t n=0;for(const auto& p:peers_)if(p.used)++n;return n; }
  Result observe(uint32_t id,uint32_t seq,uint32_t now,int16_t rssi,float snr,
-                bool gps,double lat,double lon,uint8_t weather) {
+                bool gps,double lat,double lon,uint8_t weather,
+                uint32_t remoteUptimeSec) {
    if(id<1 || id>9999) return Result::Invalid;
    Peer* p=nullptr;
    for(auto& x:peers_) if(x.used && x.id==id) {p=&x;break;}
@@ -62,6 +66,25 @@ public:
      if(!p) return Result::Full;
      *p=Peer{};p->used=true;p->id=id;
    }
+   // PHASE 3G-3: restart-aware per-peer telemetry session.
+   // Require BOTH decreasing remote uptime and decreasing sequence to confirm
+   // a new sender session. A small uptime decrease alone can be packet reordering.
+   bool reboot=false;
+   if(!created && p->uptimeObserved &&
+      remoteUptimeSec + uint64_t(2) < p->lastRemoteUptimeSec &&
+      seq < p->highestSequence) {
+     reboot=true;
+     const uint32_t oldSession=p->session;
+     const uint32_t vesselId=p->id;
+     *p=Peer{};
+     p->used=true;p->id=vesselId;
+     p->session=oldSession+1;
+   }
+   // On reordering, preserve the highest known sender uptime rather than
+   // treating an older frame as the latest sender time.
+   if(!p->uptimeObserved || reboot || remoteUptimeSec>p->lastRemoteUptimeSec)
+      p->lastRemoteUptimeSec=remoteUptimeSec;
+   p->uptimeObserved=true;
    ++p->received;
    p->lastSeenMs=now;
    p->rssi=rssi;p->snr=snr;p->gpsValid=gps;p->weatherState=weather;
@@ -79,7 +102,7 @@ public:
      if(seq>p->highestSequence) p->highestSequence=seq;
    }
    ++p->unique;
-   return created ? Result::NewPeer : Result::Unique;
+   return created ? Result::NewPeer : (reboot ? Result::Restart : Result::Unique);
  }
 };
 } // namespace MultiPeerTelemetry

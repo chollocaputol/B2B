@@ -657,8 +657,13 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     }
     const MultiPeerTelemetry::Result result = peerTelemetry.observe(
         p.originNodeId, p.sequenceNumber, millis(), rssi, snr,
-        validPosition, peerLat, peerLon, p.weather.weatherState);
+        validPosition, peerLat, peerLon, p.weather.weatherState, p.timestamp);
     const MultiPeerTelemetry::Peer* peer = peerTelemetry.find(p.originNodeId);
+    if (result == MultiPeerTelemetry::Result::Restart) {
+      Serial.printf("[PEER-SESSION] RESTART id=%lu session=%lu uptime=%lu seq=%lu; PDR baseline reset\n",
+        (unsigned long)p.originNodeId, (unsigned long)(peer ? peer->session : 0),
+        (unsigned long)p.timestamp, (unsigned long)p.sequenceNumber);
+    }
     Serial.printf("[PEER-TLM] id=%lu seq=%lu result=%s peers=%u unique=%lu dup=%lu missing=%lu pdr=%.1f%%\n",
       (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
       MultiPeerTelemetry::name(result), (unsigned)peerTelemetry.count(),

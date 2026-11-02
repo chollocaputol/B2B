@@ -68,10 +68,12 @@ public:
    }
    // PHASE 3G-3: restart-aware per-peer telemetry session.
    // Require BOTH decreasing remote uptime and decreasing sequence to confirm
-   // a new sender session. A small uptime decrease alone can be packet reordering.
+   // a new sender session. Require >30s uptime drop so a delayed packet
+   // cannot reset PDR after a small remote-uptime regression. This remains
+   // a heuristic; large delayed/out-of-order frames need further evaluation.
    bool reboot=false;
    if(!created && p->uptimeObserved &&
-      remoteUptimeSec + uint64_t(2) < p->lastRemoteUptimeSec &&
+      uint64_t(remoteUptimeSec) + 30ULL < p->lastRemoteUptimeSec &&
       seq < p->highestSequence) {
      reboot=true;
      const uint32_t oldSession=p->session;

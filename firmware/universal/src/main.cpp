@@ -11,6 +11,16 @@
 #include <string.h>
 #include <TinyGPSPlus.h>
 #include "lora_manager.h"
+#include "../../shared/decentralized_mac.h"
+#include "../../shared/mac_contention_gate.h"
+// 0=original airtime scheduler; 1=OBSERVE CAD (default); 2=ENFORCE CAD.
+// Mode 2 is experimental: use only after Mode 1 has passed hardware tests.
+#ifndef MAC_CAD_MODE
+#define MAC_CAD_MODE 0
+#endif
+#if MAC_CAD_MODE < 0 || MAC_CAD_MODE > 2
+#error "MAC_CAD_MODE must be 0, 1, or 2"
+#endif
 #include <XPowersLib.h>
 #include <U8g2lib.h>
 #include "weather_manager.h"
@@ -33,7 +43,8 @@ const unsigned long TX_INTERVAL = 5000UL;
 static constexpr uint32_t TELEMETRY_JITTER_MS = 750UL;
 static constexpr uint32_t TELEMETRY_INITIAL_MIN_MS = 1000UL;
 static constexpr uint32_t TELEMETRY_INITIAL_MAX_MS = 5000UL;
-static uint32_t nextTelemetryAtMs = 0;
+// PHASE 5.2.2C-3G-4E1: decentralized airtime-based scheduling.
+static DecentralizedMac::Scheduler telemetryMac;
 
 static uint32_t nextTelemetryIntervalMs() {
   // Arduino random(max) has exclusive upper bound.
@@ -292,7 +303,7 @@ void setup() {
   delay(1200);
   Serial.println();
   Serial.println("=== UNIVERSAL VESSEL: SCHEDULED TX + RX ===");
-  Serial.println("Packet: 62 bytes | TX interval: 5 seconds");
+  Serial.println("Packet: 62 bytes | MAC adaptive telemetry (min base 5s)");
   Serial.printf("[WEATHER] %s, sample interval %lu ms; history %u samples\n",
                 WEATHER_FAST_TEST ? "ACCELERATED DEVELOPMENT (NOT REAL 100-MIN HISTORY)" : "FIELD",
                 WEATHER_INTERVAL, WEATHER_HISTORY_SIZE);
@@ -316,12 +327,11 @@ void setup() {
   // Each boot receives a different first telemetry slot. Subsequent intervals
   // vary independently; no change to SOS timing or packet serialization.
   randomSeed(esp_random());
-  const uint32_t firstTxDelayMs = random(TELEMETRY_INITIAL_MIN_MS,
-                                          TELEMETRY_INITIAL_MAX_MS + 1UL);
-  nextTelemetryAtMs = millis() + firstTxDelayMs;
-  Serial.printf("[TX-SCHED] origin=%lu firstInMs=%lu jitterMs=+/- %lu\n",
+  telemetryMac.begin(VesselIdentity::nodeId(), millis(), esp_random());
+  Serial.printf("[MAC-INIT] v=3G4E3A id=%lu mode=AIRTIME_ONLY "
+                "firstInMs=%lu maxKnownPeers=10 cadMode=%u\n",
     (unsigned long)VesselIdentity::nodeId(),
-    (unsigned long)firstTxDelayMs, (unsigned long)TELEMETRY_JITTER_MS);
+    (unsigned long)(uint32_t)(telemetryMac.nextDueMs() - millis()), (unsigned)MAC_CAD_MODE);
 
   lastWeatherTime = millis();
   lastOLEDUpdate = millis();
@@ -347,6 +357,8 @@ void loop() {
   }
   SOSControls::updateIndicators();
 
+  // CAD uses the same DIO1 as RX_DONE; consume its IRQ before RX polling.
+  const TelemetryCadResult macCadCompleted = pollTelemetryCad();
   pollLoRaReceive();
   if (consumeNewReceivedSOS()) {
     oledPage = 6;  // New SOS overrides any page/selection.
@@ -362,14 +374,70 @@ void loop() {
     processWeather();
   }
 
-  if ((int32_t)(millis() - nextTelemetryAtMs) >= 0) {
-    const uint32_t intervalMs = nextTelemetryIntervalMs();
-    // Schedule relative to current time instead of catching up in a TX burst.
-    nextTelemetryAtMs = millis() + intervalMs;
-    Serial.printf("[TX-SCHED] origin=%lu nextInMs=%lu\n",
-      (unsigned long)VesselIdentity::nodeId(), (unsigned long)intervalMs);
+  // PHASE 5.2.2C-3G-4E2: decentralized, nonblocking CAD experiment.
+  // Mode 1 OBSERVE (default): busy CAD is logged but does not block telemetry.
+  // Mode 2 ENFORCE (opt-in): finite random backoff, then fail-open TX.
+#if MAC_CAD_MODE == 0
+  if (telemetryMac.due(millis())) {
+    const uint32_t macNowMs = millis();
+    const uint32_t macPeers = getRecentMacPeerCount(
+        macNowMs, DecentralizedMac::kRecentPeerHorizonMs);
+    const uint32_t macIntervalMs = telemetryMac.scheduleNext(macNowMs, macPeers);
+    Serial.printf("[MAC-TX] id=%lu mode=OFF peers=%lu baseMs=%lu nextInMs=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(), (unsigned long)macPeers,
+      (unsigned long)telemetryMac.baseMs(), (unsigned long)macIntervalMs);
     transmitPacket();
   }
+#else
+  static MacContention::Gate macGate;
+  if (!macGate.pending() && telemetryMac.due(millis())) {
+    macGate.begin(millis());
+  }
+  if (macGate.pending()) {
+    const uint32_t macNowMs = millis();
+    TelemetryCadResult outcome = macCadCompleted;
+    if (outcome == TelemetryCadResult::None &&
+        !telemetryCadRunning() && macGate.ready(macNowMs)) {
+      outcome = startTelemetryCad();
+    }
+    if (outcome != TelemetryCadResult::None &&
+        outcome != TelemetryCadResult::Scanning) {
+      MacContention::Sense sense = MacContention::Sense::Error;
+      const char *outcomeName = "ERROR";
+      switch (outcome) {
+        case TelemetryCadResult::Free: sense=MacContention::Sense::Free; outcomeName="FREE"; break;
+        case TelemetryCadResult::Busy: sense=MacContention::Sense::Busy; outcomeName="BUSY"; break;
+        case TelemetryCadResult::RxActive: sense=MacContention::Sense::RxActive; outcomeName="RX_ACTIVE"; break;
+        case TelemetryCadResult::Timeout: sense=MacContention::Sense::Timeout; outcomeName="TIMEOUT"; break;
+        case TelemetryCadResult::Interrupted: sense=MacContention::Sense::Interrupted; outcomeName="CONTROL_TX"; break;
+        default: break;
+      }
+      const uint32_t beforeMs = millis();
+      const auto decision = macGate.report(beforeMs, sense,
+                                           MAC_CAD_MODE, esp_random());
+      Serial.printf("[MAC-CAD] id=%lu mode=%s result=%s action=%s "
+                    "elapsedMs=%lu retries=%u\n",
+        (unsigned long)VesselIdentity::nodeId(),
+        MAC_CAD_MODE == 1 ? "OBSERVE" : "ENFORCE", outcomeName,
+        decision == MacContention::Decision::Wait ? "BACKOFF" :
+        decision == MacContention::Decision::ForcedSend ? "FORCE_SEND" : "SEND",
+        (unsigned long)macGate.elapsed(beforeMs), (unsigned)macGate.retries());
+      if (decision != MacContention::Decision::Wait) {
+        const uint32_t nowTx = millis();
+        const uint32_t peers = getRecentMacPeerCount(
+            nowTx, DecentralizedMac::kRecentPeerHorizonMs);
+        const uint32_t nextMs = telemetryMac.scheduleNext(nowTx, peers);
+        macGate.finish(); // reset before the blocking radio transmission
+        Serial.printf("[MAC-TX] id=%lu mode=%s peers=%lu nodes=%lu baseMs=%lu nextInMs=%lu\n",
+          (unsigned long)VesselIdentity::nodeId(),
+          MAC_CAD_MODE == 1 ? "OBSERVE" : "ENFORCE",
+          (unsigned long)peers, (unsigned long)(peers + 1UL),
+          (unsigned long)telemetryMac.baseMs(), (unsigned long)nextMs);
+        transmitPacket(); // original routine TX and RX restoration unchanged
+      }
+    }
+  }
+#endif
 
   if (millis() - lastGPSPrint >= GPS_STATUS_INTERVAL) {
     lastGPSPrint = millis();

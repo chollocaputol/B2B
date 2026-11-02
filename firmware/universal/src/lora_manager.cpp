@@ -5,6 +5,15 @@
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
+#include "../../shared/compact_position_v2.h"
+// Set to 0 to perform the original 62-byte baseline comparison.
+// In either mode, SOS/ACK/CANCEL remain unchanged legacy v1 packets.
+#ifndef POSITION_V2_TX_ENABLED
+#define POSITION_V2_TX_ENABLED 1
+#endif
+#if POSITION_V2_TX_ENABLED != 0 && POSITION_V2_TX_ENABLED != 1
+#error "POSITION_V2_TX_ENABLED must be 0 or 1"
+#endif
 #include "../../shared/multi_peer_telemetry.h"
 #include "../../shared/multi_peer_sos.h"
 #include <SPI.h>
@@ -39,6 +48,182 @@ SPIClass loraSPI(FSPI);
 Module radioModule(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY, loraSPI);
 SX1262 radio(&radioModule);
 
+// PHASE 5.2.2C-3G-4E2: CAD owns the DIO1 interrupt ONLY while scanActive.
+// RadioLib 6.6 SX1262 supports startChannelScan(), getChannelScanResult().
+// This is a brief RX interruption; it is NOT passive RF monitoring.
+static bool macCadScanActive = false;
+static uint32_t macCadScanStartedAt = 0;
+static TelemetryCadResult macCadInterrupted = TelemetryCadResult::None;
+static constexpr uint32_t kMacCadTimeoutMs = 110UL;
+
+// Phase 3G-4E2B1: controlled CAD profiles. Observation only!
+// 0: unmodified RadioLib 6.6.x CAD defaults (preferred control).
+// 1: four symbols, SF9 baseline thresholds 24 / 10 (experimental).
+// 2: four symbols, higher peak threshold 28 / 10 (experimental).
+// Values 24/10 and 28/10 are research trial values, NOT calibrated recommendations.
+#ifndef CAD_PROFILE_ID
+#define CAD_PROFILE_ID 0
+#endif
+#if CAD_PROFILE_ID < 0 || CAD_PROFILE_ID > 2
+#error "CAD_PROFILE_ID must be 0, 1, or 2"
+#endif
+struct CadTrialProfile { uint8_t symbols; uint8_t detPeak; uint8_t detMin; };
+static constexpr CadTrialProfile kCadTrialProfiles[] = {{2,24,10},{4,24,10},{4,28,10}};
+static constexpr uint8_t kCadProfileId = CAD_PROFILE_ID;
+static uint32_t macCadScanEndedAt=0;
+static float macCadRssiBefore=0.0f;
+static uint32_t macCadRssiSampleMs=0;
+static bool cadProfileAnnounced=false;
+static void announceCadTrialProfile() {
+  if (cadProfileAnnounced) return;
+  cadProfileAnnounced=true;
+  const auto& x=kCadTrialProfiles[kCadProfileId];
+  Serial.printf("[CAD-PROFILE] id=%lu profile=%u symbols=%u peak=%u min=%u libDefault=%u mode=OBSERVE_ONLY\n",
+     (unsigned long)VesselIdentity::nodeId(),(unsigned)kCadProfileId,
+     (unsigned)x.symbols,(unsigned)x.detPeak,(unsigned)x.detMin,(unsigned)(kCadProfileId==0));
+}
+
+
+// 3G-4E2A: passive diagnostics of EXISTING CAD scans. Never gate TX.
+// Values describe sampled CAD results, NOT continuous channel occupancy.
+struct MacCadDiagnostics {
+  uint32_t started=0, free=0, busy=0, inconsistent=0;
+  uint32_t error=0, timeouts=0, startErrors=0, rxGuards=0, interrupted=0;
+};
+static MacCadDiagnostics macCadDiag;
+static uint32_t macCadDiagPrintedAtMs=0;
+
+static void printMacCadDiagnostics() {
+  const uint32_t now=millis();
+  if (uint32_t(now-macCadDiagPrintedAtMs)<60000UL) return;
+  macCadDiagPrintedAtMs=now;
+  const uint32_t interpreted=macCadDiag.free+macCadDiag.busy;
+  const uint32_t sampledBusyPct=interpreted ?
+      (uint32_t)((100ULL*macCadDiag.busy)/interpreted) : 0;
+  Serial.printf("[CAD-SUMMARY] id=%lu started=%lu free=%lu busy=%lu "
+                "busyPctOfDecisions=%lu inconsistent=%lu errors=%lu "
+                "timeouts=%lu startErr=%lu rxGuard=%lu interrupted=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(),
+      (unsigned long)macCadDiag.started,
+      (unsigned long)macCadDiag.free, (unsigned long)macCadDiag.busy,
+      (unsigned long)sampledBusyPct,
+      (unsigned long)macCadDiag.inconsistent,
+      (unsigned long)macCadDiag.error, (unsigned long)macCadDiag.timeouts,
+      (unsigned long)macCadDiag.startErrors,
+      (unsigned long)macCadDiag.rxGuards,
+      (unsigned long)macCadDiag.interrupted);
+}
+
+
+static void interruptMacCadForControlTx() {
+  if (macCadScanActive) {
+    macCadScanActive = false;
+    // A real SOS / ACK / cancellation takes precedence over routine CAD.
+    macCadInterrupted = TelemetryCadResult::Interrupted;
+    ++macCadDiag.interrupted;
+  }
+}
+
+bool telemetryCadRunning() { return macCadScanActive; }
+TelemetryCadResult startTelemetryCad() {
+  if (macCadScanActive) return TelemetryCadResult::Scanning;
+  // Preserve an already received frame, and avoid replacing an ongoing
+  // demodulation with CAD when the SX1262 RX IRQ flags reveal it.
+  if (digitalRead(LORA_DIO1) == HIGH) {
+    ++macCadDiag.rxGuards;
+    return TelemetryCadResult::RxActive;
+  }
+  const uint16_t irq = radio.getIrqStatus();
+  if (irq & (RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED |
+             RADIOLIB_SX126X_IRQ_HEADER_VALID)) {
+    ++macCadDiag.rxGuards;
+    return TelemetryCadResult::RxActive;
+  }
+  announceCadTrialProfile();
+  // 3G4E2B4 diagnostic ONLY: sample instantaneous RSSI during RX,
+  // immediately before CAD. Never use the value as a TX gate or threshold.
+  // A single RSSI value is NOT a spectrum scan, and is not simultaneous with CAD.
+  const float rssiBeforeCad = radio.getRSSI(false);
+  macCadRssiBefore = rssiBeforeCad;
+  macCadRssiSampleMs = millis();
+  // Do NOT use the old -95 dBm instantaneous RSSI gate: it caused starvation.
+  // Preserve EXACT RadioLib default algorithm in profile 0.
+  const CadTrialProfile &trial=kCadTrialProfiles[kCadProfileId];
+  const int16_t rc=(kCadProfileId==0)
+    ? radio.startChannelScan()
+    : radio.startChannelScan(
+        trial.symbols==4 ? RADIOLIB_SX126X_CAD_ON_4_SYMB : RADIOLIB_SX126X_CAD_ON_2_SYMB,
+        trial.detPeak,trial.detMin);
+  if (rc != RADIOLIB_ERR_NONE) {
+    ++macCadDiag.startErrors;
+    startReceive(); // restore continuous RX if scanning could not start
+    return TelemetryCadResult::Error;
+  }
+  macCadScanActive = true;
+  ++macCadDiag.started;
+  macCadScanStartedAt = millis();
+  return TelemetryCadResult::Scanning;
+}
+
+TelemetryCadResult pollTelemetryCad() {
+  printMacCadDiagnostics();
+  if (macCadInterrupted != TelemetryCadResult::None) {
+    const auto outcome = macCadInterrupted;
+    macCadInterrupted = TelemetryCadResult::None;
+    return outcome;
+  }
+  if (!macCadScanActive) return TelemetryCadResult::None;
+  // A CAD completion IRQ is NOT an RX_DONE IRQ; never call readData on it.
+  if (digitalRead(LORA_DIO1) == HIGH) {
+    // Capture IRQ BEFORE startReceive clears/reconfigures the RX IRQ mapping.
+    // Do not print until RX has been restored (avoid prolonging deaf time).
+    const int pinAtCompletion=digitalRead(LORA_DIO1);
+    const uint16_t irq=radio.getIrqStatus();
+    const int16_t rc = radio.getChannelScanResult();
+    macCadScanEndedAt=millis();
+    const uint32_t elapsed=uint32_t(macCadScanEndedAt-macCadScanStartedAt);
+    macCadScanActive = false;
+    startReceive(); // restore RX regardless of result or next action
+    const bool done=(irq & RADIOLIB_SX126X_IRQ_CAD_DONE)!=0;
+    const bool detected=(irq & RADIOLIB_SX126X_IRQ_CAD_DETECTED)!=0;
+    if (rc == RADIOLIB_LORA_DETECTED) ++macCadDiag.busy;
+    else if (rc == RADIOLIB_CHANNEL_FREE) ++macCadDiag.free;
+    else ++macCadDiag.error;
+    if ((rc == RADIOLIB_LORA_DETECTED && !detected) ||
+        (rc == RADIOLIB_CHANNEL_FREE && !done) ||
+        (detected && !done)) ++macCadDiag.inconsistent;
+    Serial.printf("[CAD-IRQ] id=%lu raw=0x%04X dio=%d done=%u detected=%u "
+                  "rxDone=%u rc=%d elapsedMs=%lu profile=%u startMs=%lu endMs=%lu rssiBeforeDbm=%.1f rssiSampleMs=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(), (unsigned)irq,
+      pinAtCompletion, (unsigned)done, (unsigned)detected,
+      (unsigned)((irq & RADIOLIB_SX126X_IRQ_RX_DONE)!=0),
+      (int)rc, (unsigned long)elapsed, (unsigned)kCadProfileId,
+      (unsigned long)macCadScanStartedAt,(unsigned long)macCadScanEndedAt,
+      (double)macCadRssiBefore,(unsigned long)macCadRssiSampleMs);
+    Serial.printf("[CAD-RSSI] id=%lu profile=%u decision=%s rxRssiDbm=%.1f sampleMs=%lu cadStartMs=%lu cadEndMs=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(),(unsigned)kCadProfileId,
+      rc==RADIOLIB_LORA_DETECTED ? "BUSY" : rc==RADIOLIB_CHANNEL_FREE ? "FREE" : "ERROR",
+      (double)macCadRssiBefore,(unsigned long)macCadRssiSampleMs,
+      (unsigned long)macCadScanStartedAt,(unsigned long)macCadScanEndedAt);
+    if (rc == RADIOLIB_CHANNEL_FREE) return TelemetryCadResult::Free;
+    if (rc == RADIOLIB_LORA_DETECTED) return TelemetryCadResult::Busy;
+    return TelemetryCadResult::Error;
+  }
+  if (uint32_t(millis() - macCadScanStartedAt) >= kMacCadTimeoutMs) {
+    const uint16_t irq=radio.getIrqStatus();
+    const uint32_t elapsed=uint32_t(millis()-macCadScanStartedAt);
+    macCadScanActive = false;
+    ++macCadDiag.timeouts;
+    startReceive();
+    Serial.printf("[CAD-IRQ] id=%lu result=TIMEOUT raw=0x%04X elapsedMs=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(), (unsigned)irq,
+      (unsigned long)elapsed);
+    return TelemetryCadResult::Timeout;
+  }
+  return TelemetryCadResult::Scanning;
+}
+
+
 
 // Never transmit under an absent/invalid identity, including automatic ACKs.
 static int transmitWithIdentity(const uint8_t* data, size_t length) {
@@ -46,6 +231,7 @@ static int transmitWithIdentity(const uint8_t* data, size_t length) {
     Serial.println("[IDENTITY] TX BLOCKED: provisioned identity required");
     return -999;
   }
+  interruptMacCadForControlTx();
   return radio.transmit(const_cast<uint8_t*>(data), length);
 }
 
@@ -179,6 +365,17 @@ uint32_t getTotalPeerTelemetryReceived() {
   return total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
 }
 
+// Phase 3G-4E1: read-only MAC peer count. A 120s horizon avoids a brief
+// missed transmission immediately shrinking the estimated network load.
+uint32_t getRecentMacPeerCount(uint32_t nowMs, uint32_t horizonMs) {
+  uint32_t count = 0;
+  for (uint32_t id = 1; id <= 9999; ++id) {
+    const auto* peer = peerTelemetry.find(id);
+    if (peer && uint32_t(nowMs - peer->lastSeenMs) <= horizonMs) ++count;
+  }
+  return count;
+}
+
 
 // Helper forward declarations (kept private to this translation unit).
 static void processReceivedPacket(const uint8_t*, size_t, int16_t, float);
@@ -219,9 +416,17 @@ static uint32_t diagReadErr = 0;
 static uint32_t diagInvalidLen = 0;
 static uint32_t diagStartReceiveErr = 0;
 static uint32_t diagLastRxMs = 0;
+// PHASE 5.2.2C-3G-4A: timestamp-only telemetry TX/RX diagnostics.
+// millis() is LOCAL device uptime, not synchronized across vessels.
+static uint32_t traceTxTelemetry = 0;
+static uint32_t traceTxTelemetryFail = 0;
+static uint32_t traceTxTotalDurationMs = 0;
+static uint32_t traceRxTelemetry = 0;
 static void printPeerReceiveDiagnostics();
 
 void pollLoRaReceive() {
+  // DIO1 is CAD_DONE/CAD_DETECTED while a channel scan is running.
+  if (macCadScanActive) return; // do not misread CAD as a received packet
   if (digitalRead(LORA_DIO1) == HIGH) {
     ++diagIrqCount;
     size_t len = radio.getPacketLength();
@@ -277,6 +482,11 @@ static void printPeerReceiveDiagnostics() {
   }
   if (!any) Serial.print("none");
   Serial.println();
+  Serial.printf("[RF-TRACE] nowMs=%lu txTelemetry=%lu txFail=%lu txTotalMs=%lu rxTelemetry=%lu crcOrReadErr=%lu rxStartErr=%lu\n",
+    (unsigned long)now, (unsigned long)traceTxTelemetry,
+    (unsigned long)traceTxTelemetryFail, (unsigned long)traceTxTotalDurationMs,
+    (unsigned long)traceRxTelemetry, (unsigned long)diagReadErr,
+    (unsigned long)diagStartReceiveErr);
 }
 
 // ============================================================
@@ -358,9 +568,54 @@ void transmitPacket() {
   createPacket(p);
   Serial.print("[TX-A] Seq="); Serial.print(p.sequenceNumber);
   Serial.print(" GPS="); Serial.print((p.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
-  Serial.print(" Weather="); Serial.println(weatherName(p.weather.weatherState));
+  Serial.print(" Packet="); Serial.println(POSITION_V2_TX_ENABLED ? "POSITION_V2" : "TELEMETRY_V1");
 
-  int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+  const uint32_t traceBeginMs = millis();
+  Serial.printf("[TX-TRACE] id=%lu seq=%lu beginMs=%lu\n",
+    (unsigned long)VesselIdentity::nodeId(), (unsigned long)p.sequenceNumber,
+    (unsigned long)traceBeginMs);
+  // Routine POSITION v2 is 25 bytes. Preserve the original v1 SOS path.
+  const uint8_t* telemetryWire = reinterpret_cast<const uint8_t*>(&p);
+  size_t telemetryBytes = sizeof(p);
+#if POSITION_V2_TX_ENABLED
+  CompactPositionV2::State pos;
+  pos.originId = p.originNodeId;
+  pos.sequence = p.sequenceNumber;
+  pos.uptimeSeconds = p.timestamp;
+  pos.gpsValid = (p.flags & FLAG_GPS_FIX) != 0;
+  pos.latitudeE7 = p.latitude_e7;
+  pos.longitudeE7 = p.longitude_e7;
+  uint8_t positionWire[CompactPositionV2::kWireSize] = {};
+  if (!CompactPositionV2::encode(positionWire, sizeof(positionWire), pos)) {
+    ++txFailures;
+    lastTXSuccess = false;
+    Serial.printf("[PKT-POS2] id=%lu seq=%lu ERROR=ENCODE_INVALID, no TX\n",
+      (unsigned long)pos.originId,(unsigned long)pos.sequence);
+    startReceive();
+    return;
+  }
+  telemetryWire = positionWire;
+  telemetryBytes = sizeof(positionWire);
+#endif
+  static bool packetModePrinted = false;
+  if (!packetModePrinted) {
+    packetModePrinted = true;
+    Serial.printf("[PKT-SCHEMA] tx=POSITION_%s txBytes=%u legacySOSBytes=%u rx=V1_OR_V2\n",
+      POSITION_V2_TX_ENABLED ? "V2" : "V1",
+      (unsigned)telemetryBytes,(unsigned)sizeof(VesselPacket));
+  }
+  Serial.printf("[PKT-TX] id=%lu seq=%lu type=%s bytes=%u\n",
+    (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,
+    POSITION_V2_TX_ENABLED ? "POSITION_V2" : "TELEMETRY_V1",(unsigned)telemetryBytes);
+  int state = transmitWithIdentity(telemetryWire, telemetryBytes);
+  const uint32_t traceEndMs = millis();
+  const uint32_t traceDurationMs = uint32_t(traceEndMs - traceBeginMs);
+  ++traceTxTelemetry;
+  if (state != RADIOLIB_ERR_NONE) ++traceTxTelemetryFail;
+  traceTxTotalDurationMs += traceDurationMs;
+  Serial.printf("[TX-TRACE] id=%lu seq=%lu endMs=%lu durationMs=%lu rc=%d\n",
+    (unsigned long)VesselIdentity::nodeId(), (unsigned long)p.sequenceNumber,
+    (unsigned long)traceEndMs, (unsigned long)traceDurationMs, state);
   if (state == RADIOLIB_ERR_NONE) {
     lastTXSuccess = true;
     txCount++;
@@ -510,6 +765,32 @@ void processSOSRetries() {
 // ============================================================
 static void processReceivedPacket(const uint8_t *buffer, size_t length,
                            int16_t rssi, float snr) {
+  // Compact POSITION packets are decoded into the existing telemetry pipeline.
+  // This keeps peer tracking, OLED navigation and PDR accounting unchanged.
+  VesselPacket normalizedPosition = {};
+  if (length == CompactPositionV2::kWireSize) {
+    CompactPositionV2::State pos;
+    if (!CompactPositionV2::decode(buffer,length,pos)) {
+      ++invalidPackets;
+      Serial.println("[RX-POS2] Invalid v2 position frame");
+      return;
+    }
+    normalizedPosition.magic = PACKET_MAGIC;
+    normalizedPosition.version = PACKET_VERSION;
+    normalizedPosition.packetType = PACKET_TELEMETRY;
+    normalizedPosition.originNodeId = pos.originId;
+    normalizedPosition.sequenceNumber = pos.sequence;
+    normalizedPosition.timestamp = pos.uptimeSeconds;
+    normalizedPosition.flags = pos.gpsValid ? FLAG_GPS_FIX : 0;
+    normalizedPosition.latitude_e7 = pos.latitudeE7;
+    normalizedPosition.longitude_e7 = pos.longitudeE7;
+    normalizedPosition.weather.weatherState = WEATHER_CALIBRATING;
+    Serial.printf("[RX-POS2] origin=%lu seq=%lu gps=%u bytes=%u\n",
+      (unsigned long)pos.originId,(unsigned long)pos.sequence,
+      (unsigned)pos.gpsValid,(unsigned)length);
+    buffer = reinterpret_cast<const uint8_t*>(&normalizedPosition);
+    length = sizeof(normalizedPosition);
+  }
   if (length != sizeof(VesselPacket)) {
     invalidPackets++;
     Serial.println("[RX-A] Invalid packet length");
@@ -655,8 +936,13 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
                       peerLon >= -180.0 && peerLon <= 180.0 &&
                       !(peerLat == 0.0 && peerLon == 0.0);
     }
+    const uint32_t traceReceiveMs = millis();
+    ++traceRxTelemetry;
+    Serial.printf("[RX-TRACE] at=%lu origin=%lu seq=%lu senderUptimeS=%lu RSSI=%d SNR=%.2f\n",
+      (unsigned long)traceReceiveMs, (unsigned long)p.originNodeId,
+      (unsigned long)p.sequenceNumber, (unsigned long)p.timestamp, rssi, snr);
     const MultiPeerTelemetry::Result result = peerTelemetry.observe(
-        p.originNodeId, p.sequenceNumber, millis(), rssi, snr,
+        p.originNodeId, p.sequenceNumber, traceReceiveMs, rssi, snr,
         validPosition, peerLat, peerLon, p.weather.weatherState, p.timestamp);
     const MultiPeerTelemetry::Peer* peer = peerTelemetry.find(p.originNodeId);
     if (result == MultiPeerTelemetry::Result::Restart) {

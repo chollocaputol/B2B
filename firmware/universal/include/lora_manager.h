@@ -27,10 +27,20 @@ bool getPeerSnapshotById(uint32_t id, PeerDisplaySnapshot &out);
 bool nextActivePeerId(uint32_t current, uint32_t &next);
 size_t getTrackedPeerCount();
 uint32_t getTotalPeerTelemetryReceived();
+// Phase 3G-4E1: number of *recently heard* distinct peers, not 15s OLED state.
+// Read-only; cannot create or evict peer table entries.
+uint32_t getRecentMacPeerCount(uint32_t nowMs, uint32_t horizonMs);
 
 void setupLoRa();
 void startReceive();
 void pollLoRaReceive();
+// PHASE 5.2.2C-3G-4E2: CAD IRQ must not enter RX readData().
+enum class TelemetryCadResult : uint8_t {
+  None, Scanning, Free, Busy, RxActive, Error, Timeout, Interrupted
+};
+bool telemetryCadRunning();
+TelemetryCadResult startTelemetryCad();
+TelemetryCadResult pollTelemetryCad();
 void createPacket(VesselPacket &packet);
 void transmitPacket();
 void setupEmergencyIdentity();

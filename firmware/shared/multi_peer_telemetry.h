@@ -26,9 +26,13 @@ struct Peer {
  uint32_t id=0,received=0,unique=0,duplicates=0,firstSequence=0,highestSequence=0;
  uint32_t lastSeenMs=0;
  uint32_t lastRemoteUptimeSec=0, session=1;
+ uint64_t sequenceSpan=0; // contiguous modular sequence range, including gaps
+ bool restartCandidate=false;
+ uint32_t candidateSequence=0,candidateUptime=0;
  bool uptimeObserved=false;
- uint32_t recent[kRecentSequences]{};
- size_t cursor=0, recentCount=0;
+ // Sliding 64-sequence bitmap anchored at highestSequence. Bit 0 is newest.
+ // Retains already-seen holes even if many later packets arrive.
+ uint64_t seenWindow=0;
  int16_t rssi=0;
  float snr=0;
  bool gpsValid=false;
@@ -37,12 +41,13 @@ struct Peer {
  bool active(uint32_t now) const { return used && uint32_t(now-lastSeenMs)<=kActiveMs; }
  uint32_t missingEstimate() const {
    if(!unique) return 0;
-   const uint64_t span=uint64_t(highestSequence)-firstSequence+1;
-   return span>unique ? uint32_t(span-unique) : 0;
+   const uint64_t span=sequenceSpan;
+   const uint64_t missing=span>unique ? span-unique : 0;
+   return missing>UINT32_MAX ? UINT32_MAX : uint32_t(missing);
  }
  float pdrEstimate() const {
    if(!unique) return 0.0f;
-   const uint64_t span=uint64_t(highestSequence)-firstSequence+1;
+   const uint64_t span=sequenceSpan;
    return span ? 100.0f*float(unique)/float(span) : 0.0f;
  }
 };
@@ -66,21 +71,42 @@ public:
      if(!p) return Result::Full;
      *p=Peer{};p->used=true;p->id=id;
    }
-   // PHASE 3G-3: restart-aware per-peer telemetry session.
-   // Require BOTH decreasing remote uptime and decreasing sequence to confirm
-   // a new sender session. Require >30s uptime drop so a delayed packet
-   // cannot reset PDR after a small remote-uptime regression. This remains
-   // a heuristic; large delayed/out-of-order frames need further evaluation.
+   // First classify modular sequence movement. A forward step across 0xffffffff
+   // is NOT a reboot. Half the uint32 range is deliberately treated as stale.
+   const bool ahead=!created && seq!=p->highestSequence &&
+     uint32_t(seq-p->highestSequence)<0x80000000UL;
+   const uint32_t backwards=created ? 0 : uint32_t(p->highestSequence-seq);
+   const bool behind=!created && seq!=p->highestSequence && !ahead;
+   // No wire-level boot nonce exists. Require two consecutive low-uptime,
+   // increasing low-sequence observations before inferring a restart. A single
+   // delayed old frame must never reset a session. This remains heuristic.
+   const bool lowStart=behind && seq<=16UL && remoteUptimeSec<=30UL &&
+     p->uptimeObserved && uint64_t(remoteUptimeSec)+5ULL<p->lastRemoteUptimeSec;
    bool reboot=false;
-   if(!created && p->uptimeObserved &&
-      uint64_t(remoteUptimeSec) + 30ULL < p->lastRemoteUptimeSec &&
-      seq < p->highestSequence) {
+   uint32_t firstRebootSeq=0;
+   if(p->restartCandidate && lowStart &&
+      seq==p->candidateSequence+1UL &&
+      remoteUptimeSec>=p->candidateUptime &&
+      remoteUptimeSec<=p->candidateUptime+30UL) {
      reboot=true;
+     firstRebootSeq=p->candidateSequence;
      const uint32_t oldSession=p->session;
      const uint32_t vesselId=p->id;
      *p=Peer{};
      p->used=true;p->id=vesselId;
      p->session=oldSession+1;
+   } else if(lowStart && !p->restartCandidate) {
+     p->restartCandidate=true;
+     p->candidateSequence=seq;
+     p->candidateUptime=remoteUptimeSec;
+     // Quarantine ambiguous frame; do not corrupt PDR or live session.
+     return Result::Duplicate;
+   } else {
+     p->restartCandidate=false;
+   }
+   if(behind && !reboot && backwards>=kRecentSequences) {
+     // Too old to enter the bounded reordering window; never expand PDR span.
+     return Result::Duplicate;
    }
    // On reordering, preserve the highest known sender uptime rather than
    // treating an older frame as the latest sender time.
@@ -91,17 +117,39 @@ public:
    p->lastSeenMs=now;
    p->rssi=rssi;p->snr=snr;p->gpsValid=gps;p->weatherState=weather;
    if(gps) {p->latitude=lat;p->longitude=lon;}
-   // Only retain last 64 sequence IDs; older replay can eventually be counted
-   // as an out-of-window arrival, so this is NOT an authentication mechanism.
-   for(size_t i=0;i<p->recentCount;++i)
-     if(p->recent[i]==seq) {++p->duplicates;return Result::Duplicate;}
-   p->recent[p->cursor]=seq;
-   p->cursor=(p->cursor+1)%kRecentSequences;
-   if(p->recentCount<kRecentSequences) ++p->recentCount;
-   if(p->unique==0) p->firstSequence=p->highestSequence=seq;
-   else {
-     if(seq<p->firstSequence) p->firstSequence=seq;
-     if(seq>p->highestSequence) p->highestSequence=seq;
+   // A 64-bit sequence-indexed receive window prevents re-counting a sequence
+   // merely because it fell out of a FIFO of the last 64 arrivals.
+   // Every sequence position stays represented until the highest advances
+   // beyond the 64-position window. Positions outside it are ignored.
+   if(p->unique==0) {
+     p->firstSequence=reboot ? firstRebootSeq : seq;
+     p->highestSequence=seq;
+     p->sequenceSpan=reboot ? 2 : 1;
+     p->seenWindow=reboot ? 3ULL : 1ULL; // first candidate + confirmed frame
+     if(reboot) ++p->unique;
+   } else if(seq==p->highestSequence) {
+     ++p->duplicates;
+     return Result::Duplicate;
+   } else if(ahead) {
+     const uint32_t step=uint32_t(seq-p->highestSequence);
+     p->seenWindow=(step>=kRecentSequences ? 0ULL : p->seenWindow<<step)|1ULL;
+     p->sequenceSpan+=step;
+     p->highestSequence=seq;
+   } else if(behind) {
+     // backwards is guaranteed to be in [1,63] by the earlier guard.
+     const uint64_t bit=1ULL<<backwards;
+     if((p->seenWindow&bit)!=0ULL) {
+       ++p->duplicates;
+       return Result::Duplicate;
+     }
+     p->seenWindow|=bit;
+     // A genuine earlier observation can expand the sequence span backwards.
+     // Do so only for values inside the bounded reordering window.
+     const uint32_t beforeFirst=uint32_t(p->firstSequence-seq);
+     if(beforeFirst>0 && beforeFirst<kRecentSequences) {
+       p->sequenceSpan+=beforeFirst;
+       p->firstSequence=seq;
+     }
    }
    ++p->unique;
    return created ? Result::NewPeer : (reboot ? Result::Restart : Result::Unique);

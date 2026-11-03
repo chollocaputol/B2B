@@ -41,7 +41,7 @@ enum class TelemetryCadResult : uint8_t {
 bool telemetryCadRunning();
 TelemetryCadResult startTelemetryCad();
 TelemetryCadResult pollTelemetryCad();
-void createPacket(VesselPacket &packet);
+void createPacket(VesselPacket &packet, bool consumeTelemetrySequence = true);
 void transmitPacket();
 void setupEmergencyIdentity();
 bool hasActiveLocalSOS();

@@ -518,13 +518,13 @@ void startReceive() {
 // ============================================================
 // TRANSMISSION
 // ============================================================
-void createPacket(VesselPacket &p) {
+void createPacket(VesselPacket &p, bool consumeTelemetrySequence) {
   memset(&p, 0, sizeof(p));
   p.magic = PACKET_MAGIC;
   p.version = PACKET_VERSION;
   p.packetType = PACKET_TELEMETRY;
   p.originNodeId = NODE_ID;
-  p.sequenceNumber = txSequence++;
+  p.sequenceNumber = consumeTelemetrySequence ? txSequence++ : 0;
   p.timestamp = millis() / 1000UL;
   p.hopCount = 0;
   if (gpsHasFix) {
@@ -680,7 +680,7 @@ void transmitSOS() {
     return;
   }
   nextEmergencyId = selectedId + 1;
-  createPacket(pendingSOS);
+  createPacket(pendingSOS, false);
   pendingSOS.sequenceNumber = selectedId;
   activeEmergencyId = selectedId;
   activeEmergency = true;

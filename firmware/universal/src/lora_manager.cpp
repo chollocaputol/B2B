@@ -3,6 +3,7 @@
 #include "../../shared/relay_policy.h"
 #include "../../shared/relay_queue.h"
 #include "../../shared/relay_dryrun_scheduler.h"
+#include "../../shared/relay_preflight.h"
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
@@ -478,12 +479,20 @@ void pollLoRaReceive() {
     }
     startReceive();
   }
-  // Drain to a diagnostic ONLY. There is intentionally no transmit call.
+  // R2-B2: reject queued events superseded/cancelled while they were waiting.
+  // This checks only volatile SOS state; it is not authentication or a TX grant.
   VesselPacket prepared;
   if (relayDryRun.poll(millis(), prepared)) {
-    Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu outgoing_hops=%u TX=OFF\n",
-      (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
-      (unsigned)prepared.hopCount);
+    const Relay52::Preflight gate = Relay52::preflightPrepared(prepared, peerSOSTable);
+    if (gate != Relay52::Preflight::Ready) {
+      Serial.printf("[RELAY52] DROP origin=0x%lX event=%lu type=%u reason=%s TX=OFF\n",
+        (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
+        (unsigned)prepared.packetType, Relay52::preflightName(gate));
+    } else {
+      Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu type=%u outgoing_hops=%u state=READY TX=OFF\n",
+        (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
+        (unsigned)prepared.packetType, (unsigned)prepared.hopCount);
+    }
   }
   printPeerReceiveDiagnostics();
 }

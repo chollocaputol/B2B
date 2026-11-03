@@ -1,0 +1,20 @@
+# Supabase
+.branches
+.temp
+
+# dotenvx
+.env.keys
+.env.local
+.env.*.local
+
+# Supabase local secrets
+supabase/.env
+supabase/functions/.env
+.env
+
+# Node.js
+node_modules/
+
+# Build output
+dist/
+build/

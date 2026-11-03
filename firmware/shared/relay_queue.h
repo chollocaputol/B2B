@@ -27,10 +27,11 @@ public:
  Admit receive(const Packet& original,uint32_t self) {
   // Verify before inserting into the duplicate cache, to avoid poisoning
   // the cache with malformed packet frames.
-  if (original.magic!=0x4D45 || original.version!=1 || original.originNodeId==0 ||
+  if (original.magic!=0x4D45 || original.version!=1 || (original.originNodeId==0 || original.originNodeId>9999) ||
       original.packetType<1 || original.packetType>5) return Admit::Invalid;
   if (original.originNodeId==self) return Admit::OwnOrigin;
   if (!RelayPolicy::eligible(original.packetType)) return Admit::NotRelayable;
+  if (!RelayPolicy::validCancelPayload(original)) return Admit::Invalid;
   if (original.hopCount>=RelayPolicy::kMaxHops) return Admit::HopLimit;
   if (cache_.contains(original.originNodeId,original.sequenceNumber,original.packetType)) return Admit::Duplicate;
   if (count_==kQueueDepth) return Admit::Full;

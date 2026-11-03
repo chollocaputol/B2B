@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 // Phase 5.1 protocol contract. Does not transmit or alter existing SOS logic.
 // Compatible with current 62-byte, version-1 VesselPacket on both boards.
@@ -47,13 +48,24 @@ private:
 // Phase 5 design: only SOS and cancellation are candidates. Control ACKs
 // remain single-hop pending an explicit end-to-end acknowledgment protocol.
 inline bool eligible(uint8_t kind) { return kind==2 || kind==4; }
+// Pre-admission validation protects the replay cache from malformed CANCEL
+// events. This is structural consistency, NOT source authentication.
+template <typename Packet>
+inline bool validCancelPayload(const Packet& p) {
+  if (p.packetType != 4) return true;
+  uint32_t event=0, origin=0;
+  memcpy(&event,p.message,4);
+  memcpy(&origin,p.message+4,4);
+  return event==p.sequenceNumber && origin==p.originNodeId;
+}
 
 template <typename Packet>
 inline Decision inspect(const Packet& p, uint32_t localNodeId, Cache& cache) {
-  if (p.magic!=0x4D45 || p.version!=1 || p.originNodeId==0 ||
+  if (p.magic!=0x4D45 || p.version!=1 || (p.originNodeId==0 || p.originNodeId>9999) ||
       p.packetType<1 || p.packetType>5) return Decision::Invalid;
   if (p.originNodeId==localNodeId) return Decision::OwnOrigin;
   if (!eligible(p.packetType)) return Decision::NotRelayable;
+  if (!validCancelPayload(p)) return Decision::Invalid;
   if (p.hopCount>=kMaxHops) return Decision::HopLimit;
   if (cache.contains(p.originNodeId,p.sequenceNumber,p.packetType)) return Decision::Duplicate;
   cache.remember(p.originNodeId,p.sequenceNumber,p.packetType);

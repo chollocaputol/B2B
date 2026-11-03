@@ -5,6 +5,7 @@
 #include "../../shared/relay_dryrun_scheduler.h"
 #include "../../shared/relay_preflight.h"
 #include "../../shared/relay_receipt_state.h"
+#include "../../shared/relay_tx_readiness.h"
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
@@ -492,9 +493,10 @@ void pollLoRaReceive() {
         (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
         (unsigned)prepared.packetType, Relay52::preflightName(gate));
     } else {
-      Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu type=%u outgoing_hops=%u state=READY TX=OFF\n",
+      Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu type=%u outgoing_hops=%u state=READY readiness=%s TX=OFF\n",
         (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
-        (unsigned)prepared.packetType, (unsigned)prepared.hopCount);
+        (unsigned)prepared.packetType, (unsigned)prepared.hopCount,
+        RelayReadiness::blockerName(RelayReadiness::primaryBlocker()));
     }
   }
   printPeerReceiveDiagnostics();

@@ -4,6 +4,7 @@
 #include "../../shared/relay_queue.h"
 #include "../../shared/relay_dryrun_scheduler.h"
 #include "../../shared/relay_preflight.h"
+#include "../../shared/relay_receipt_state.h"
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
@@ -392,6 +393,8 @@ static MultiPeerSOS::Table peerSOSTable;
 // R2-B1 dry-run state is volatile, bounded, and NEVER submitted to radio TX.
 static Relay52::DryRunScheduler<VesselPacket> relayDryRun;
 static RelayPolicy::Cache relaySeen;
+// R2-B3: local, unauthenticated neighbor-ACK evidence only.
+static RelayReceipt::Tracker relayReceipt;
 static ReceivedSOSView incomingBSOS = {};
 size_t getSOSRecordCount() {return peerSOSTable.count();}
 size_t getActiveSOSCount() {return peerSOSTable.activeCount();}
@@ -694,6 +697,12 @@ static void sendPendingSOS() {
   } else { ++txFailures; lastTXSuccess = false;
     Serial.printf("[SOS-A] RADIO TX FAILED=%d\n", state);
   }
+  relayReceipt.sosAttempt(NODE_ID, pendingSOS.sequenceNumber, state == RADIOLIB_ERR_NONE);
+  Serial.printf("[RECEIPT] SOS event=%lu neighbor=%s farEnd=%s txOK=%u\n",
+    (unsigned long)pendingSOS.sequenceNumber,
+    RelayReceipt::neighborName(relayReceipt.snapshot().neighbor),
+    RelayReceipt::farEndName(relayReceipt.snapshot().farEnd),
+    (unsigned)(state == RADIOLIB_ERR_NONE));
   startReceive();
   nextSOSTxAt = millis() + SOS_RETRY_MS + ControlRetry::sosSlotDelayMs(NODE_ID, pendingSOS.sequenceNumber, sosAttempts);
 }
@@ -733,6 +742,11 @@ void transmitSOS() {
   strncpy(pendingSOS.message, "SOS", sizeof(pendingSOS.message) - 1);
   pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
   sosPending = true;
+  relayReceipt.begin(NODE_ID, selectedId);
+  Serial.printf("[RECEIPT] SOS event=%lu neighbor=%s farEnd=%s originAuth=UNVERIFIED\n",
+    (unsigned long)selectedId,
+    RelayReceipt::neighborName(relayReceipt.snapshot().neighbor),
+    RelayReceipt::farEndName(relayReceipt.snapshot().farEnd));
   sosAttempts = 0;
   nextSOSTxAt = millis() + ControlRetry::sosSlotDelayMs(NODE_ID, pendingSOS.sequenceNumber, 0);
   Serial.printf("[SOS-A] Scheduled first attempt in %lu ms\n", (unsigned long)(nextSOSTxAt - millis()));
@@ -778,6 +792,10 @@ void cancelActiveSOS() {
   cancelAttempts = 0;
   sosPending = false; // Deliberate cancellation stops the prior SOS retries.
   activeEmergency = false; // New SOS can begin before this cancel is ACKed.
+  relayReceipt.localCancel(NODE_ID, activeEmergencyId);
+  Serial.printf("[RECEIPT] CANCEL event=%lu local=YES farEnd=%s\n",
+    (unsigned long)activeEmergencyId,
+    RelayReceipt::farEndName(relayReceipt.snapshot().farEnd));
   Serial.printf("[SOS-A] LOCAL CANCEL event=%lu; NEW SOS ENABLED; REMOTE NOT YET CONFIRMED\n",
     (unsigned long)activeEmergencyId);
   nextCancelTxAt = millis() + ControlRetry::slotDelayMs(NODE_ID, pendingCancel.sequenceNumber, 0);
@@ -799,6 +817,11 @@ void processSOSRetries() {
   if (!sosPending || !ControlRetry::due(millis(), nextSOSTxAt)) return;
   if (sosAttempts >= SOS_MAX_ATTEMPTS) {
     Serial.printf("[SOS-A] UNCONFIRMED after %u attempts; emergency NOT resolved\n", sosAttempts);
+    relayReceipt.retriesExhausted(NODE_ID, pendingSOS.sequenceNumber);
+    Serial.printf("[RECEIPT] SOS event=%lu neighbor=%s farEnd=%s\n",
+      (unsigned long)pendingSOS.sequenceNumber,
+      RelayReceipt::neighborName(relayReceipt.snapshot().neighbor),
+      RelayReceipt::farEndName(relayReceipt.snapshot().farEnd));
     sosPending = false; // Transmission session ended; not emergency resolution.
     return;
   }
@@ -921,6 +944,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       Serial.printf("[CANCEL-A] ACK RECEIVED from Vessel-B for event=%lu after %u attempt(s)\n",
         (unsigned long)ackId, cancelAttempts);
       cancelPending = false;
+      if (relayReceipt.cancelAck(NODE_ID, ackId, p.originNodeId)) {
+        Serial.printf("[RECEIPT] CANCEL event=%lu neighborCancelAck=CLAIMED sender=%lu farEnd=UNVERIFIED originAuth=UNVERIFIED\n",
+          (unsigned long)ackId, (unsigned long)p.originNodeId);
+      }
     } else {
       Serial.println("[CANCEL-A] Ignored unrelated/late cancellation ACK");
     }
@@ -928,6 +955,13 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
   if (p.packetType == PACKET_SOS_ACK) {
     if (sosPending && matchesSOSAck(p, pendingSOS.sequenceNumber, pendingSOS.originNodeId)) {
+      if (relayReceipt.neighborAck(NODE_ID, pendingSOS.sequenceNumber, p.originNodeId)) {
+        Serial.printf("[RECEIPT] SOS event=%lu neighbor=%s sender=%lu farEnd=%s originAuth=UNVERIFIED\n",
+          (unsigned long)pendingSOS.sequenceNumber,
+          RelayReceipt::neighborName(relayReceipt.snapshot().neighbor),
+          (unsigned long)p.originNodeId,
+          RelayReceipt::farEndName(relayReceipt.snapshot().farEnd));
+      }
       Serial.printf("[SOS-A] ACK RECEIVED from Vessel-B for SOS seq=%lu after %u attempt(s)\n",
         (unsigned long)pendingSOS.sequenceNumber, sosAttempts);
       sosPending = false;

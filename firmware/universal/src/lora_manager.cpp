@@ -7,12 +7,24 @@
 #include "../../shared/relay_receipt_state.h"
 #include "../../shared/relay_tx_readiness.h"
 #include "../../shared/relay_authorization_contract.h"
+#include "../../shared/lab_relay_gate.h"
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
 #include "../../shared/compact_position_v2.h"
+#include "../../shared/phase5_1_6_rx_guard.h"
+#include "../../shared/phase5_1_8_device_backend.h"
+#include "../../shared/phase5_1_9D_shadow_rx.h"
 // Set to 0 to perform the original 62-byte baseline comparison.
 // In either mode, SOS/ACK/CANCEL remain unchanged legacy v1 packets.
+// A manually enabled, bench-only forwarding experiment. OFF in normal builds.
+#ifndef THESIS_LAB_RELAY_TX
+#define THESIS_LAB_RELAY_TX 0
+#endif
+#if THESIS_LAB_RELAY_TX != 0 && THESIS_LAB_RELAY_TX != 1
+#error "THESIS_LAB_RELAY_TX must be 0 or 1"
+#endif
+
 #ifndef POSITION_V2_TX_ENABLED
 #define POSITION_V2_TX_ENABLED 1
 #endif
@@ -446,7 +458,7 @@ static void prepareRelayAfterSOSState(const VesselPacket& p,
     return;
   }
   const Relay52::Admit result = relayDryRun.offer(p, NODE_ID, true);
-  Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u hops=%u result=%s queued=%u TX=OFF\n",
+  Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u hops=%u result=%s queued=%u TX=NOT_AT_ADMISSION\n",
     (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
     (unsigned)p.packetType, (unsigned)p.hopCount,
     Relay52::name(result), (unsigned)relayDryRun.size());
@@ -454,7 +466,7 @@ static void prepareRelayAfterSOSState(const VesselPacket& p,
   // so FULL/rejected frames cannot poison its separate observation cache.
   if (result == Relay52::Admit::Queued) {
     const RelayPolicy::Decision decision = RelayPolicy::inspect(p, NODE_ID, relaySeen);
-    Serial.printf("[RELAY51] origin=0x%lX event=%lu type=%u hops=%u decision=%s; FORWARD=OFF\n",
+    Serial.printf("[RELAY51] origin=0x%lX event=%lu type=%u hops=%u decision=%s; FORWARD=NOT_AT_ADMISSION\n",
       (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
       (unsigned)p.packetType, (unsigned)p.hopCount, RelayPolicy::name(decision));
   }
@@ -465,9 +477,9 @@ void pollLoRaReceive() {
   if (digitalRead(LORA_DIO1) == HIGH) {
     ++diagIrqCount;
     size_t len = radio.getPacketLength();
-    if (len == 0 || len > sizeof(VesselPacket)) ++diagInvalidLen;
-    if (len > 0 && len <= sizeof(VesselPacket)) {
-      uint8_t buffer[sizeof(VesselPacket)];
+    if (len == 0 || len > Phase516::kMaxReceiveWireBytes) ++diagInvalidLen;
+    if (len > 0 && len <= Phase516::kMaxReceiveWireBytes) {
+      uint8_t buffer[Phase516::kMaxReceiveWireBytes];
       int state = radio.readData(buffer, len);
       if (state == RADIOLIB_ERR_NONE) {
         ++diagReadOk;
@@ -494,12 +506,31 @@ void pollLoRaReceive() {
         (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
         (unsigned)prepared.packetType, Relay52::preflightName(gate));
     } else {
+#if THESIS_LAB_RELAY_TX == 1
+      // BENCH ONLY: fixed three-node route 001 -> 002 -> 003. This is NOT
+      // a cryptographic security authorization, nor suitable for sea trials.
+      if (ThesisLabRelay::permits(prepared, NODE_ID)) {
+        const int relayRc = transmitWithIdentity(
+          reinterpret_cast<const uint8_t*>(&prepared), sizeof(prepared));
+        startReceive();
+        Serial.printf("[LAB-RELAY-TX] origin=%lu event=%lu type=%u hops=%u rc=%d attempts=1 SECURITY=UNAUTHENTICATED\n",
+          (unsigned long)prepared.originNodeId,
+          (unsigned long)prepared.sequenceNumber,
+          (unsigned)prepared.packetType, (unsigned)prepared.hopCount, relayRc);
+      } else {
+        Serial.printf("[LAB-RELAY] BLOCKED self=%lu origin=%lu event=%lu type=%u hops=%u\n",
+          (unsigned long)NODE_ID, (unsigned long)prepared.originNodeId,
+          (unsigned long)prepared.sequenceNumber,
+          (unsigned)prepared.packetType, (unsigned)prepared.hopCount);
+      }
+#else
       Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu type=%u outgoing_hops=%u state=READY readiness=%s contract=%s TX=OFF\n",
         (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
         (unsigned)prepared.packetType, (unsigned)prepared.hopCount,
         RelayReadiness::blockerName(RelayReadiness::primaryBlocker()),
         RelayContract::statusName(RelayContract::assess(
           RelayContract::evidenceUnavailable(NODE_ID, prepared.originNodeId))));
+#endif
     }
   }
   printPeerReceiveDiagnostics();
@@ -838,6 +869,27 @@ void processSOSRetries() {
 // ============================================================
 static void processReceivedPacket(const uint8_t *buffer, size_t length,
                            int16_t rssi, float snr) {
+  // Phase 5.1.6: format-only, fail-closed RX gate. NO signature verifier yet.
+  // v3 frames are quarantined before any SOS state change, ACK, or relay queue.
+  const Phase516::Decision gate = Phase516::decide(buffer, length);
+  if (gate == Phase516::Decision::Reject) {
+    ++invalidPackets;
+    Serial.println("[RX-GATE] REJECT invalid wire format");
+    return;
+  }
+  if (gate == Phase516::Decision::QuarantineV3) {
+    // Phase 5.1.9D -- receive-only shadow inspection, no trusted keys provisioned.
+    // The immutable runtime trust callback fails closed before Ed25519 or SOS state.
+    static Phase519::Ledger v3ShadowLedger{};
+    const Phase519::Result shadowResult = Phase519D::inspect(buffer, length, v3ShadowLedger);
+    Serial.printf("[RX-519D] v3 shadowOutcome=%u verifyVerdict=%u trust=UNPROVISIONED durable=NO sos=NO ack=NO relay=OFF\n",
+       (unsigned)shadowResult.outcome, (unsigned)shadowResult.signature);
+    Serial.printf("[RX-GATE] V3_QUARANTINED kind=0x%02X bytes=%u auth=NOT_IMPLEMENTED ack=NO relay=OFF\n",
+       (unsigned)buffer[3], (unsigned)length);
+    return;
+  }
+  // Legacy v1 is UNAUTHENTICATED and retains its existing behavior.
+  // POSITION v2 is UNAUTHENTICATED telemetry. Never treat either as v3.
   // Compact POSITION packets are decoded into the existing telemetry pipeline.
   // This keeps peer tracking, OLED navigation and PDR accounting unchanged.
   VesselPacket normalizedPosition = {};

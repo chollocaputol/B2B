@@ -1,3 +1,6 @@
+#ifndef THESIS_LAB_RELAY_TX
+#define THESIS_LAB_RELAY_TX 0
+#endif
 #include "../../shared/tbeam_pins.h"
 #include "../../shared/vessel_identity.h"
 #include "../../shared/oled_button_debounce.h"
@@ -335,8 +338,13 @@ void setup() {
 
   lastWeatherTime = millis();
   lastOLEDUpdate = millis();
-  Serial.printf("[UNIVERSAL] %s (ID %lu): firmware initialized; relay forwarding OFF; multi-vessel validation PENDING\n",
+  Serial.printf("[UNIVERSAL] %s (ID %lu): firmware initialized; relay forwarding controlled by build; multi-vessel validation PENDING\n",
                 VesselIdentity::label(), (unsigned long)VesselIdentity::nodeId());
+#if THESIS_LAB_RELAY_TX == 1
+  Serial.println("[LAB-RELAY] BUILD=ENABLED; BENCH ONLY; VESSEL-002 GATE");
+#else
+  Serial.println("[LAB-RELAY] BUILD=DISABLED");
+#endif
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 

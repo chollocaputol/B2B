@@ -2,6 +2,7 @@
 #include "../../shared/vessel_identity.h"
 #include "../../shared/relay_policy.h"
 #include "../../shared/relay_queue.h"
+#include "../../shared/relay_dryrun_scheduler.h"
 #include "lora_manager.h"
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
@@ -387,6 +388,9 @@ static void calculateBSequencePDR();
 
 // Received distress record is volatile RAM, never authoritative after reboot.
 static MultiPeerSOS::Table peerSOSTable;
+// R2-B1 dry-run state is volatile, bounded, and NEVER submitted to radio TX.
+static Relay52::DryRunScheduler<VesselPacket> relayDryRun;
+static RelayPolicy::Cache relaySeen;
 static ReceivedSOSView incomingBSOS = {};
 size_t getSOSRecordCount() {return peerSOSTable.count();}
 size_t getActiveSOSCount() {return peerSOSTable.activeCount();}
@@ -424,6 +428,31 @@ static uint32_t traceTxTotalDurationMs = 0;
 static uint32_t traceRxTelemetry = 0;
 static void printPeerReceiveDiagnostics();
 
+// R2-B1: only authoritative NEW SOS or CANCELLED events may enter the
+// preparation queue. Invalid, stale, duplicate and unknown events cannot
+// consume the relay duplicate cache. No radio transmission happens here.
+static void prepareRelayAfterSOSState(const VesselPacket& p,
+                                      bool stateAccepted, const char* stateLabel) {
+  if (!stateAccepted) {
+    Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u state=%s result=STATE_REJECTED TX=OFF\n",
+      (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+      (unsigned)p.packetType, stateLabel);
+    return;
+  }
+  const Relay52::Admit result = relayDryRun.offer(p, NODE_ID, true);
+  Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u hops=%u result=%s queued=%u TX=OFF\n",
+    (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+    (unsigned)p.packetType, (unsigned)p.hopCount,
+    Relay52::name(result), (unsigned)relayDryRun.size());
+  // Relay51 remains diagnostic; inspect only after successful queue admission
+  // so FULL/rejected frames cannot poison its separate observation cache.
+  if (result == Relay52::Admit::Queued) {
+    const RelayPolicy::Decision decision = RelayPolicy::inspect(p, NODE_ID, relaySeen);
+    Serial.printf("[RELAY51] origin=0x%lX event=%lu type=%u hops=%u decision=%s; FORWARD=OFF\n",
+      (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
+      (unsigned)p.packetType, (unsigned)p.hopCount, RelayPolicy::name(decision));
+  }
+}
 void pollLoRaReceive() {
   // DIO1 is CAD_DONE/CAD_DETECTED while a channel scan is running.
   if (macCadScanActive) return; // do not misread CAD as a received packet
@@ -448,6 +477,13 @@ void pollLoRaReceive() {
       }
     }
     startReceive();
+  }
+  // Drain to a diagnostic ONLY. There is intentionally no transmit call.
+  VesselPacket prepared;
+  if (relayDryRun.poll(millis(), prepared)) {
+    Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu outgoing_hops=%u TX=OFF\n",
+      (unsigned long)prepared.originNodeId, (unsigned long)prepared.sequenceNumber,
+      (unsigned)prepared.hopCount);
   }
   printPeerReceiveDiagnostics();
 }
@@ -798,42 +834,11 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
   VesselPacket p;
   memcpy(&p, buffer, sizeof(p));
-  // Phase 5.1 relay policy diagnostics ONLY: no forwarding/radio TX here.
-  // Inspect valid-size frames; existing SOS handlers remain authoritative.
-  static RelayPolicy::Cache relaySeen;
-  const RelayPolicy::Decision relayDecision =
-      RelayPolicy::inspect(p, NODE_ID, relaySeen);
-  if (p.packetType == PACKET_SOS || p.packetType == PACKET_SOS_CANCEL) {
-    Serial.printf("[RELAY51] origin=0x%lX event=%lu type=%u hops=%u decision=%s; FORWARD=OFF\n",
-                  (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
-                  (unsigned)p.packetType, (unsigned)p.hopCount,
-                  RelayPolicy::name(relayDecision));
-  }
-
   if (p.magic != PACKET_MAGIC || p.version != PACKET_VERSION) {
     invalidPackets++;
     Serial.println("[RX-A] Invalid packet header");
     return;
   }
-  // Phase 5.2.1 - prepare a bounded relay frame, but DO NOT transmit it.
-  // This is an intentionally non-deployable dry-run while unique identity,
-  // relay-source authentication, and end-to-end SOS semantics are finalized.
-  static Relay52::Queue<VesselPacket> relay52Queue;
-  const Relay52::Admit relay52Result = relay52Queue.receive(p, NODE_ID);
-  if (p.packetType == PACKET_SOS || p.packetType == PACKET_SOS_CANCEL) {
-    Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u hops=%u result=%s queued=%u TX=OFF\n",
-      (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
-      (unsigned)p.packetType, (unsigned)p.hopCount,
-      Relay52::name(relay52Result), (unsigned)relay52Queue.size());
-    // Drain only to diagnostics to avoid a persistent full queue on a two-node bench.
-    VesselPacket prepared;
-    if (relay52Queue.pop(prepared)) {
-      Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu outgoing_hops=%u TX=OFF\n",
-        (unsigned long)prepared.originNodeId,
-        (unsigned long)prepared.sequenceNumber, (unsigned)prepared.hopCount);
-    }
-  }
-
   if (p.originNodeId == NODE_ID) return;
 
   if (p.originNodeId < 1 || p.originNodeId > 9999) {
@@ -848,9 +853,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     memcpy(&cancelId,p.message,4);
     memcpy(&cancelOrigin,p.message+4,4);
     if (cancelOrigin!=p.originNodeId || cancelId!=p.sequenceNumber) {
-      Serial.println("[PEER-SOS] CANCEL_MISMATCH payload; NO ACK");return;
+      Serial.println("[PEER-SOS] CANCEL_MISMATCH payload; NO ACK"); prepareRelayAfterSOSState(p, false, "CANCEL_PAYLOAD"); return;
     }
     const auto result=peerSOSTable.cancel(p.originNodeId,cancelId,millis());
+    prepareRelayAfterSOSState(p, result==MultiPeerSOS::Result::Cancelled, MultiPeerSOS::name(result));
     Serial.printf("[PEER-SOS] CANCEL origin=%lu event=%lu result=%s\n",
       (unsigned long)p.originNodeId,(unsigned long)cancelId,MultiPeerSOS::name(result));
     if (result!=MultiPeerSOS::Result::Cancelled && result!=MultiPeerSOS::Result::CancelDuplicate)return;
@@ -869,6 +875,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
   if (p.packetType == PACKET_SOS) {
     const auto result=peerSOSTable.receiveSOS(p.originNodeId,p.sequenceNumber,millis());
+    prepareRelayAfterSOSState(p, result==MultiPeerSOS::Result::New, MultiPeerSOS::name(result));
     Serial.printf("[PEER-SOS] SOS origin=%lu event=%lu result=%s\n",
       (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,MultiPeerSOS::name(result));
     if(result==MultiPeerSOS::Result::Stale||result==MultiPeerSOS::Result::Full)return;

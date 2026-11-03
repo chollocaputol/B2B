@@ -8,7 +8,7 @@
 // Duplicate suppression is per (origin, sequence, packet type) and is RAM-only.
 namespace Relay52 {
 static constexpr size_t kQueueDepth = 4;
-enum class Admit : uint8_t { Invalid, OwnOrigin, NotRelayable, HopLimit, Duplicate, Queued, Full };
+enum class Admit : uint8_t { Invalid, OwnOrigin, NotRelayable, HopLimit, Duplicate, Queued, Full, StateRejected };
 inline const char* name(Admit x) {
   switch(x) {
   case Admit::Invalid:return "INVALID";
@@ -18,6 +18,7 @@ inline const char* name(Admit x) {
   case Admit::Duplicate:return "DUPLICATE";
   case Admit::Queued:return "QUEUED";
   case Admit::Full:return "QUEUE_FULL";
+  case Admit::StateRejected:return "STATE_REJECTED";
   }
   return "UNKNOWN";
 }

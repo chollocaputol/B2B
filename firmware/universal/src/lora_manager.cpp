@@ -39,6 +39,20 @@
 #include <math.h>
 #include <string.h>
 #include <Preferences.h>
+#ifndef THESIS_SD_LOGGER
+#define THESIS_SD_LOGGER 0
+#endif
+#if THESIS_SD_LOGGER == 1
+// Bridge is defined in main.cpp so the SD queue has one owning instance.
+extern bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
+                           uint32_t seq, int32_t result, int16_t rssi = 0,
+                           int16_t snrX10 = 0, int32_t latE7 = 0, int32_t lonE7 = 0,
+                           uint8_t flags = 0, uint8_t hops = 0,
+                           uint8_t attempt = 0);
+#define SD_EVENT(...) thesisLogEvent(__VA_ARGS__)
+#else
+#define SD_EVENT(...) ((void)0)
+#endif
 
 // Source firmware: Board A, 915 MHz, RadioLib SX1262.
 
@@ -513,6 +527,10 @@ void pollLoRaReceive() {
         const int relayRc = transmitWithIdentity(
           reinterpret_cast<const uint8_t*>(&prepared), sizeof(prepared));
         startReceive();
+        SD_EVENT(true, "relay_tx", prepared.originNodeId,
+                 prepared.sequenceNumber, relayRc, 0, 0,
+                 prepared.latitude_e7, prepared.longitude_e7,
+                 prepared.flags, prepared.hopCount);
         Serial.printf("[LAB-RELAY-TX] origin=%lu event=%lu type=%u hops=%u rc=%d attempts=1 SECURITY=UNAUTHENTICATED\n",
           (unsigned long)prepared.originNodeId,
           (unsigned long)prepared.sequenceNumber,
@@ -700,6 +718,8 @@ void transmitPacket() {
   Serial.printf("[TX-TRACE] id=%lu seq=%lu endMs=%lu durationMs=%lu rc=%d\n",
     (unsigned long)VesselIdentity::nodeId(), (unsigned long)p.sequenceNumber,
     (unsigned long)traceEndMs, (unsigned long)traceDurationMs, state);
+  SD_EVENT(false, "telemetry_tx", p.originNodeId, p.sequenceNumber,
+           state, 0, 0, p.latitude_e7, p.longitude_e7, p.flags);
   if (state == RADIOLIB_ERR_NONE) {
     lastTXSuccess = true;
     txCount++;
@@ -733,6 +753,10 @@ static void sendPendingSOS() {
   } else { ++txFailures; lastTXSuccess = false;
     Serial.printf("[SOS-A] RADIO TX FAILED=%d\n", state);
   }
+  SD_EVENT(true, "sos_tx_attempt", pendingSOS.originNodeId,
+           pendingSOS.sequenceNumber, state, 0, 0,
+           pendingSOS.latitude_e7, pendingSOS.longitude_e7,
+           pendingSOS.flags, pendingSOS.hopCount, sosAttempts);
   relayReceipt.sosAttempt(NODE_ID, pendingSOS.sequenceNumber, state == RADIOLIB_ERR_NONE);
   Serial.printf("[RECEIPT] SOS event=%lu neighbor=%s farEnd=%s txOK=%u\n",
     (unsigned long)pendingSOS.sequenceNumber,
@@ -778,6 +802,8 @@ void transmitSOS() {
   strncpy(pendingSOS.message, "SOS", sizeof(pendingSOS.message) - 1);
   pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
   sosPending = true;
+  SD_EVENT(true, "sos_local_start", NODE_ID, selectedId, 0, 0, 0,
+           pendingSOS.latitude_e7, pendingSOS.longitude_e7, pendingSOS.flags);
   relayReceipt.begin(NODE_ID, selectedId);
   Serial.printf("[RECEIPT] SOS event=%lu neighbor=%s farEnd=%s originAuth=UNVERIFIED\n",
     (unsigned long)selectedId,
@@ -796,6 +822,8 @@ static void sendPendingCancel() {
   lastCancelAttempt = millis();
   const int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
   startReceive();
+  SD_EVENT(true, "cancel_tx_attempt", NODE_ID,
+           pendingCancel.sequenceNumber, state, 0, 0, 0, 0, 0, 0, cancelAttempts);
   nextCancelTxAt = millis() + CANCEL_RETRY_MS + ControlRetry::slotDelayMs(NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
   Serial.printf("[CANCEL-A] ATTEMPT %u/%u event=%lu radio=%d; ACK PENDING\n",
     cancelAttempts, CANCEL_MAX_ATTEMPTS,
@@ -825,6 +853,7 @@ void cancelActiveSOS() {
   const uint32_t origin = NODE_ID;
   memcpy(pendingCancel.message + 4, &origin, 4);
   cancelPending = true;
+  SD_EVENT(true, "sos_local_cancel", NODE_ID, activeEmergencyId, 0);
   cancelAttempts = 0;
   sosPending = false; // Deliberate cancellation stops the prior SOS retries.
   activeEmergency = false; // New SOS can begin before this cancel is ACKed.
@@ -843,6 +872,7 @@ void processCancelRetries() {
   if (cancelAttempts >= CANCEL_MAX_ATTEMPTS) {
     Serial.printf("[CANCEL-A] UNCONFIRMED after %u attempts event=%lu; REMOTE STATE UNKNOWN\n",
       cancelAttempts, (unsigned long)pendingCancel.sequenceNumber);
+    SD_EVENT(true, "cancel_unconfirmed", NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
     cancelPending = false;
     return;
   }
@@ -858,6 +888,7 @@ void processSOSRetries() {
       (unsigned long)pendingSOS.sequenceNumber,
       RelayReceipt::neighborName(relayReceipt.snapshot().neighbor),
       RelayReceipt::farEndName(relayReceipt.snapshot().farEnd));
+    SD_EVENT(true, "sos_unconfirmed", NODE_ID, pendingSOS.sequenceNumber, sosAttempts);
     sosPending = false; // Transmission session ended; not emergency resolution.
     return;
   }
@@ -945,6 +976,9 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       Serial.println("[PEER-SOS] CANCEL_MISMATCH payload; NO ACK"); prepareRelayAfterSOSState(p, false, "CANCEL_PAYLOAD"); return;
     }
     const auto result=peerSOSTable.cancel(p.originNodeId,cancelId,millis());
+    SD_EVENT(true, "cancel_rx", p.originNodeId, cancelId, (int32_t)result,
+             rssi, (int16_t)(snr * 10.0f), p.latitude_e7,
+             p.longitude_e7, p.flags, p.hopCount);
     prepareRelayAfterSOSState(p, result==MultiPeerSOS::Result::Cancelled, MultiPeerSOS::name(result));
     Serial.printf("[PEER-SOS] CANCEL origin=%lu event=%lu result=%s\n",
       (unsigned long)p.originNodeId,(unsigned long)cancelId,MultiPeerSOS::name(result));
@@ -958,12 +992,16 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     encodeSOSAck(ack,cancelId,cancelOrigin);
     const int rc=transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack),sizeof(ack));
     startReceive();
+    SD_EVENT(true, "cancel_ack_tx", NODE_ID, cancelId, rc);
     Serial.printf("[PEER-SOS] CANCEL ACK origin=%lu event=%lu radio=%d; NOT RESCUE RESOLVED\n",
       (unsigned long)p.originNodeId,(unsigned long)cancelId,rc);
     return;
   }
   if (p.packetType == PACKET_SOS) {
     const auto result=peerSOSTable.receiveSOS(p.originNodeId,p.sequenceNumber,millis());
+    SD_EVENT(true, "sos_rx", p.originNodeId, p.sequenceNumber,
+             (int32_t)result, rssi, (int16_t)(snr * 10.0f),
+             p.latitude_e7, p.longitude_e7, p.flags, p.hopCount);
     prepareRelayAfterSOSState(p, result==MultiPeerSOS::Result::New, MultiPeerSOS::name(result));
     Serial.printf("[PEER-SOS] SOS origin=%lu event=%lu result=%s\n",
       (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,MultiPeerSOS::name(result));
@@ -988,6 +1026,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     encodeSOSAck(ack,p.sequenceNumber,p.originNodeId);
     const int rc=transmitWithIdentity(reinterpret_cast<uint8_t*>(&ack),sizeof(ack));
     startReceive();
+    SD_EVENT(true, "sos_ack_tx", NODE_ID, p.sequenceNumber, rc);
     Serial.printf("[PEER-SOS] SOS ACK origin=%lu event=%lu radio=%d (direct-neighbor receipt)\n",
       (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,rc);
     return;
@@ -1001,6 +1040,8 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       Serial.printf("[CANCEL-A] ACK RECEIVED from Vessel-B for event=%lu after %u attempt(s)\n",
         (unsigned long)ackId, cancelAttempts);
       cancelPending = false;
+      SD_EVENT(true, "cancel_ack_rx", p.originNodeId, ackId, 0,
+               rssi, (int16_t)(snr * 10.0f));
       if (relayReceipt.cancelAck(NODE_ID, ackId, p.originNodeId)) {
         Serial.printf("[RECEIPT] CANCEL event=%lu neighborCancelAck=CLAIMED sender=%lu farEnd=UNVERIFIED originAuth=UNVERIFIED\n",
           (unsigned long)ackId, (unsigned long)p.originNodeId);
@@ -1022,6 +1063,8 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       Serial.printf("[SOS-A] ACK RECEIVED from Vessel-B for SOS seq=%lu after %u attempt(s)\n",
         (unsigned long)pendingSOS.sequenceNumber, sosAttempts);
       sosPending = false;
+      SD_EVENT(true, "sos_ack_rx", p.originNodeId, pendingSOS.sequenceNumber,
+               0, rssi, (int16_t)(snr * 10.0f));
     } else {
       Serial.println("[SOS-A] Ignored unrelated or expired SOS ACK");
     }
@@ -1051,6 +1094,9 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     const MultiPeerTelemetry::Result result = peerTelemetry.observe(
         p.originNodeId, p.sequenceNumber, traceReceiveMs, rssi, snr,
         validPosition, peerLat, peerLon, p.weather.weatherState, p.timestamp);
+    SD_EVENT(false, "telemetry_rx", p.originNodeId, p.sequenceNumber,
+             (int32_t)result, rssi, (int16_t)(snr * 10.0f),
+             p.latitude_e7, p.longitude_e7, p.flags, p.hopCount);
     const MultiPeerTelemetry::Peer* peer = peerTelemetry.find(p.originNodeId);
     if (result == MultiPeerTelemetry::Result::Restart) {
       Serial.printf("[PEER-SESSION] RESTART id=%lu session=%lu uptime=%lu seq=%lu; PDR baseline reset\n",

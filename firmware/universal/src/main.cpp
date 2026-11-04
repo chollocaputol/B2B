@@ -25,8 +25,20 @@
 #error "MAC_CAD_MODE must be 0, 1, or 2"
 #endif
 #include <XPowersLib.h>
+#ifndef THESIS_SD_LOGGER
+#define THESIS_SD_LOGGER 0
+#endif
+#if THESIS_SD_LOGGER == 1
+#include "../../shared/thesis_sd_logger.h"
+#endif
 #include <U8g2lib.h>
 #include "weather_manager.h"
+#ifndef THESIS_SD_PROBE
+#define THESIS_SD_PROBE 0
+#endif
+#if THESIS_SD_PROBE == 1
+#include "../../shared/sd_probe.h"
+#endif
 #include <esp_timer.h>  // 64-bit uptime counter
 
 // ============================================================
@@ -301,6 +313,17 @@ void switchI2C(uint8_t sda, uint8_t scl) {
 // ============================================================
 // SETUP
 // ============================================================
+#if THESIS_SD_LOGGER == 1
+// The single logger instance is owned by main.cpp; radio code only queues.
+bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
+                    uint32_t seq, int32_t result, int16_t rssi,
+                    int16_t snrX10, int32_t latE7, int32_t lonE7,
+                    uint8_t flags, uint8_t hops, uint8_t attempt) {
+    return ThesisSDLogger::queueEvent(urgent, kind, origin, seq, result,
+                                     rssi, snrX10, latE7, lonE7,
+                                     flags, hops, attempt);
+}
+#endif
 void setup() {
   Serial.begin(115200);
   delay(1200);
@@ -319,6 +342,9 @@ void setup() {
   Serial.println("[OLED] Tap GPIO0: next page; on ALERT page hold >=900ms: LIVE/NORMAL/FRONT/SQUALL demo");
 
   setupPMU();
+#if THESIS_SD_PROBE == 1
+  ThesisSD::probe(pmu);
+#endif
   setupOLED();
   setupSensors();
   setupGPS();
@@ -326,6 +352,9 @@ void setup() {
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
+#if THESIS_SD_LOGGER == 1
+  ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
+#endif
 
   // Each boot receives a different first telemetry slot. Subsequent intervals
   // vary independently; no change to SOS timing or packet serialization.
@@ -352,6 +381,9 @@ void setup() {
 // MAIN LOOP
 // ============================================================
 void loop() {
+#if THESIS_SD_LOGGER == 1
+  ThesisSDLogger::poll();
+#endif
   updateGPS();
   processSerialTestCommands();
   const auto action = SOSControls::pollAction(hasActiveLocalSOS());

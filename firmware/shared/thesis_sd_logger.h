@@ -1,0 +1,362 @@
+#pragma once
+
+#include <Arduino.h>
+#include <SPI.h>
+#include <SD.h>
+#include <XPowersLib.h>
+
+namespace ThesisSDLogger {
+
+static SPIClass sdSPI(HSPI);
+static bool ready = false;
+static uint32_t lastHeartbeat = 0;
+static uint32_t vesselId = 0;
+
+static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 30000UL;
+
+static const char* DIRECTORY = "/THESIS/VESSEL_002";
+static const char* DIAGNOSTICS =
+    "/THESIS/VESSEL_002/diagnostics.jsonl";
+inline bool appendRecord(const char* path, const char* record);
+static const char* TELEMETRY = "/THESIS/VESSEL_002/telemetry.jsonl";
+static const char* SOS_EVENTS = "/THESIS/VESSEL_002/sos_events.jsonl";
+
+// All SD operations run only in main loop, never in radio RX/TX handlers.
+// Two bounded FIFOs allow SOS events to take precedence over telemetry.
+static constexpr uint8_t EVENT_CAPACITY = 24;
+struct EventRecord { char line[320]; };
+struct EventQueue {
+    EventRecord entries[EVENT_CAPACITY];
+    uint8_t read = 0, write = 0, count = 0;
+};
+static EventQueue urgentQueue;
+static EventQueue telemetryQueue;
+static uint32_t bootToken = 0;
+static uint32_t eventCounter = 0;
+static uint32_t lostUrgent = 0, lostTelemetry = 0;
+static uint32_t lastDropNotice = 0;
+
+inline bool queueEvent(bool urgent, const char* kind, uint32_t origin,
+                       uint32_t seq, int32_t result, int16_t rssi = 0,
+                       int16_t snrX10 = 0, int32_t latE7 = 0,
+                       int32_t lonE7 = 0, uint8_t flags = 0,
+                       uint8_t hops = 0, uint8_t attempt = 0) {
+    if (!ready) return false;
+    EventQueue &q = urgent ? urgentQueue : telemetryQueue;
+    if (q.count >= EVENT_CAPACITY) {
+        if (urgent) ++lostUrgent; else ++lostTelemetry;
+        return false;
+    }
+    char &first = q.entries[q.write].line[0];
+    const int len = snprintf(&first, sizeof(q.entries[q.write].line),
+        "{\"kind\":\"%s\",\"vessel_id\":%lu,\"boot_token\":%lu,"
+        "\"event_index\":%lu,\"uptime_ms\":%lu,\"origin_id\":%lu,"
+        "\"seq\":%lu,\"result\":%ld,\"rssi\":%d,\"snr_x10\":%d,"
+        "\"lat_e7\":%ld,\"lon_e7\":%ld,\"flags\":%u,"
+        "\"hops\":%u,\"attempt\":%u}",
+        kind, (unsigned long)vesselId, (unsigned long)bootToken,
+        (unsigned long)(++eventCounter), (unsigned long)millis(),
+        (unsigned long)origin, (unsigned long)seq, (long)result,
+        (int)rssi, (int)snrX10, (long)latE7, (long)lonE7,
+        (unsigned)flags, (unsigned)hops, (unsigned)attempt);
+    if (len < 0 || (size_t)len >= sizeof(q.entries[q.write].line)) {
+        if (urgent) ++lostUrgent; else ++lostTelemetry;
+        return false;
+    }
+    q.write = (q.write + 1) % EVENT_CAPACITY;
+    ++q.count;
+    return true;
+}
+
+inline void pollEvents() {
+    if (!ready) return;
+    EventQueue &q = urgentQueue.count ? urgentQueue : telemetryQueue;
+    if (q.count) {
+        const char* path = urgentQueue.count ? SOS_EVENTS : TELEMETRY;
+        // One append+flush per loop iteration: no SPI writes in radio callbacks.
+        if (!appendRecord(path, q.entries[q.read].line)) {
+            Serial.println("[SD-EVENT] WRITE_FAILED; LOGGER_DISABLED");
+            ready = false;
+            return;
+        }
+        q.read = (q.read + 1) % EVENT_CAPACITY;
+        --q.count;
+    }
+    const uint32_t now = millis();
+    if ((lostUrgent || lostTelemetry) &&
+        uint32_t(now - lastDropNotice) >= 5000UL) {
+        lastDropNotice = now;
+        Serial.printf("[SD-EVENT] DROPPED urgent=%lu telemetry=%lu\n",
+          (unsigned long)lostUrgent, (unsigned long)lostTelemetry);
+    }
+}
+
+
+inline bool appendRecord(const char* path, const char* record) {
+    if (!ready) return false;
+
+    File file = SD.open(path, FILE_APPEND);
+
+    if (!file) {
+        Serial.println("[SD-LOG] OPEN_FAIL");
+        return false;
+    }
+
+    const size_t expected = strlen(record) + 1;
+    const size_t written = file.print(record) + file.print('\n');
+
+    file.flush();
+    file.close();
+
+    if (written != expected) {
+        Serial.println("[SD-LOG] WRITE_FAIL");
+        return false;
+    }
+
+    return true;
+}
+
+inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
+    Serial.println("[SD-LOG] START");
+
+    vesselId = id;
+
+    // This test profile must never write to another vessel's folder.
+    if (vesselId != 2) {
+        Serial.println("[SD-LOG] WRONG_VESSEL_ID");
+        return false;
+    }
+
+    if (!pmu.setBLDO1Voltage(3300)) {
+        Serial.println("[SD-LOG] REGULATOR_CONFIG_FAIL");
+        return false;
+    }
+
+    pmu.enableBLDO1();
+    delay(200);
+
+    if (!pmu.isEnableBLDO1()) {
+        Serial.println("[SD-LOG] POWER_FAIL");
+        return false;
+    }
+
+    pinMode(34, OUTPUT);
+    digitalWrite(34, HIGH);
+
+    pinMode(47, OUTPUT);
+    digitalWrite(47, HIGH);
+
+    sdSPI.begin(36, 37, 35, 47);
+
+    // Last argument false: do not format on mount failure.
+    if (!SD.begin(47, sdSPI, 1000000, "/sd", 5, false)) {
+        Serial.println("[SD-LOG] MOUNT_FAIL");
+        return false;
+    }
+
+    Serial.printf(
+        "[SD-LOG] MOUNT_OK capacity_mib=%llu\n",
+        (unsigned long long)(SD.cardSize() / 1048576ULL)
+    );
+
+    if (!SD.exists("/THESIS") && !SD.mkdir("/THESIS")) {
+        Serial.println("[SD-LOG] ROOT_CREATE_FAIL");
+        return false;
+    }
+
+    if (!SD.exists(DIRECTORY) && !SD.mkdir(DIRECTORY)) {
+        Serial.println("[SD-LOG] VESSEL_DIR_CREATE_FAIL");
+        return false;
+    }
+
+    File dir = SD.open(DIRECTORY, FILE_READ);
+
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("[SD-LOG] VESSEL_DIR_INVALID");
+        if (dir) dir.close();
+        return false;
+    }
+
+    dir.close();
+
+    // Inspect the existing thesis journal before adding a new record.
+    // Read at most 64 KiB to keep startup work bounded.
+    uint64_t bytesBefore = 0;
+    uint32_t priorLines = 0;
+    bool lastLineComplete = false;
+
+    if (SD.exists(DIAGNOSTICS)) {
+        File previous = SD.open(DIAGNOSTICS, FILE_READ);
+
+        if (!previous) {
+            Serial.println("[SD-VERIFY] PRIOR_OPEN_FAIL");
+            return false;
+        }
+
+        bytesBefore = previous.size();
+
+        if (bytesBefore <= 65536ULL) {
+            char current[192] = {};
+            char last[192] = {};
+            size_t used = 0;
+
+            while (previous.available()) {
+                int ch = previous.read();
+
+                if (ch < 0) break;
+
+                if (ch == '\n') {
+                    current[used] = '\0';
+                    strncpy(last, current, sizeof(last) - 1);
+                    last[sizeof(last) - 1] = '\0';
+                    used = 0;
+                    priorLines++;
+                    lastLineComplete = true;
+                } else if (ch != '\r') {
+                    if (used < sizeof(current) - 1) {
+                        current[used++] = (char)ch;
+                    }
+                    lastLineComplete = false;
+                }
+            }
+
+            Serial.printf(
+                "[SD-VERIFY] PRIOR_LINES=%lu complete=%u\n",
+                (unsigned long)priorLines,
+                (unsigned)lastLineComplete
+            );
+
+            if (priorLines > 0) {
+                Serial.printf("[SD-VERIFY] LAST_RECORD=%s\n", last);
+            }
+        } else {
+            Serial.println("[SD-VERIFY] SCAN_SKIPPED_OVER_64K");
+        }
+
+        previous.close();
+    }
+
+    Serial.printf(
+        "[SD-VERIFY] BEFORE_BYTES=%llu\n",
+        (unsigned long long)bytesBefore
+    );
+
+    bootToken = esp_random();
+    eventCounter = 0;
+    urgentQueue = EventQueue{};
+    telemetryQueue = EventQueue{};
+    lostUrgent = lostTelemetry = 0;
+    lastDropNotice = millis();
+    ready = true;
+
+    char record[160];
+
+    snprintf(
+        record,
+        sizeof(record),
+        "{\"kind\":\"boot\",\"vessel_id\":%lu,\"uptime_ms\":%lu}",
+        (unsigned long)vesselId,
+        (unsigned long)millis()
+    );
+
+    if (!appendRecord(DIAGNOSTICS, record)) {
+        ready = false;
+        Serial.println("[SD-LOG] BOOT_WRITE_FAIL");
+        return false;
+    }
+
+    File verification = SD.open(DIAGNOSTICS, FILE_READ);
+
+    if (!verification) {
+        ready = false;
+        Serial.println("[SD-VERIFY] READBACK_OPEN_FAIL");
+        return false;
+    }
+
+    uint64_t bytesAfter = verification.size();
+    verification.close();
+
+    if (bytesAfter <= bytesBefore) {
+        ready = false;
+        Serial.println("[SD-VERIFY] FILE_NOT_GROWING");
+        return false;
+    }
+
+    Serial.printf(
+        "[SD-VERIFY] AFTER_BYTES=%llu DELTA=%llu\n",
+        (unsigned long long)bytesAfter,
+        (unsigned long long)(bytesAfter - bytesBefore)
+    );
+
+    lastHeartbeat = millis();
+
+    Serial.println("[SD-LOG] BOOT_WRITE_OK");
+    Serial.println("[SD-LOG] READY path=/THESIS/VESSEL_002");
+
+    return true;
+}
+
+inline void poll() {
+    if (!ready) return;
+    pollEvents();
+    if (!ready) return;
+
+    // Read-only storage audit, once every 30 seconds.
+    static uint32_t lastAuditMs = 0;
+    if (uint32_t(millis() - lastAuditMs) >= 30000UL) {
+        lastAuditMs = millis();
+
+        uint64_t telemetryBytes = 0;
+        uint64_t sosBytes = 0;
+
+        File telemetryFile = SD.open(TELEMETRY, FILE_READ);
+        if (telemetryFile) {
+            telemetryBytes = telemetryFile.size();
+            telemetryFile.close();
+        }
+
+        File sosFile = SD.open(SOS_EVENTS, FILE_READ);
+        if (sosFile) {
+            sosBytes = sosFile.size();
+            sosFile.close();
+        }
+
+        Serial.printf(
+            "[SD-AUDIT] telemetry_bytes=%llu sos_bytes=%llu queued_telemetry=%u queued_sos=%u dropped_telemetry=%lu dropped_sos=%lu events=%lu\n",
+            (unsigned long long)telemetryBytes,
+            (unsigned long long)sosBytes,
+            (unsigned)telemetryQueue.count,
+            (unsigned)urgentQueue.count,
+            (unsigned long)lostTelemetry,
+            (unsigned long)lostUrgent,
+            (unsigned long)eventCounter
+        );
+    }
+
+    uint32_t now = millis();
+
+    if (uint32_t(now - lastHeartbeat) < HEARTBEAT_INTERVAL_MS) {
+        return;
+    }
+
+    lastHeartbeat = now;
+
+    char record[160];
+
+    snprintf(
+        record,
+        sizeof(record),
+        "{\"kind\":\"heartbeat\",\"vessel_id\":%lu,\"uptime_ms\":%lu}",
+        (unsigned long)vesselId,
+        (unsigned long)now
+    );
+
+    if (appendRecord(DIAGNOSTICS, record)) {
+        Serial.println("[SD-LOG] HEARTBEAT_WRITE_OK");
+    } else {
+        ready = false;
+        Serial.println("[SD-LOG] DISABLED_AFTER_WRITE_FAIL");
+    }
+}
+
+}

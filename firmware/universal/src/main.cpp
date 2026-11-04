@@ -545,6 +545,18 @@ void loop() {
 // ============================================================
 void setupPMU() {
   if (!TBeamHardware::beginPower(PMUWire, pmu)) return;
+  // External BME680 and DHT20 power: independent of microSD logging.
+  const bool bldo2Configured = pmu.setBLDO2Voltage(3300);
+  if (!bldo2Configured) {
+    Serial.println("[PMU] ERROR: BLDO2 sensor rail voltage configuration failed");
+  } else {
+    pmu.enableBLDO2();
+    if (!pmu.isEnableBLDO2()) {
+      Serial.println("[PMU] ERROR: BLDO2 sensor rail not enabled");
+    } else {
+      Serial.println("[PMU] BLDO2 sensor rail enabled (3.3V configured)");
+    }
+  }
   Serial.println("[PMU] Initialized; OLED and GPS rails enabled");
 }
 

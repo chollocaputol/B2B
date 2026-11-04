@@ -39,6 +39,15 @@
 #include <math.h>
 #include <string.h>
 #include <Preferences.h>
+#ifndef THESIS_F05_RECOVERY
+#define THESIS_F05_RECOVERY 0
+#endif
+#if THESIS_F05_RECOVERY != 0 && THESIS_F05_RECOVERY != 1
+#error "THESIS_F05_RECOVERY must be 0 or 1"
+#endif
+#if THESIS_F05_RECOVERY == 1
+#include "../../shared/f05_sos_recovery.h"
+#endif
 #ifndef THESIS_SD_LOGGER
 #define THESIS_SD_LOGGER 0
 #endif
@@ -294,6 +303,105 @@ static unsigned long lastCancelAttempt = 0;
 static uint32_t nextCancelTxAt = 0;
 static constexpr uint8_t CANCEL_MAX_ATTEMPTS = 4;
 static constexpr unsigned long CANCEL_RETRY_MS = 4500UL;
+
+#if THESIS_F05_RECOVERY == 1
+// F05 bench-only persistent recovery. Both critical event IDs occupy a single
+// versioned snapshot and alternate NVS keys. CRC detects accidental corruption;
+// it is not authentication and does not authorize a radio relay.
+namespace F05Recovery {
+static State saved{};
+static bool storageBlocked = false;
+static bool recoveredCancelNeedsHold = false;
+
+inline bool save(uint32_t active, uint32_t cancel, uint32_t attempts,
+                 uint32_t status) {
+  if (!nvsReady || storageBlocked || !VesselIdentity::ready()) return false;
+  const uint32_t gen = saved.generation + 1UL;
+  const State next = make(NODE_ID, gen ? gen : 1UL,
+                          active, cancel, attempts, status);
+  if (!valid(next, NODE_ID, nextEmergencyId)) {
+    Serial.println("[F05-RECOVERY] INVALID_TRANSITION; TX BLOCKED");
+    storageBlocked = true;
+    return false;
+  }
+  const char* key = (next.generation & 1UL) ? "f05a" : "f05b";
+  if (emergencyPrefs.putBytes(key, &next, sizeof(next)) != sizeof(next)) {
+    Serial.println("[F05-RECOVERY] WRITE_FAILED; TX BLOCKED");
+    storageBlocked = true;
+    return false;
+  }
+  State roundtrip{};
+  if (emergencyPrefs.getBytesLength(key) != sizeof(roundtrip) ||
+      emergencyPrefs.getBytes(key, &roundtrip, sizeof(roundtrip)) != sizeof(roundtrip) ||
+      memcmp(&next, &roundtrip, sizeof(next)) != 0 ||
+      !valid(roundtrip, NODE_ID, nextEmergencyId)) {
+    Serial.println("[F05-RECOVERY] READBACK_FAILED; TX BLOCKED");
+    storageBlocked = true;
+    return false;
+  }
+  saved = next;
+  return true;
+}
+
+inline void restore() {
+  if (!nvsReady || !VesselIdentity::ready()) {
+    storageBlocked = true;
+    Serial.println("[F05-RECOVERY] NVS_OR_IDENTITY_UNAVAILABLE; TX BLOCKED");
+    return;
+  }
+  const size_t sizeA = emergencyPrefs.getBytesLength("f05a");
+  const size_t sizeB = emergencyPrefs.getBytesLength("f05b");
+  State a{}, b{};
+  const bool validA = sizeA == sizeof(a) &&
+    emergencyPrefs.getBytes("f05a", &a, sizeof(a)) == sizeof(a) &&
+    valid(a, NODE_ID, nextEmergencyId);
+  const bool validB = sizeB == sizeof(b) &&
+    emergencyPrefs.getBytes("f05b", &b, sizeof(b)) == sizeof(b) &&
+    valid(b, NODE_ID, nextEmergencyId);
+  if (!validA && !validB) {
+    if (sizeA || sizeB) {
+      storageBlocked = true;
+      Serial.println("[F05-RECOVERY] NO_VALID_NVS_SNAPSHOT; TX BLOCKED");
+    } else {
+      Serial.println("[F05-RECOVERY] CLEAN_BOOT no unresolved checkpoint");
+    }
+    return;
+  }
+  saved = (!validB || (validA && newer(a.generation, b.generation))) ? a : b;
+  if ((sizeA && !validA) || (sizeB && !validB))
+    Serial.println("[F05-RECOVERY] WARNING: one damaged slot; recovered older valid state");
+
+  // Restoring identity must NEVER silently restart SOS or CANCEL radio TX.
+  // The operator can deliberately hold GPIO2 to cancel the active SOS or
+  // resume an older pending cancellation; no SD card is involved.
+  activeEmergency = saved.activeId != 0;
+  activeEmergencyId = saved.activeId;
+  sosPending = false;
+  cancelPending = saved.cancelStatus == kCancelPending;
+  cancelAttempts = static_cast<uint8_t>(saved.cancelAttempts);
+  recoveredCancelNeedsHold = cancelPending;
+  if (cancelPending) {
+    memset(&pendingCancel, 0, sizeof(pendingCancel));
+    pendingCancel.magic = PACKET_MAGIC;
+    pendingCancel.version = PACKET_VERSION;
+    pendingCancel.packetType = PACKET_SOS_CANCEL;
+    pendingCancel.originNodeId = NODE_ID;
+    pendingCancel.sequenceNumber = saved.cancelId;
+    pendingCancel.timestamp = millis() / 1000UL;
+    strncpy(pendingCancel.nodeName, NODE_NAME, sizeof(pendingCancel.nodeName) - 1);
+    memcpy(pendingCancel.message, &saved.cancelId, 4);
+    const uint32_t origin = NODE_ID;
+    memcpy(pendingCancel.message + 4, &origin, 4);
+  }
+  Serial.printf("[F05-RECOVERY] RESTORED active=%lu pendingCancel=%lu "
+                "cancelAttempts=%lu status=%lu AUTO_TX=OFF HOLD=REQUIRED\n",
+                (unsigned long)saved.activeId, (unsigned long)saved.cancelId,
+                (unsigned long)saved.cancelAttempts, (unsigned long)saved.cancelStatus);
+  if (saved.cancelStatus == kCancelUnconfirmed)
+    Serial.println("[F05-RECOVERY] CANCEL_UNCONFIRMED; retry budget exhausted");
+}
+} // namespace F05Recovery
+#endif // THESIS_F05_RECOVERY
 
 
 static MultiPeerTelemetry::Table peerTelemetry;
@@ -775,9 +883,15 @@ void setupEmergencyIdentity() {
   }
   nextEmergencyId = emergencyPrefs.getUInt("nextId", 1);
   Serial.printf("[SOS-ID] Next persistent ID=%lu\n", (unsigned long)nextEmergencyId);
+#if THESIS_F05_RECOVERY == 1
+  F05Recovery::restore();
+#endif
 }
 
 void transmitSOS() {
+#if THESIS_F05_RECOVERY == 1
+  if (F05Recovery::storageBlocked) { Serial.println("[F05-RECOVERY] SOS BLOCKED, NVS unsafe"); return; }
+#endif
   if (!VesselIdentity::ready()) { Serial.println("[IDENTITY] SOS BLOCKED: not provisioned"); return; }
   if (activeEmergency || sosPending) {
     Serial.println("[SOS-A] EXISTING UNRESOLVED SOS; cancel deliberately before starting a new one");
@@ -794,6 +908,15 @@ void transmitSOS() {
     return;
   }
   nextEmergencyId = selectedId + 1;
+#if THESIS_F05_RECOVERY == 1
+  // SOS identity is reserved first. Persist its active state before any RF TX.
+  if (!F05Recovery::save(selectedId, F05Recovery::saved.cancelId,
+                         F05Recovery::saved.cancelAttempts,
+                         F05Recovery::saved.cancelStatus)) {
+    Serial.println("[F05-RECOVERY] SOS NOT STARTED; NVS checkpoint failed");
+    return;
+  }
+#endif
   createPacket(pendingSOS, false);
   pendingSOS.sequenceNumber = selectedId;
   activeEmergencyId = selectedId;
@@ -818,6 +941,12 @@ void transmitSOS() {
 // rather than silently replacing the older event's cancellation.
 static void sendPendingCancel() {
   if (!cancelPending) return;
+#if THESIS_F05_RECOVERY == 1
+  if (F05Recovery::recoveredCancelNeedsHold || F05Recovery::storageBlocked) return;
+  // Reserve this RF attempt before transmitting; reboot cannot reset budget.
+  if (!F05Recovery::save(F05Recovery::saved.activeId, pendingCancel.sequenceNumber,
+                         (uint32_t)cancelAttempts + 1UL, F05Recovery::kCancelPending)) return;
+#endif
   ++cancelAttempts;
   lastCancelAttempt = millis();
   const int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
@@ -830,9 +959,27 @@ static void sendPendingCancel() {
     (unsigned long)pendingCancel.sequenceNumber, state);
 }
 
-bool hasActiveLocalSOS() { return activeEmergency; }
+bool hasActiveLocalSOS() {
+#if THESIS_F05_RECOVERY == 1
+  // A recovered pending cancellation requires a deliberate 5s hold.
+  return activeEmergency || F05Recovery::recoveredCancelNeedsHold;
+#else
+  return activeEmergency;
+#endif
+}
 
 void cancelActiveSOS() {
+#if THESIS_F05_RECOVERY == 1
+  if (F05Recovery::storageBlocked) { Serial.println("[F05-RECOVERY] CANCEL BLOCKED, NVS unsafe"); return; }
+  if (F05Recovery::recoveredCancelNeedsHold && cancelPending) {
+    F05Recovery::recoveredCancelNeedsHold = false;
+    nextCancelTxAt = millis() + ControlRetry::slotDelayMs(
+        NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
+    Serial.printf("[F05-RECOVERY] MANUAL_CANCEL_RESUMED event=%lu remaining=%u; NOT RESCUE RESOLVED\n",
+      (unsigned long)pendingCancel.sequenceNumber, (unsigned)(CANCEL_MAX_ATTEMPTS - cancelAttempts));
+    return;
+  }
+#endif
   if (!activeEmergency) {
     Serial.println("[SOS-A] No active emergency to cancel");
     return;
@@ -841,6 +988,13 @@ void cancelActiveSOS() {
     Serial.println("[CANCEL-A] Previous cancel pending; cannot queue another cancellation yet");
     return;
   }
+#if THESIS_F05_RECOVERY == 1
+  // Durable intent before clearing active distress or scheduling CANCEL RF.
+  if (!F05Recovery::save(0, activeEmergencyId, 0, F05Recovery::kCancelPending)) {
+    Serial.println("[F05-RECOVERY] LOCAL CANCEL NOT APPLIED; NVS write failed");
+    return;
+  }
+#endif
   memset(&pendingCancel, 0, sizeof(pendingCancel));
   pendingCancel.magic = PACKET_MAGIC;
   pendingCancel.version = PACKET_VERSION;
@@ -868,8 +1022,15 @@ void cancelActiveSOS() {
 }
 
 void processCancelRetries() {
+#if THESIS_F05_RECOVERY == 1
+  if (F05Recovery::storageBlocked || F05Recovery::recoveredCancelNeedsHold) return;
+#endif
   if (!cancelPending || !ControlRetry::due(millis(), nextCancelTxAt)) return;
   if (cancelAttempts >= CANCEL_MAX_ATTEMPTS) {
+#if THESIS_F05_RECOVERY == 1
+    if (!F05Recovery::save(F05Recovery::saved.activeId, pendingCancel.sequenceNumber,
+                           cancelAttempts, F05Recovery::kCancelUnconfirmed)) return;
+#endif
     Serial.printf("[CANCEL-A] UNCONFIRMED after %u attempts event=%lu; REMOTE STATE UNKNOWN\n",
       cancelAttempts, (unsigned long)pendingCancel.sequenceNumber);
     SD_EVENT(true, "cancel_unconfirmed", NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
@@ -880,6 +1041,9 @@ void processCancelRetries() {
 }
 
 void processSOSRetries() {
+#if THESIS_F05_RECOVERY == 1
+  if (F05Recovery::storageBlocked) return;
+#endif
   if (!sosPending || !ControlRetry::due(millis(), nextSOSTxAt)) return;
   if (sosAttempts >= SOS_MAX_ATTEMPTS) {
     Serial.printf("[SOS-A] UNCONFIRMED after %u attempts; emergency NOT resolved\n", sosAttempts);
@@ -1037,6 +1201,14 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     memcpy(&ackOrigin, p.message + 4, 4);
     if (cancelPending && ackOrigin == NODE_ID &&
         ackId == pendingCancel.sequenceNumber) {
+#if THESIS_F05_RECOVERY == 1
+      // Matching neighbor ACK: clear durable pending cancellation first.
+      if (!F05Recovery::save(F05Recovery::saved.activeId, 0, 0, F05Recovery::kCancelNone)) {
+        Serial.println("[F05-RECOVERY] ACK OBSERVED BUT CHECKPOINT FAILED");
+        return;
+      }
+      F05Recovery::recoveredCancelNeedsHold = false;
+#endif
       Serial.printf("[CANCEL-A] ACK RECEIVED from Vessel-B for event=%lu after %u attempt(s)\n",
         (unsigned long)ackId, cancelAttempts);
       cancelPending = false;

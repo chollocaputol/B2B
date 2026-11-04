@@ -336,7 +336,20 @@ bool pollSDExportCommand() {
     int c = Serial.read();
     if (c == '\n' || c == '\r') {
       command[used] = '\0';
-      if (strcmp(command, "SD EXPORT") == 0) ThesisSDLogger::requestExport();
+      if (strcmp(command, "SD EXPORT") == 0) {
+#if THESIS_F06_SD_SANDBOX == 1
+        if (ThesisSDLogger::historyReadActive())
+          Serial.println("[SDH] ERROR HISTORY_BUSY");
+        else
+#endif
+          ThesisSDLogger::requestExport();
+      }
+#if THESIS_F06_SD_SANDBOX == 1
+      else if (strcmp(command, "SD LIST") == 0)
+        ThesisSDLogger::listHistory();
+      else if (strncmp(command, "SD READ ", 8) == 0)
+        ThesisSDLogger::requestHistory(command + 8);
+#endif
       else Serial.println("[SDX] ERROR UNKNOWN_COMMAND");
       used = 0;
       return true;
@@ -411,6 +424,9 @@ void setup() {
 void loop() {
 #if THESIS_SD_LOGGER == 1
   ThesisSDLogger::poll();
+#endif
+#if THESIS_F06_SD_SANDBOX == 1
+  ThesisSDLogger::pollHistory();
 #endif
   updateGPS();
 #if THESIS_SD_LOGGER == 1

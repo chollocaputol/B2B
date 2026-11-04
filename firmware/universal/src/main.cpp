@@ -324,6 +324,34 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
                                      flags, hops, attempt);
 }
 #endif
+
+#if THESIS_SD_LOGGER == 1
+// Existing TEST commands remain handled by processSerialTestCommands().
+bool pollSDExportCommand() {
+  static char command[24];
+  static uint8_t used = 0;
+  if (!Serial.available() || (used == 0 && Serial.peek() != 'S')) return false;
+  // Only runs after the first 'S' has arrived; await the newline across loops.
+  while (Serial.available()) {
+    int c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      command[used] = '\0';
+      if (strcmp(command, "SD EXPORT") == 0) ThesisSDLogger::requestExport();
+      else Serial.println("[SDX] ERROR UNKNOWN_COMMAND");
+      used = 0;
+      return true;
+    }
+    if (used >= sizeof(command) - 1) {
+      used = 0;
+      Serial.println("[SDX] ERROR COMMAND_TOO_LONG");
+      return true;
+    }
+    command[used++] = (char)c;
+  }
+  return true;
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(1200);
@@ -385,7 +413,13 @@ void loop() {
   ThesisSDLogger::poll();
 #endif
   updateGPS();
+#if THESIS_SD_LOGGER == 1
+  const bool sdCommandInProgress = pollSDExportCommand();
+  ThesisSDLogger::pollExport();
+  if (!sdCommandInProgress) processSerialTestCommands();
+#else
   processSerialTestCommands();
+#endif
   const auto action = SOSControls::pollAction(hasActiveLocalSOS());
   if (action == SOSControls::ButtonAction::StartSOS) {
     Serial.println("[SOS-BUTTON-A] Deliberate 1.5s SOS hold recognized");

@@ -296,6 +296,110 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     return true;
 }
 
+
+// USB-only readback: exact byte chunks as hexadecimal, never modifies SD contents.
+// File sizes are snapshotted when requested. One chunk is emitted per loop.
+static const char* exportPaths[] = { SOS_EVENTS, TELEMETRY, DIAGNOSTICS };
+static const char* exportNames[] = { "sos_events.jsonl", "telemetry.jsonl", "diagnostics.jsonl" };
+static bool exportActive = false;
+static uint8_t exportIndex = 0;
+static uint32_t exportOffset = 0;
+static uint32_t exportLimit = 0;
+static uint32_t exportChecksum = 2166136261UL; // FNV-1a for transfer check
+static File exportFile;
+
+inline void requestExport() {
+    if (!ready || vesselId != 2) {
+        Serial.println("[SDX] ERROR LOGGER_NOT_READY");
+        return;
+    }
+    if (exportActive) {
+        Serial.println("[SDX] ERROR BUSY");
+        return;
+    }
+    if (urgentQueue.count || telemetryQueue.count) {
+        Serial.println("[SDX] ERROR QUEUE_NOT_EMPTY_RETRY");
+        return;
+    }
+    exportIndex = 0;
+    exportOffset = 0;
+    exportLimit = 0;
+    exportChecksum = 2166136261UL;
+    exportActive = true;
+    Serial.println("[SDX] SESSION_START files=3 encoding=HEX checksum=FNV1A32");
+}
+
+inline void pollExport() {
+    if (!exportActive) return;
+    if (!ready) {
+        if (exportFile) exportFile.close();
+        exportActive = false;
+        Serial.println("[SDX] ERROR LOGGER_DISABLED");
+        return;
+    }
+    if (!exportFile) {
+        if (exportIndex >= 3) {
+            Serial.println("[SDX] SESSION_END");
+            exportActive = false;
+            return;
+        }
+        exportFile = SD.open(exportPaths[exportIndex], FILE_READ);
+        if (!exportFile) {
+            // A missing file is valid only when it does not exist.
+            if (SD.exists(exportPaths[exportIndex])) {
+                Serial.printf("[SDX] ERROR OPEN_FAILED index=%u\n", (unsigned)exportIndex);
+                exportActive = false;
+                return;
+            }
+            Serial.printf("[SDX] BEGIN %u %s 0\n", (unsigned)exportIndex, exportNames[exportIndex]);
+            Serial.printf("[SDX] END %u 0 %08lX\n", (unsigned)exportIndex, 2166136261UL);
+            ++exportIndex;
+            return;
+        }
+        if (exportFile.size() > 1048576UL) {
+            Serial.printf("[SDX] ERROR FILE_TOO_LARGE index=%u\n", (unsigned)exportIndex);
+            exportFile.close();
+            exportActive = false;
+            return;
+        }
+        exportOffset = 0;
+        exportLimit = (uint32_t)exportFile.size();
+        exportChecksum = 2166136261UL;
+        Serial.printf("[SDX] BEGIN %u %s %lu\n", (unsigned)exportIndex,
+                      exportNames[exportIndex], (unsigned long)exportLimit);
+        return;
+    }
+    if (exportOffset >= exportLimit) {
+        Serial.printf("[SDX] END %u %lu %08lX\n", (unsigned)exportIndex,
+                      (unsigned long)exportOffset, (unsigned long)exportChecksum);
+        exportFile.close();
+        ++exportIndex;
+        return;
+    }
+    static const char hex[] = "0123456789ABCDEF";
+    char encoded[129];
+    const size_t wanted = (exportLimit - exportOffset > 64) ? 64 : (size_t)(exportLimit - exportOffset);
+    size_t actual = 0;
+    for (; actual < wanted; ++actual) {
+        const int v = exportFile.read();
+        if (v < 0) break;
+        const uint8_t byte = (uint8_t)v;
+        encoded[actual*2] = hex[byte >> 4];
+        encoded[actual*2+1] = hex[byte & 15];
+        exportChecksum = (exportChecksum ^ byte) * 16777619UL;
+    }
+    if (actual != wanted) {
+        Serial.printf("[SDX] ERROR EARLY_EOF index=%u\n", (unsigned)exportIndex);
+        exportFile.close();
+        exportActive = false;
+        return;
+    }
+    encoded[actual*2] = '\0';
+    Serial.printf("[SDX] DATA %u %lu %s\n", (unsigned)exportIndex,
+                  (unsigned long)exportOffset, encoded);
+    exportOffset += (uint32_t)actual;
+}
+
 inline void poll() {
     if (!ready) return;
     pollEvents();

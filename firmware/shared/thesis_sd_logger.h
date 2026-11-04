@@ -5,6 +5,14 @@
 #include <SD.h>
 #include <XPowersLib.h>
 
+// 0: original Vessel-002-only experimental profile; 1: identity-aware F11 profile.
+#ifndef THESIS_SD_FLEET
+#define THESIS_SD_FLEET 0
+#endif
+#if THESIS_SD_FLEET != 0 && THESIS_SD_FLEET != 1
+#error "THESIS_SD_FLEET must be 0 or 1"
+#endif
+
 namespace ThesisSDLogger {
 
 static SPIClass sdSPI(HSPI);
@@ -14,12 +22,21 @@ static uint32_t vesselId = 0;
 
 static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 30000UL;
 
-static const char* DIRECTORY = "/THESIS/VESSEL_002";
-static const char* DIAGNOSTICS =
-    "/THESIS/VESSEL_002/diagnostics.jsonl";
+// Runtime paths are derived from validated NVS identity. For ID 2,
+// they remain byte-for-byte identical to the existing SD journal paths.
+static char DIRECTORY[32] = "/THESIS/VESSEL_002";
+static char DIAGNOSTICS[64] = "/THESIS/VESSEL_002/diagnostics.jsonl";
 inline bool appendRecord(const char* path, const char* record);
-static const char* TELEMETRY = "/THESIS/VESSEL_002/telemetry.jsonl";
-static const char* SOS_EVENTS = "/THESIS/VESSEL_002/sos_events.jsonl";
+static char TELEMETRY[64] = "/THESIS/VESSEL_002/telemetry.jsonl";
+static char SOS_EVENTS[64] = "/THESIS/VESSEL_002/sos_events.jsonl";
+
+inline bool isAuthorizedVessel(uint32_t id) {
+#if THESIS_SD_FLEET == 1
+    return id >= 1 && id <= 3;
+#else
+    return id == 2;
+#endif
+}
 
 // All SD operations run only in main loop, never in radio RX/TX handlers.
 // Two bounded FIFOs allow SOS events to take precedence over telemetry.
@@ -121,11 +138,18 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
 
     vesselId = id;
 
-    // This test profile must never write to another vessel's folder.
-    if (vesselId != 2) {
+    // Never initialize storage using an unprovisioned/unknown ID.
+    if (!isAuthorizedVessel(vesselId)) {
         Serial.println("[SD-LOG] WRONG_VESSEL_ID");
         return false;
     }
+
+    // Separate journals prevent a moved SD card from mixing vessels.
+    snprintf(DIRECTORY, sizeof(DIRECTORY), "/THESIS/VESSEL_%03lu",
+             (unsigned long)vesselId);
+    snprintf(DIAGNOSTICS, sizeof(DIAGNOSTICS), "%s/diagnostics.jsonl", DIRECTORY);
+    snprintf(TELEMETRY, sizeof(TELEMETRY), "%s/telemetry.jsonl", DIRECTORY);
+    snprintf(SOS_EVENTS, sizeof(SOS_EVENTS), "%s/sos_events.jsonl", DIRECTORY);
 
     if (!pmu.setBLDO1Voltage(3300)) {
         Serial.println("[SD-LOG] REGULATOR_CONFIG_FAIL");
@@ -291,7 +315,7 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     lastHeartbeat = millis();
 
     Serial.println("[SD-LOG] BOOT_WRITE_OK");
-    Serial.println("[SD-LOG] READY path=/THESIS/VESSEL_002");
+    Serial.printf("[SD-LOG] READY path=%s\n", DIRECTORY);
 
     return true;
 }
@@ -309,7 +333,7 @@ static uint32_t exportChecksum = 2166136261UL; // FNV-1a for transfer check
 static File exportFile;
 
 inline void requestExport() {
-    if (!ready || vesselId != 2) {
+    if (!ready || !isAuthorizedVessel(vesselId)) {
         Serial.println("[SDX] ERROR LOGGER_NOT_READY");
         return;
     }

@@ -4,6 +4,15 @@
 #include <SPI.h>
 #include <SD.h>
 #include <XPowersLib.h>
+#ifndef THESIS_F06_SD_HYBRID
+#define THESIS_F06_SD_HYBRID 0
+#endif
+#if THESIS_F06_SD_HYBRID != 0 && THESIS_F06_SD_HYBRID != 1
+#error "THESIS_F06_SD_HYBRID must be 0 or 1"
+#endif
+#if THESIS_F06_SD_HYBRID == 1
+#include "sd_hybrid_policy.h"
+#endif
 
 // 0: original Vessel-002-only experimental profile; 1: identity-aware F11 profile.
 #ifndef THESIS_SD_FLEET
@@ -19,6 +28,9 @@
 #endif
 #if THESIS_F06_SD_SANDBOX != 0 && THESIS_F06_SD_SANDBOX != 1
 #error "THESIS_F06_SD_SANDBOX must be 0 or 1"
+#endif
+#if THESIS_F06_SD_HYBRID == 1 && (THESIS_F06_SD_SANDBOX != 1 || THESIS_SD_FLEET != 1 || THESIS_F05_RECOVERY != 1 || THESIS_SD_OLED_UI != 1)
+#error "F06 hybrid requires F05 + sandbox + fleet logger + OLED UI"
 #endif
 #if THESIS_F06_SD_SANDBOX == 1
 #if THESIS_SD_FLEET != 1 || THESIS_F05_RECOVERY != 1
@@ -68,6 +80,33 @@ static uint32_t bootToken = 0;
 static uint32_t eventCounter = 0;
 static uint32_t lostUrgent = 0, lostTelemetry = 0;
 static uint32_t lastDropNotice = 0;
+#if THESIS_F06_SD_HYBRID == 1
+static SDHybrid::State hybridState;
+// Mode is intentionally volatile; every power-on starts SOS ARMED.
+inline bool hybridIsContinuous() { return hybridState.continuous; }
+inline bool hybridSOSOverride() { return hybridState.sosOverride(millis()); }
+inline uint32_t hybridSkippedTelemetry() { return hybridState.skippedRoutine; }
+inline void hybridObserveSOSPresence(bool active) {
+    const bool wasActive = hybridState.activeSOS;
+    hybridState.observeSOS(active, millis());
+    if (active != wasActive)
+        Serial.printf("[SD-HYBRID] SOS_STATE=%s tail_sec=600\n",
+                      active ? "ACTIVE" : "TAIL");
+}
+inline void hybridSetContinuous(bool enabled) {
+    if (hybridState.continuous == enabled) return;
+    hybridState.continuous = enabled;
+    Serial.printf("[SD-HYBRID] MANUAL_MODE=%s\n",
+                  enabled ? "CONTINUOUS" : "SOS_ARMED");
+}
+#endif
+#if THESIS_SD_OLED_UI == 1
+// Cached sizes from EXISTING 30-second read-only SD audit. OLED draw never
+// accesses SPI; the logger remains the only owner of SD I/O.
+static uint64_t oledTelemetryBytes = 0;
+static uint64_t oledSOSBytes = 0;
+static bool oledAuditValid = false;
+#endif
 
 inline bool queueEvent(bool urgent, const char* kind, uint32_t origin,
                        uint32_t seq, int32_t result, int16_t rssi = 0,
@@ -75,6 +114,11 @@ inline bool queueEvent(bool urgent, const char* kind, uint32_t origin,
                        int32_t lonE7 = 0, uint8_t flags = 0,
                        uint8_t hops = 0, uint8_t attempt = 0) {
     if (!ready) return false;
+#if THESIS_F06_SD_HYBRID == 1
+    // All urgent events always pass (including RX SOS, ACK and CANCEL).
+    // Only routine telemetry is intentionally suppressed in standby.
+    if (!hybridState.shouldRecord(urgent, millis())) return true;
+#endif
     EventQueue &q = urgent ? urgentQueue : telemetryQueue;
     if (q.count >= EVENT_CAPACITY) {
         if (urgent) ++lostUrgent; else ++lostTelemetry;
@@ -331,6 +375,13 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     telemetryQueue = EventQueue{};
     lostUrgent = lostTelemetry = 0;
     lastDropNotice = millis();
+#if THESIS_F06_SD_HYBRID == 1
+    hybridState = SDHybrid::State{};
+#endif
+#if THESIS_SD_OLED_UI == 1
+    oledTelemetryBytes = oledSOSBytes = 0;
+    oledAuditValid = false;
+#endif
     ready = true;
 
     char record[160];
@@ -375,6 +426,9 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     lastHeartbeat = millis();
 
     Serial.println("[SD-LOG] BOOT_WRITE_OK");
+#if THESIS_F06_SD_HYBRID == 1
+    Serial.println("[SD-HYBRID] INIT mode=SOS_ARMED routine=OFF emergency=ON tail_sec=600");
+#endif
     Serial.printf("[SD-LOG] READY path=%s\n", DIRECTORY);
 
     return true;
@@ -509,6 +563,11 @@ inline void poll() {
             sosFile.close();
         }
 
+#if THESIS_SD_OLED_UI == 1
+        oledTelemetryBytes = telemetryBytes;
+        oledSOSBytes = sosBytes;
+        oledAuditValid = true;
+#endif
         Serial.printf(
             "[SD-AUDIT] telemetry_bytes=%llu sos_bytes=%llu queued_telemetry=%u queued_sos=%u dropped_telemetry=%lu dropped_sos=%lu events=%lu\n",
             (unsigned long long)telemetryBytes,
@@ -522,7 +581,14 @@ inline void poll() {
     }
 
     uint32_t now = millis();
-
+#if THESIS_F06_SD_HYBRID == 1
+    // Keep the mandatory boot journal but suppress periodic diagnostics
+    // in SOS ARMED standby. The normal SD audit remains read-only.
+    if (!hybridState.routineEnabled(now)) {
+        lastHeartbeat = now;
+        return;
+    }
+#endif
     if (uint32_t(now - lastHeartbeat) < HEARTBEAT_INTERVAL_MS) {
         return;
     }

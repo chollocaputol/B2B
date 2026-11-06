@@ -28,6 +28,32 @@
 #ifndef THESIS_SD_LOGGER
 #define THESIS_SD_LOGGER 0
 #endif
+// Display-only SD OLED view. Enabled only in its dedicated F06 test profile.
+#ifndef THESIS_SD_OLED_UI
+#define THESIS_SD_OLED_UI 0
+#endif
+#if THESIS_SD_OLED_UI != 0 && THESIS_SD_OLED_UI != 1
+#error "THESIS_SD_OLED_UI must be 0 or 1"
+#endif
+#if THESIS_SD_OLED_UI == 1 && THESIS_SD_LOGGER != 1
+#error "SD OLED UI requires SD logger"
+#endif
+#ifndef THESIS_F06_SD_HYBRID
+#define THESIS_F06_SD_HYBRID 0
+#endif
+#if THESIS_F06_SD_HYBRID != 0 && THESIS_F06_SD_HYBRID != 1
+#error "Invalid THESIS_F06_SD_HYBRID"
+#endif
+#if THESIS_F06_SD_HYBRID == 1 && (THESIS_SD_OLED_UI != 1 || THESIS_SD_LOGGER != 1 || THESIS_F06_SD_SANDBOX != 1)
+#error "F06 hybrid requires OLED UI and isolated sandbox SD logger"
+#endif
+#if THESIS_SD_OLED_UI == 1
+#define OLED_PAGE_TOTAL "8"
+static constexpr uint8_t kOLEDPageCount = 8;
+#else
+#define OLED_PAGE_TOTAL "7"
+static constexpr uint8_t kOLEDPageCount = 7;
+#endif
 #if THESIS_SD_LOGGER == 1
 #include "../../shared/thesis_sd_logger.h"
 #endif
@@ -101,6 +127,18 @@ const unsigned long BUTTON_LONG_PRESS_MS = 900UL;
 // OLED-only alert demonstrations: 0 = LIVE, 1 = NORMAL, 2 = FRONT, 3 = SQUALL.
 // These NEVER modify real weatherState, radio telemetry, or sensor history.
 uint8_t alertDemoMode = 0;
+#if THESIS_SD_OLED_UI == 1
+// GPIO0 hold changes only the SD OLED subview; never changes logger state.
+static uint8_t sdOLEDSubview = 0;
+#if THESIS_F06_SD_HYBRID == 1
+// GPIO0 mode menu is informational/selection only; GPIO2 owns physical SOS.
+static bool sdHybridMenuOpen = false;
+static uint8_t sdHybridMenuCursor = 0; // 0=SOS ARMED, 1=CONTINUOUS, 2=BACK
+// Separate four-choice SD menu; both menus exist only on the hybrid profile.
+static bool sdStorageMenuOpen = false;
+static uint8_t sdStorageMenuCursor = 0; // 0=JOURNALS 1=USB 2=RECORD MODE 3=BACK
+#endif
+#endif
 // 0 = AUTO (latest active peer). Nonzero = manually selected vessel.
 uint32_t selectedOLEDPeerId = 0;
 bool selectedOLEDPeer(PeerDisplaySnapshot &out) {
@@ -152,7 +190,7 @@ void confirmOLEDPeerMenu() {
 void drawOLEDPeerMenu() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "SELECT VESSEL 3/7");
+  u8g2.drawStr(0, 9, "SELECT VESSEL 3/" OLED_PAGE_TOTAL);
   const uint8_t choices = oledMenuPeerCount + 2;
   const uint8_t first = oledMenuCursor >= 3 ? oledMenuCursor - 3 : 0;
   for (uint8_t row = 0; row < 4 && first + row < choices; ++row) {
@@ -225,7 +263,7 @@ void confirmSOSMenu() {
 }
 void drawSOSMenu() {
   u8g2.clearBuffer();u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0,9,"ACTIVE SOS MENU 7/7");
+  u8g2.drawStr(0,9,"ACTIVE SOS MENU 7/" OLED_PAGE_TOTAL);
   const uint8_t choices=sosMenuCount+2;
   const uint8_t first=sosMenuCursor>=3?sosMenuCursor-3:0;
   for(uint8_t row=0;row<4 && first+row<choices;++row) {
@@ -277,6 +315,9 @@ void oledPDRPage();
 void oledAlertPage();
 void oledUptimePage();
 void oledSOSRescuePage();
+#if THESIS_SD_OLED_UI == 1
+void oledSDStoragePage();
+#endif
 void formatUptime(char *out, size_t outSize);
 
 // ============================================================
@@ -423,6 +464,12 @@ void setup() {
 // ============================================================
 void loop() {
 #if THESIS_SD_LOGGER == 1
+#if THESIS_F06_SD_HYBRID == 1
+  // Assess authoritative local and received SOS state before SD poll.
+  // An unresolved SOS keeps recording regardless of manual mode.
+  ThesisSDLogger::hybridObserveSOSPresence(
+      hasActiveLocalSOS() || getActiveSOSCount() > 0);
+#endif
   ThesisSDLogger::poll();
 #endif
 #if THESIS_F06_SD_SANDBOX == 1
@@ -453,6 +500,11 @@ void loop() {
   if (consumeNewReceivedSOS()) {
     oledPage = 6;  // New SOS overrides any page/selection.
     sosMenuOpen = false;
+#if THESIS_F06_SD_HYBRID == 1
+    sdStorageMenuOpen = false;
+    sdHybridMenuOpen = false;
+    sdOLEDSubview = 0;
+#endif
     selectedSOSOrigin=0;selectedSOSEvent=0;
     lastOLEDUpdate = 0;
   }
@@ -631,11 +683,76 @@ void handleOLEDButton() {
         if (sosMenuOpen) confirmSOSMenu(); else openSOSMenu();
       } else if (oledPage == 6 && sosMenuOpen && duration < BUTTON_LONG_PRESS_MS) {
         advanceSOSMenu();
+#if THESIS_SD_OLED_UI == 1
+#if THESIS_F06_SD_HYBRID == 1
+      } else if (oledPage == 7 && sdHybridMenuOpen) {
+        // Mode submenu: TAP moves, HOLD confirms. BACK returns to SD menu.
+        if (duration >= BUTTON_LONG_PRESS_MS) {
+          if (sdHybridMenuCursor < 2) {
+            ThesisSDLogger::hybridSetContinuous(sdHybridMenuCursor == 1);
+            Serial.printf("[OLED-SD] MODE_CONFIRMED=%s\n",
+                sdHybridMenuCursor == 1 ? "CONTINUOUS" : "SOS_ARMED");
+            sdOLEDSubview = 0;
+          } else {
+            sdStorageMenuOpen = true;
+            sdStorageMenuCursor = 2;
+            Serial.println("[OLED-SD] MODE_BACK_TO_SD_MENU");
+          }
+          sdHybridMenuOpen = false;
+        } else {
+          sdHybridMenuCursor = (sdHybridMenuCursor + 1U) % 3U;
+          Serial.printf("[OLED-SD] MODE_CURSOR=%u\n", (unsigned)sdHybridMenuCursor);
+        }
+      } else if (oledPage == 7 && sdStorageMenuOpen) {
+        // SD menu: Journals, USB, Recording Mode, Back. No direct file writes.
+        if (duration >= BUTTON_LONG_PRESS_MS) {
+          switch (sdStorageMenuCursor) {
+            case 0:
+              sdOLEDSubview = 1; // Journals: cached counters only
+              sdStorageMenuOpen = false;
+              Serial.println("[OLED-SD] OPEN_JOURNALS");
+              break;
+            case 1:
+              sdOLEDSubview = 2; // USB: instructional text only
+              sdStorageMenuOpen = false;
+              Serial.println("[OLED-SD] OPEN_USB_READBACK");
+              break;
+            case 2:
+              sdStorageMenuOpen = false;
+              sdHybridMenuOpen = true;
+              sdHybridMenuCursor = ThesisSDLogger::hybridIsContinuous() ? 1 : 0;
+              Serial.println("[OLED-SD] MODE_MENU_OPEN");
+              break;
+            default:
+              sdStorageMenuOpen = false;
+              sdOLEDSubview = 0;
+              Serial.println("[OLED-SD] STORAGE_MENU_BACK");
+              break;
+          }
+        } else {
+          sdStorageMenuCursor = (sdStorageMenuCursor + 1U) % 4U;
+          Serial.printf("[OLED-SD] STORAGE_CURSOR=%u\n", (unsigned)sdStorageMenuCursor);
+        }
+      } else if (oledPage == 7 && duration >= BUTTON_LONG_PRESS_MS) {
+        // Hold on status, journals or USB always opens the same options menu.
+        sdStorageMenuOpen = true;
+        sdStorageMenuCursor = 0;
+        Serial.println("[OLED-SD] STORAGE_MENU_OPEN");
+#else
+      } else if (oledPage == 7 && duration >= BUTTON_LONG_PRESS_MS) {
+        // Keep original three-view hold navigation for the non-hybrid UI.
+        sdOLEDSubview = (sdOLEDSubview + 1U) % 3U;
+        Serial.printf("[OLED-SD] VIEW=%u DISPLAY_ONLY\n", (unsigned)sdOLEDSubview);
+#endif
+#endif
       } else if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
         alertDemoMode = (alertDemoMode + 1) % 4;
         Serial.printf("[ALERT-DEMO] OLED-only mode: %u (0=LIVE,1=NORMAL,2=FRONT,3=SQUALL)\n", alertDemoMode);
       } else if (duration < BUTTON_LONG_PRESS_MS) {
-        oledPage = (oledPage + 1) % 7;
+        oledPage = (oledPage + 1) % kOLEDPageCount;
+#if THESIS_SD_OLED_UI == 1
+        if (oledPage != 7) sdOLEDSubview = 0;
+#endif
         // Do not leave a simulated alert active after departing test page.
         if (oledPage != 4) alertDemoMode = 0;
         Serial.printf("[OLED] Page changed to %u\n", oledPage);
@@ -660,6 +777,9 @@ void updateOLED() {
     case 4: oledAlertPage(); break;
     case 5: oledUptimePage(); break;
     case 6: oledSOSRescuePage(); break;
+#if THESIS_SD_OLED_UI == 1
+    case 7: oledSDStoragePage(); break;
+#endif
   }
 }
 
@@ -667,7 +787,7 @@ void oledGPSPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
   char line[32];
-  snprintf(line, sizeof(line), "%s GPS 1/7", VesselIdentity::ready() ? VesselIdentity::label() : "NO ID");
+  snprintf(line, sizeof(line), "%s GPS 1/" OLED_PAGE_TOTAL, VesselIdentity::ready() ? VesselIdentity::label() : "NO ID");
   u8g2.drawStr(0, 9, line);
   u8g2.drawStr(0, 20, gpsHasFix ? "GPS: FIX" : "GPS: SEARCH");
   if (gps.satellites.isValid()) snprintf(line, sizeof(line), "SAT: %lu", gps.satellites.value());
@@ -688,7 +808,7 @@ void oledWeatherPage() {
   u8g2.setFont(u8g2_font_6x10_tf);
   char line[32];
 
-  snprintf(line, sizeof(line), "WX 2/7: %s", shortWeatherName(weatherState));
+  snprintf(line, sizeof(line), "WX 2/" OLED_PAGE_TOTAL ": %s", shortWeatherName(weatherState));
   u8g2.drawStr(0, 9, line);
 
   if (tempHumidityReadingValid) {
@@ -731,7 +851,7 @@ void oledLinkPage() {
   if (oledPeerMenuOpen) { drawOLEDPeerMenu(); return; }
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0,9,selectedOLEDPeerId ? "SELECT PEER 3/7" : "LIVE PEER 3/7");
+  u8g2.drawStr(0,9,selectedOLEDPeerId ? "SELECT PEER 3/" OLED_PAGE_TOTAL : "LIVE PEER 3/" OLED_PAGE_TOTAL);
   char line[32];
   PeerDisplaySnapshot peer;
   if (!selectedOLEDPeer(peer)) {
@@ -758,7 +878,7 @@ void oledLinkPage() {
 void oledPDRPage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0,9,"PEER PDR 4/7");
+  u8g2.drawStr(0,9,"PEER PDR 4/" OLED_PAGE_TOTAL);
   char line[32];
   PeerDisplaySnapshot peer;
   if (!selectedOLEDPeer(peer)) {
@@ -792,7 +912,7 @@ void oledAlertPage() {
 
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, alertDemoMode ? "ALERT DEMO 5/7" : "ALERT 5/7");
+  u8g2.drawStr(0, 9, alertDemoMode ? "ALERT DEMO 5/" OLED_PAGE_TOTAL : "ALERT 5/" OLED_PAGE_TOTAL);
   char line[30];
   snprintf(line, sizeof(line), "STATE: %s", shortWeatherName(indicatorState));
   u8g2.drawStr(0, 20, line);
@@ -820,11 +940,11 @@ void formatUptime(char *out, size_t outSize) {
 void oledUptimePage() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0, 9, "VESSEL UPTIME 6/7");
+  u8g2.drawStr(0, 9, "VESSEL UPTIME 6/" OLED_PAGE_TOTAL);
   char line[40];
   formatUptime(line, sizeof(line));
   u8g2.drawStr(0, 22, line);
-  snprintf(line, sizeof(line), "WX 2/7: %s", shortWeatherName(weatherState));
+  snprintf(line, sizeof(line), "WX 2/" OLED_PAGE_TOTAL ": %s", shortWeatherName(weatherState));
   u8g2.drawStr(0, 34, line);
   snprintf(line, sizeof(line), "TX:%lu RX:%lu",
            static_cast<unsigned long>(txCount),
@@ -842,7 +962,7 @@ void oledSOSRescuePage() {
   SOSRecordSnapshot sos;
   const bool present=displaySOSRecord(sos);
   u8g2.clearBuffer();u8g2.setFont(u8g2_font_6x10_tf);
-  u8g2.drawStr(0,9,"SOS / RESCUE 7/7");
+  u8g2.drawStr(0,9,"SOS / RESCUE 7/" OLED_PAGE_TOTAL);
   if(!present) {
     u8g2.drawStr(0,23,selectedSOSOrigin?"EVENT REPLACED":"NO ACTIVE SOS");
     u8g2.drawStr(0,42,"Hold: SELECT SOS");
@@ -870,3 +990,124 @@ void oledSOSRescuePage() {
   }
   u8g2.sendBuffer();
 }
+
+#if THESIS_SD_OLED_UI == 1
+// 128x64 SH1106 display. Read cached logger counters ONLY: no SPI, file
+// opens, directory mutations, radio TX, or emergency state writes here.
+void oledSDStoragePage() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  char line[38];
+#if THESIS_F06_SD_HYBRID == 1
+  if (sdStorageMenuOpen) {
+    u8g2.drawStr(0, 9, "SD STORAGE MENU 8/8");
+    const char* menuItems[4] = {
+        "SD JOURNALS", "SD USB READBACK", "RECORDING MODE", "BACK"};
+    for (uint8_t index = 0; index < 4; ++index) {
+      snprintf(line, sizeof(line), "%c %s",
+          index == sdStorageMenuCursor ? '>' : ' ', menuItems[index]);
+      u8g2.drawStr(0, 21 + 11 * index, line);
+    }
+    u8g2.drawStr(0, 64, "HOLD:OPEN TAP:MOVE");
+    u8g2.sendBuffer();
+    return;
+  }
+  if (sdHybridMenuOpen) {
+    u8g2.drawStr(0, 9, "RECORDING MODE 8/8");
+    const char* menuItems[3] = {"SOS ARMED", "CONTINUOUS", "BACK"};
+    for (uint8_t index = 0; index < 3; ++index) {
+      snprintf(line, sizeof(line), "%c %s",
+          index == sdHybridMenuCursor ? '>' : ' ', menuItems[index]);
+      u8g2.drawStr(0, 23 + 13 * index, line);
+    }
+    u8g2.drawStr(0, 62, "HOLD:SET TAP:MOVE");
+    u8g2.sendBuffer();
+    return;
+  }
+#endif
+  if (sdOLEDSubview == 0) {
+    u8g2.drawStr(0, 9, "SD STORAGE 8/8");
+#if THESIS_F06_SD_HYBRID == 1
+    u8g2.drawStr(0, 20, ThesisSDLogger::ready ? "CARD: MOUNTED" : "CARD: NOT READY");
+    u8g2.drawStr(0, 30, ThesisSDLogger::hybridIsContinuous()
+        ? "MODE: CONTINUOUS" : "MODE: SOS ARMED");
+    const char* recStatus = !ThesisSDLogger::ready ? "REC: UNAVAILABLE" :
+        ThesisSDLogger::hybridSOSOverride() ? "REC: SOS OVERRIDE" :
+        ThesisSDLogger::hybridIsContinuous() ? "REC: CONTINUOUS" : "REC: STANDBY";
+    u8g2.drawStr(0, 41, recStatus);
+    const char* slash = strrchr(ThesisSDLogger::DIRECTORY, '/');
+    snprintf(line, sizeof(line), "FOLDER: %.12s", slash ? slash + 1 : "UNKNOWN");
+    u8g2.drawStr(0, 52, line);
+#else
+    u8g2.drawStr(0, 20, ThesisSDLogger::ready ? "CARD: LOGGING" : "CARD: NOT READY");
+#if THESIS_F06_SD_SANDBOX == 1
+    u8g2.drawStr(0, 30, "MODE: F06 SANDBOX");
+#else
+    u8g2.drawStr(0, 30, "MODE: VESSEL JOURNAL");
+#endif
+    const char* slash = strrchr(ThesisSDLogger::DIRECTORY, '/');
+    const char* folder = slash ? slash + 1 : "UNKNOWN";
+    snprintf(line, sizeof(line), "FOLDER: %.12s", folder);
+    u8g2.drawStr(0, 41, line);
+    snprintf(line, sizeof(line), "Q SOS:%u TLM:%u",
+      (unsigned)ThesisSDLogger::urgentQueue.count,
+      (unsigned)ThesisSDLogger::telemetryQueue.count);
+    u8g2.drawStr(0, 52, line);
+#endif
+#if THESIS_F06_SD_HYBRID == 1
+    u8g2.drawStr(0, 63, "HOLD:MENU TAP:NEXT");
+#else
+    u8g2.drawStr(0, 63, "HOLD:FILES TAP:NEXT");
+#endif
+  } else if (sdOLEDSubview == 1) {
+    u8g2.drawStr(0, 9, "SD JOURNALS 8/8");
+    if (ThesisSDLogger::oledAuditValid) {
+      snprintf(line, sizeof(line), "TLM: %llu B",
+        (unsigned long long)ThesisSDLogger::oledTelemetryBytes);
+      u8g2.drawStr(0, 21, line);
+      snprintf(line, sizeof(line), "SOS: %llu B",
+        (unsigned long long)ThesisSDLogger::oledSOSBytes);
+      u8g2.drawStr(0, 33, line);
+    } else {
+      u8g2.drawStr(0, 21, "FILE SIZES: WAIT");
+      u8g2.drawStr(0, 33, "SD AUDIT (30 SEC)");
+    }
+#if THESIS_F06_SD_HYBRID == 1
+    snprintf(line, sizeof(line), "EV:%lu SKIP:%lu",
+      (unsigned long)ThesisSDLogger::eventCounter,
+      (unsigned long)ThesisSDLogger::hybridSkippedTelemetry());
+#else
+    snprintf(line, sizeof(line), "EVENTS: %lu",
+      (unsigned long)ThesisSDLogger::eventCounter);
+#endif
+    u8g2.drawStr(0, 44, line);
+    snprintf(line, sizeof(line), "DROP S:%lu T:%lu",
+      (unsigned long)ThesisSDLogger::lostUrgent,
+      (unsigned long)ThesisSDLogger::lostTelemetry);
+    u8g2.drawStr(0, 55, line);
+#if THESIS_F06_SD_HYBRID == 1
+    u8g2.drawStr(0, 64, "HOLD:MENU TAP:NEXT");
+#else
+    u8g2.drawStr(0, 64, "HOLD:USB TAP:NEXT");
+#endif
+  } else {
+    u8g2.drawStr(0, 9, "SD USB READBACK 8/8");
+#if THESIS_F06_SD_SANDBOX == 1
+    u8g2.drawStr(0, 21, "PC COMMAND: SD LIST");
+    u8g2.drawStr(0, 33, "SD READ Sxxxxxxx");
+    u8g2.drawStr(0, 45, "OR: SD READ LEGACY");
+#else
+    u8g2.drawStr(0, 21, "PC: SD EXPORT");
+    u8g2.drawStr(0, 33, "USB SERIAL 115200");
+    u8g2.drawStr(0, 45, "READBACK TO PC");
+#endif
+    u8g2.drawStr(0, 55, "NO ACTION FROM OLED");
+#if THESIS_F06_SD_HYBRID == 1
+    u8g2.drawStr(0, 64, "HOLD:MENU TAP:NEXT");
+#else
+    u8g2.drawStr(0, 64, "HOLD:HOME TAP:NEXT");
+#endif
+  }
+  u8g2.sendBuffer();
+}
+#endif // THESIS_SD_OLED_UI

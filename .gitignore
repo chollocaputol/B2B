@@ -26,3 +26,11 @@ build/
 
 # Firmware installer backups
 *.bak
+/archive/
+/logs/
+.pio/
+.pio_*/
+__pycache__/
+*.pyc
+/local_file_inventory.csv
+/local_uncommitted_review.patch

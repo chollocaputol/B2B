@@ -8,6 +8,7 @@
 #include "../../shared/gps_service.h"
 #include <Arduino.h>
 #include "sos_controls.h"
+#include "physical_indicators.h"
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -425,6 +426,7 @@ void setup() {
                 WEATHER_INTERVAL, WEATHER_HISTORY_SIZE);
 
   SOSControls::begin();
+  PhysicalIndicators::begin();
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
   buttonLastReading = digitalRead(USER_BUTTON_PIN);
   buttonStableState = buttonLastReading;
@@ -508,7 +510,6 @@ void loop() {
     Serial.println("[SOS-BUTTON-A] Deliberate 5s CANCEL hold recognized");
     cancelActiveSOS();
   }
-  SOSControls::updateIndicators();
 
   // CAD uses the same DIO1 as RX_DONE; consume its IRQ before RX polling.
   const TelemetryCadResult macCadCompleted = pollTelemetryCad();
@@ -548,6 +549,10 @@ void loop() {
       Serial.println("[WX-LOG] QUEUE_FAILED (not recorded)");
 #endif
   }
+
+  // Live authoritative inputs only; OLED demo modes never reach physical outputs.
+  PhysicalIndicators::update(millis(), weatherState, weatherInputsValid,
+                             hasActiveLocalSOS(), getActiveSOSCount() > 0);
 
   // PHASE 5.2.2C-3G-4E2: decentralized, nonblocking CAD experiment.
   // Mode 1 OBSERVE (default): busy CAD is logged but does not block telemetry.

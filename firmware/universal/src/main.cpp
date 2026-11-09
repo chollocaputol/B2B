@@ -446,6 +446,14 @@ void setup() {
   ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
 #endif
 
+#if THESIS_F07_WEATHER_LOG == 1
+  // One REAL reading at boot for immediate OLED fault detection.
+  // Log the same physical sample, then continue at 10-minute intervals.
+  processWeather();
+  if (!ThesisSDLogger::queueWeatherSample(weatherMeasurement))
+    Serial.println("[WX-LOG] BOOT_SAMPLE_QUEUE_FAILED (not recorded)");
+#endif
+
   // Each boot receives a different first telemetry slot. Subsequent intervals
   // vary independently; no change to SOS timing or packet serialization.
   randomSeed(esp_random());
@@ -833,7 +841,9 @@ void oledWeatherPage() {
   u8g2.setFont(u8g2_font_6x10_tf);
   char line[32];
 
-  snprintf(line, sizeof(line), "WX 2/" OLED_PAGE_TOTAL ": %s", shortWeatherName(weatherState));
+  const char* wxHeader = !weatherSampleAttempted ? "CHECKING"
+      : !weatherInputsValid ? "SENSOR FAIL" : shortWeatherName(weatherState);
+  snprintf(line, sizeof(line), "WX 2/" OLED_PAGE_TOTAL ": %s", wxHeader);
   u8g2.drawStr(0, 9, line);
 
   if (tempHumidityReadingValid) {
@@ -851,22 +861,32 @@ void oledWeatherPage() {
   }
   u8g2.drawStr(0, 29, line);
 
-  snprintf(line, sizeof(line), "DHT:%s BME-P:%s",
-           dhtReadingValid ? "OK" : "FAIL",
-           bmePressureReadingValid ? "OK" : "FAIL");
+  if (!weatherSampleAttempted) {
+    snprintf(line, sizeof(line), "DHT:%s BME:%s",
+             dhtAvailable ? "FOUND" : "MISS",
+             bmeAvailable ? "FOUND" : "MISS");
+  } else {
+    snprintf(line, sizeof(line), "DHT:%s BME-P:%s",
+             dhtReadingValid ? "OK" : "FAIL",
+             bmePressureReadingValid ? "OK" : "FAIL");
+  }
   u8g2.drawStr(0, 39, line);
 
-  if (tempHumidityReadingValid) {
-    snprintf(line, sizeof(line), "T/RH SRC:%s", tempHumidityFromDHT ? "DHT20" : "BME680");
-  } else {
-    strcpy(line, "T/RH SRC: NONE");
-  }
+  if (!weatherSampleAttempted) strcpy(line, "WAIT: FIRST READ");
+  else if (!dhtReadingValid && !bmePressureReadingValid) strcpy(line, "DHT+BME: READ FAIL");
+  else if (!dhtReadingValid) strcpy(line, "DHT20: READ FAIL");
+  else if (!bmePressureReadingValid) strcpy(line, "BME680: READ FAIL");
+  else strcpy(line, "T/RH: DHT20 ONLY");
   u8g2.drawStr(0, 49, line);
 
-  if (weatherInputsValid) {
-    snprintf(line, sizeof(line), "Z:%u DP:%+.1f", zambrettiIndex, pressureDelta);
+  if (!weatherSampleAttempted) strcpy(line, "WAIT: FIRST SAMPLE");
+  else if (!weatherInputsValid) strcpy(line, "FORECAST: DISABLED");
+  else if (weatherState == WEATHER_CALIBRATING ||
+           weatherMeasurement.historyCount < WEATHER_HISTORY_SIZE) {
+    snprintf(line, sizeof(line), "CALIBRATING %u/%u",
+             (unsigned)weatherMeasurement.historyCount, (unsigned)WEATHER_HISTORY_SIZE);
   } else {
-    strcpy(line, "CALC: WAIT SENSORS");
+    snprintf(line, sizeof(line), "Z:%u DP:%+.1f", zambrettiIndex, pressureDelta);
   }
   u8g2.drawStr(0, 59, line);
   u8g2.sendBuffer();

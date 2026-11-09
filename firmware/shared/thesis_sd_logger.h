@@ -4,6 +4,12 @@
 #include <SPI.h>
 #include <SD.h>
 #include <XPowersLib.h>
+#ifndef THESIS_F07_WEATHER_LOG
+#define THESIS_F07_WEATHER_LOG 0
+#endif
+#if THESIS_F07_WEATHER_LOG == 1
+#include "../universal/include/weather_manager.h"
+#endif
 #ifndef THESIS_F06_SD_HYBRID
 #define THESIS_F06_SD_HYBRID 0
 #endif
@@ -69,7 +75,8 @@ inline bool isAuthorizedVessel(uint32_t id) {
 // All SD operations run only in main loop, never in radio RX/TX handlers.
 // Two bounded FIFOs allow SOS events to take precedence over telemetry.
 static constexpr uint8_t EVENT_CAPACITY = 24;
-struct EventRecord { char line[320]; };
+static constexpr size_t EVENT_LINE_CAPACITY = THESIS_F07_WEATHER_LOG == 1 ? 512U : 320U;
+struct EventRecord { char line[EVENT_LINE_CAPACITY]; };
 struct EventQueue {
     EventRecord entries[EVENT_CAPACITY];
     uint8_t read = 0, write = 0, count = 0;
@@ -144,6 +151,68 @@ inline bool queueEvent(bool urgent, const char* kind, uint32_t origin,
     ++q.count;
     return true;
 }
+
+#if THESIS_F07_WEATHER_LOG == 1
+inline void weatherJsonNumber(char* dst, size_t size, float value) {
+    if (isfinite(value)) snprintf(dst, size, "%.2f", (double)value);
+    else snprintf(dst, size, "null");
+}
+
+// One complete real sensor cycle goes to the *existing* telemetry journal.
+// This intentionally bypasses SOS_ARMED's routine-radio logging filter:
+// research weather samples must be available regardless of SOS activity.
+// Queuing is RAM-only; the main-loop SD poll remains the only SPI writer.
+inline bool queueWeatherSample(const WeatherMeasurement& s) {
+    if (!ready) return false;
+    EventQueue& q = telemetryQueue;
+    if (q.count >= EVENT_CAPACITY) { ++lostTelemetry; return false; }
+
+    char dhtT[20], dhtH[20], bmeT[20], bmeH[20], bmeRawP[20];
+    char staP[20], selT[20], selH[20], mslP[20], dP[20], dT[20], dH[20];
+    weatherJsonNumber(dhtT, sizeof(dhtT), s.dhtTempC);
+    weatherJsonNumber(dhtH, sizeof(dhtH), s.dhtRH);
+    weatherJsonNumber(bmeT, sizeof(bmeT), s.bmeTempC);
+    weatherJsonNumber(bmeH, sizeof(bmeH), s.bmeRH);
+    weatherJsonNumber(bmeRawP, sizeof(bmeRawP), s.bmeRawPressureHpa);
+    weatherJsonNumber(staP, sizeof(staP), s.stationPressureHpa);
+    weatherJsonNumber(selT, sizeof(selT), s.selectedTempC);
+    weatherJsonNumber(selH, sizeof(selH), s.selectedRH);
+    weatherJsonNumber(mslP, sizeof(mslP), s.pressureMSLHpa);
+    weatherJsonNumber(dP, sizeof(dP), s.pressureDeltaHpa);
+    weatherJsonNumber(dT, sizeof(dT), s.tempDeltaC);
+    weatherJsonNumber(dH, sizeof(dH), s.humidityDeltaPoints);
+    char gpsUtcJson[24] = "null";
+    if (s.gpsUtcValid && strlen(s.gpsUtcIso8601) == 20) {
+        // The string is formatted solely from GNSS numeric date/time fields.
+        snprintf(gpsUtcJson, sizeof(gpsUtcJson), "\"%s\"", s.gpsUtcIso8601);
+    }
+
+    char* const dest = q.entries[q.write].line;
+    const int size = snprintf(dest, sizeof(q.entries[q.write].line),
+        "{\"kind\":\"weather\",\"vessel_id\":%lu,\"boot_token\":%lu,\"event_index\":%lu,"
+        "\"uptime_ms\":%lu,\"gps_utc\":%s,\"dht_t_c\":%s,\"dht_rh_pct\":%s,"
+        "\"bme_t_c\":%s,\"bme_rh_pct\":%s,\"bme_raw_hpa\":%s,"
+        "\"station_hpa\":%s,\"t_c\":%s,\"rh_pct\":%s,\"msl_hpa\":%s,"
+        "\"dp_hpa\":%s,\"dt_c\":%s,\"drh_points\":%s,"
+        "\"history_count\":%u,\"weather_state\":%u,\"zambretti\":%u,"
+        "\"source\":%u,\"dht_ok\":%u,\"bme_th_ok\":%u,\"bme_p_ok\":%u,\"inputs_ok\":%u}",
+        (unsigned long)vesselId, (unsigned long)bootToken,
+        (unsigned long)(eventCounter + 1UL), (unsigned long)s.uptimeMs, gpsUtcJson,
+        dhtT, dhtH, bmeT, bmeH, bmeRawP, staP, selT, selH, mslP,
+        dP, dT, dH,
+        (unsigned)s.historyCount, (unsigned)s.weatherState, (unsigned)s.zambretti,
+        (unsigned)s.tempSource, (unsigned)s.dhtOK, (unsigned)s.bmeTHOK,
+        (unsigned)s.bmePressureOK, (unsigned)s.inputsOK);
+    if (size < 0 || (size_t)size >= sizeof(q.entries[q.write].line)) {
+        ++lostTelemetry;
+        return false;
+    }
+    ++eventCounter;
+    q.write = (q.write + 1) % EVENT_CAPACITY;
+    ++q.count;
+    return true;
+}
+#endif // THESIS_F07_WEATHER_LOG
 
 inline void pollEvents() {
     if (!ready) return;

@@ -28,6 +28,12 @@
 #ifndef THESIS_SD_LOGGER
 #define THESIS_SD_LOGGER 0
 #endif
+#ifndef THESIS_F07_WEATHER_LOG
+#define THESIS_F07_WEATHER_LOG 0
+#endif
+#if THESIS_F07_WEATHER_LOG == 1 && THESIS_SD_LOGGER != 1
+#error "F07 weather logging requires the SD logger"
+#endif
 // Display-only SD OLED view. Enabled only in its dedicated F06 test profile.
 #ifndef THESIS_SD_OLED_UI
 #define THESIS_SD_OLED_UI 0
@@ -94,7 +100,9 @@ static uint32_t nextTelemetryIntervalMs() {
 }
 
 // DEVELOPMENT ONLY: set to 0 for real 10-minute sampling before field use.
+#ifndef WEATHER_FAST_TEST
 #define WEATHER_FAST_TEST 1
+#endif
 const unsigned long WEATHER_INTERVAL = WEATHER_FAST_TEST ? 5000UL : 600000UL;
 const unsigned long GPS_STATUS_INTERVAL = 5000UL;
 const unsigned long OLED_UPDATE_INTERVAL = 500UL;
@@ -514,6 +522,23 @@ void loop() {
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();
     processWeather();
+#if THESIS_SD_LOGGER == 1 && THESIS_F07_WEATHER_LOG == 1
+    // GNSS time is usable without a position fix, but only if both the
+    // date and time were received recently. Otherwise JSON gets null.
+    // Do not change the device clock or synthesize a calendar time.
+    if (gps.date.isValid() && gps.time.isValid() &&
+        gps.date.age() <= 10000UL && gps.time.age() <= 10000UL) {
+      const int n = snprintf(weatherMeasurement.gpsUtcIso8601,
+          sizeof(weatherMeasurement.gpsUtcIso8601),
+          "%04u-%02u-%02uT%02u:%02u:%02uZ",
+          (unsigned)gps.date.year(), (unsigned)gps.date.month(),
+          (unsigned)gps.date.day(), (unsigned)gps.time.hour(),
+          (unsigned)gps.time.minute(), (unsigned)gps.time.second());
+      weatherMeasurement.gpsUtcValid = (n == 20);
+    }
+    if (!ThesisSDLogger::queueWeatherSample(weatherMeasurement))
+      Serial.println("[WX-LOG] QUEUE_FAILED (not recorded)");
+#endif
   }
 
   // PHASE 5.2.2C-3G-4E2: decentralized, nonblocking CAD experiment.

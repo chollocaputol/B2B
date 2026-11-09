@@ -26,6 +26,7 @@ bool bmePressureReadingValid = false;
 bool tempHumidityReadingValid = false;
 bool tempHumidityFromDHT = false;
 bool weatherInputsValid = false;
+WeatherMeasurement weatherMeasurement{};
 
 
 // -------------------- Weather State -----------------------
@@ -47,6 +48,26 @@ bool previousTempHumidityFromDHT = false;
 float temperatureChangeC = NAN;
 float humidityChangePoints = NAN;
 uint32_t validWeatherSamples = 0;
+
+// Copy only results of the just-completed physical cycle.  Forecast history
+// remains exclusively owned by the existing weather algorithm.
+static void completeWeatherMeasurement() {
+  weatherMeasurement.dhtOK = dhtReadingValid;
+  weatherMeasurement.bmePressureOK = bmePressureReadingValid;
+  weatherMeasurement.inputsOK = weatherInputsValid;
+  weatherMeasurement.tempSource = tempHumidityReadingValid
+      ? (tempHumidityFromDHT ? 1 : 2) : 0;
+  weatherMeasurement.selectedTempC = tempHumidityReadingValid ? temperatureC : NAN;
+  weatherMeasurement.selectedRH = tempHumidityReadingValid ? humidityPercent : NAN;
+  weatherMeasurement.stationPressureHpa = bmePressureReadingValid ? pressureStationHpa : NAN;
+  weatherMeasurement.pressureMSLHpa = weatherInputsValid ? pressureMSL : NAN;
+  weatherMeasurement.pressureDeltaHpa = (weatherInputsValid && weatherState != WEATHER_CALIBRATING) ? pressureDelta : NAN;
+  weatherMeasurement.tempDeltaC = weatherInputsValid ? temperatureChangeC : NAN;
+  weatherMeasurement.humidityDeltaPoints = weatherInputsValid ? humidityChangePoints : NAN;
+  weatherMeasurement.historyCount = historyCount;
+  weatherMeasurement.weatherState = weatherState;
+  weatherMeasurement.zambretti = zambrettiIndex;
+}
 // Sensor recovery safeguards. Values are development defaults for a near-sea-level
 // installation. They are NOT storm thresholds and must be configured for deployment.
 const float PRESSURE_MIN_HPA = 870.0f;
@@ -159,6 +180,8 @@ void setupSensors() {
 // HARDWARE WEATHER READINGS
 // ============================================================
 void processWeather() {
+  weatherMeasurement = WeatherMeasurement{};
+  weatherMeasurement.uptimeMs = millis();
   float t = NAN;
   float h = NAN;
   float pStation = NAN;
@@ -190,6 +213,8 @@ void processWeather() {
         t = dhtT;
         h = dhtH;
         gotDHT = true;
+        weatherMeasurement.dhtTempC = dhtT;
+        weatherMeasurement.dhtRH = dhtH;
       } else {
         Serial.println("[DHT20] Invalid measurement");
       }
@@ -209,6 +234,7 @@ void processWeather() {
       bmeT = bme.temperature;
       bmeH = bme.humidity;
       float bmeP = bme.pressure / 100.0f;
+      weatherMeasurement.bmeRawPressureHpa = bmeP;
 
       bool plausible = isfinite(bmeP) && bmeP >= PRESSURE_MIN_HPA &&
                        bmeP <= PRESSURE_MAX_HPA;
@@ -226,6 +252,9 @@ void processWeather() {
           bmeT >= -40.0f && bmeT <= 85.0f &&
           bmeH >= 0.0f && bmeH <= 100.0f) {
         gotBMETempHumidity = true;
+        weatherMeasurement.bmeTempC = bmeT;
+        weatherMeasurement.bmeRH = bmeH;
+        weatherMeasurement.bmeTHOK = true;
       }
     } else {
       Serial.println("[BME680] Reading failed");
@@ -290,6 +319,7 @@ void processWeather() {
     resetWeatherCalibration("missing/rejected weather input");
     sensorFusionState = WEATHER_CALIBRATING;
     weatherState = WEATHER_CALIBRATING;
+    completeWeatherMeasurement();
 
     Serial.print("[WEATHER-A] T=");
     if (tempHumidityReadingValid) {
@@ -336,6 +366,7 @@ void processWeather() {
   previousHumidityPercent = humidityPercent;
   previousTempHumidityFromDHT = tempHumidityFromDHT;
   havePreviousWeatherSample = true;
+  completeWeatherMeasurement();
 
   Serial.printf(
     "[WEATHER-A] T=%.1fC RH=%.1f%% Psta=%.2f Pmsl=%.2f "

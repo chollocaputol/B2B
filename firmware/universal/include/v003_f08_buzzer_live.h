@@ -62,8 +62,10 @@ class Controller {
     startMs_ = 0;
     if (authorized_) {
 #if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
-      digitalWrite(kBuzzerPin, LOW);
+      // Arduino-ESP32 3.x requires GPIO mode before digitalWrite().
+      // External 12k base pulldown holds the transistor OFF before setup.
       pinMode(kBuzzerPin, OUTPUT);
+      digitalWrite(kBuzzerPin, LOW);
 #endif
     }
   }

@@ -56,11 +56,14 @@ void pinMode(int, int);
 #include "v003_f08_buzzer_live.h"
 using namespace V003F08BuzzerLive;
 static int modes=0, writes=0, level=-1, wrongPin=0;
+static bool gpioConfigured=false, writeBeforePinMode=false;
 void digitalWrite(int pin, int value) {
   writes++; if (pin != kBuzzerPin) wrongPin++; level=value;
+  if (!gpioConfigured) writeBeforePinMode=true;
 }
 void pinMode(int pin, int mode) {
   modes++; if (pin != kBuzzerPin || mode != OUTPUT) wrongPin++;
+  else gpioConfigured=true;
 }
 int main() {
   assert(kOutputsEnabled && kBuzzerPin==38 && kPulseMs==250);
@@ -80,6 +83,7 @@ int main() {
   assert(!noRail.command(Request::Test, 1,false));
   Controller c; c.begin(true,true);
   assert(c.authorized() && modes==1 && writes==1 && level==LOW);
+  assert(gpioConfigured && !writeBeforePinMode);
   assert(!c.active());
   assert(!c.command(Request::Test, 1000,true)); assert(level==LOW);
   assert(c.command(Request::Test,1000,false)); assert(c.active() && level==HIGH);
@@ -110,7 +114,7 @@ int main() {
         require(denied.returncode!=0 and 'requires explicit actuation opt-in' in denied.stderr,'missing compile-time actuation gate')
         denied=subprocess.run(core[:1]+['-DTHESIS_V003_F08_BUZZER_LIVE_PROFILE=2']+core[1:],capture_output=True,text=True)
         require(denied.returncode!=0 and 'Invalid buzzer-live profile flag' in denied.stderr, 'invalid profile accepted')
-    print('PASS: wrong vessel/disabled PMU produce zero GPIO writes; correct startup OFF')
+    print('PASS: wrong vessel/disabled PMU produce zero GPIO writes; pinMode precedes first LOW')
     print('PASS: GPIO38 only, 250ms shutoff, rollover, OFF and SOS preemption')
     print('PASS: no retrigger while active; serial parsing isolated from LED/SOS')
     print('PASS: unreviewed or invalid live configuration rejected at compile time')

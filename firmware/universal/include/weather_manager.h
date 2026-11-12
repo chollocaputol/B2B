@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <stdint.h>
+#include <math.h>
 
 // Existing weather contract; same values as the 62-byte LoRa packet.
 enum WeatherState : uint8_t {
@@ -32,6 +33,9 @@ extern bool bmePressureReadingValid;
 extern bool tempHumidityReadingValid;
 extern bool tempHumidityFromDHT;
 extern bool weatherInputsValid;
+extern bool weatherSampleAttempted;
+extern bool bmeAvailable;
+extern bool dhtAvailable;
 extern float temperatureC;
 extern float humidityPercent;
 extern float pressureStationHpa;
@@ -40,3 +44,32 @@ extern float pressureDelta;
 extern uint8_t zambrettiIndex;
 extern uint8_t sensorFusionState;
 extern uint8_t weatherState;
+
+// F07: one real sensor cycle. Invalid or rejected fields are NaN in RAM and
+// serialized as JSON null; never turn a failed measurement into zero.
+struct WeatherMeasurement {
+  uint32_t uptimeMs = 0;
+  char gpsUtcIso8601[21] = {}; // YYYY-MM-DDTHH:MM:SSZ; empty if unavailable
+  bool gpsUtcValid = false;
+  float dhtTempC = NAN;
+  float dhtRH = NAN;
+  float bmeTempC = NAN;
+  float bmeRH = NAN;
+  float bmeRawPressureHpa = NAN;
+  float stationPressureHpa = NAN;
+  float selectedTempC = NAN;
+  float selectedRH = NAN;
+  float pressureMSLHpa = NAN;
+  float pressureDeltaHpa = NAN;
+  float tempDeltaC = NAN;
+  float humidityDeltaPoints = NAN;
+  uint8_t historyCount = 0;
+  uint8_t weatherState = WEATHER_CALIBRATING;
+  uint8_t zambretti = 0;
+  uint8_t tempSource = 0; // 0=none, 1=DHT20, 2=BME680 fallback
+  bool dhtOK = false;
+  bool bmeTHOK = false;
+  bool bmePressureOK = false;
+  bool inputsOK = false;
+};
+extern WeatherMeasurement weatherMeasurement;

@@ -26,14 +26,17 @@ bool bmePressureReadingValid = false;
 bool tempHumidityReadingValid = false;
 bool tempHumidityFromDHT = false;
 bool weatherInputsValid = false;
+// Distinguish not-yet-sampled from a failed physical sensor read on OLED.
+bool weatherSampleAttempted = false;
+WeatherMeasurement weatherMeasurement{};
 
 
 // -------------------- Weather State -----------------------
-float temperatureC = 0.0f;
-float humidityPercent = 0.0f;
-float pressureStationHpa = 0.0f; // direct BME680 reading (station pressure)
-float pressureMSL = 0.0f;        // altitude-normalized pressure used by weather logic
-float pressureDelta = 0.0f;
+float temperatureC = NAN;
+float humidityPercent = NAN;
+float pressureStationHpa = NAN; // direct BME680 reading (station pressure)
+float pressureMSL = NAN;        // altitude-normalized pressure used by weather logic
+float pressureDelta = NAN;
 uint8_t zambrettiIndex = 0;
 uint8_t sensorFusionState = WEATHER_CALIBRATING;
 uint8_t weatherState = WEATHER_CALIBRATING;
@@ -47,12 +50,34 @@ bool previousTempHumidityFromDHT = false;
 float temperatureChangeC = NAN;
 float humidityChangePoints = NAN;
 uint32_t validWeatherSamples = 0;
+
+// Copy only results of the just-completed physical cycle.  Forecast history
+// remains exclusively owned by the existing weather algorithm.
+static void completeWeatherMeasurement() {
+  weatherMeasurement.dhtOK = dhtReadingValid;
+  weatherMeasurement.bmePressureOK = bmePressureReadingValid;
+  weatherMeasurement.inputsOK = weatherInputsValid;
+  weatherMeasurement.tempSource = tempHumidityReadingValid
+      ? (tempHumidityFromDHT ? 1 : 2) : 0;
+  weatherMeasurement.selectedTempC = tempHumidityReadingValid ? temperatureC : NAN;
+  weatherMeasurement.selectedRH = tempHumidityReadingValid ? humidityPercent : NAN;
+  weatherMeasurement.stationPressureHpa = bmePressureReadingValid ? pressureStationHpa : NAN;
+  weatherMeasurement.pressureMSLHpa = weatherInputsValid ? pressureMSL : NAN;
+  weatherMeasurement.pressureDeltaHpa = (weatherInputsValid && weatherState != WEATHER_CALIBRATING) ? pressureDelta : NAN;
+  weatherMeasurement.tempDeltaC = weatherInputsValid ? temperatureChangeC : NAN;
+  weatherMeasurement.humidityDeltaPoints = weatherInputsValid ? humidityChangePoints : NAN;
+  weatherMeasurement.historyCount = historyCount;
+  weatherMeasurement.weatherState = weatherState;
+  weatherMeasurement.zambretti = zambrettiIndex;
+}
 // Sensor recovery safeguards. Values are development defaults for a near-sea-level
 // installation. They are NOT storm thresholds and must be configured for deployment.
 const float PRESSURE_MIN_HPA = 870.0f;
 const float PRESSURE_MAX_HPA = 1085.0f;
 const float MAX_SINGLE_PRESSURE_STEP_HPA = 8.0f;
 float lastAcceptedStationPressure = NAN;
+// A rejected plausible jump is a candidate only, never a valid history sample.
+float pendingStationPressure = NAN;
 uint8_t bmeConsecutiveFailures = 0;
 uint8_t dhtConsecutiveFailures = 0;
 // Recovered sensors require a fresh full history; never reuse stale calibration.
@@ -159,6 +184,12 @@ void setupSensors() {
 // HARDWARE WEATHER READINGS
 // ============================================================
 void processWeather() {
+  weatherMeasurement = WeatherMeasurement{};
+  weatherMeasurement.uptimeMs = millis();
+  weatherSampleAttempted = true;
+  // Confirmation must come from the immediately following physical cycle.
+  const float previousPendingPressure = pendingStationPressure;
+  pendingStationPressure = NAN;
   float t = NAN;
   float h = NAN;
   float pStation = NAN;
@@ -176,7 +207,7 @@ void processWeather() {
     switchI2C(DHT_SDA_PIN, DHT_SCL_PIN);
     // Verify the actual DHT20 responds before trusting library readback.
     if (!dht.isConnected()) {
-      Serial.println("[DHT20] No I2C response; backup BME680 T/RH if available");
+       Serial.println("[DHT20] No I2C response; selected T/RH invalid (no fallback)");
     } else {
     int dhtStatus = dht.read();
 
@@ -190,6 +221,8 @@ void processWeather() {
         t = dhtT;
         h = dhtH;
         gotDHT = true;
+        weatherMeasurement.dhtTempC = dhtT;
+        weatherMeasurement.dhtRH = dhtH;
       } else {
         Serial.println("[DHT20] Invalid measurement");
       }
@@ -200,7 +233,7 @@ void processWeather() {
   }
 
   // ----------------------------------------------------------
-  // Read BME680 pressure and keep its T/RH available as backup
+  // Read BME680 pressure and independent T/RH diagnostics (never T/RH fallback)
   // ----------------------------------------------------------
   if (bmeAvailable) {
     switchI2C(BME_SDA_PIN, BME_SCL_PIN);
@@ -209,15 +242,25 @@ void processWeather() {
       bmeT = bme.temperature;
       bmeH = bme.humidity;
       float bmeP = bme.pressure / 100.0f;
+      weatherMeasurement.bmeRawPressureHpa = bmeP;
 
       bool plausible = isfinite(bmeP) && bmeP >= PRESSURE_MIN_HPA &&
                        bmeP <= PRESSURE_MAX_HPA;
       bool jump = plausible && isfinite(lastAcceptedStationPressure) &&
                   fabsf(bmeP - lastAcceptedStationPressure) > MAX_SINGLE_PRESSURE_STEP_HPA;
-      if (plausible && !jump) {
+      // Reuse the existing step limit to confirm a sustained plausible shift.
+      // Only the fresh confirming reading is accepted; never insert the candidate.
+      const bool recoveredShift = jump && isfinite(previousPendingPressure) &&
+          fabsf(bmeP - previousPendingPressure) <= MAX_SINGLE_PRESSURE_STEP_HPA;
+      if (plausible && (!jump || recoveredShift)) {
+        if (recoveredShift) {
+          resetWeatherCalibration("confirmed pressure discontinuity");
+          Serial.println("[BME680] Plausible pressure shift confirmed; fresh calibration required");
+        }
         pStation = bmeP;
         gotBMEPressure = true;
       } else {
+        if (jump) pendingStationPressure = bmeP;
         Serial.printf("[BME680] PRESSURE REJECTED: %.2f hPa (%s). Not used for history/forecast.\n",
                       bmeP, jump ? "abrupt jump" : "outside configured range");
       }
@@ -226,6 +269,9 @@ void processWeather() {
           bmeT >= -40.0f && bmeT <= 85.0f &&
           bmeH >= 0.0f && bmeH <= 100.0f) {
         gotBMETempHumidity = true;
+        weatherMeasurement.bmeTempC = bmeT;
+        weatherMeasurement.bmeRH = bmeH;
+        weatherMeasurement.bmeTHOK = true;
       }
     } else {
       Serial.println("[BME680] Reading failed");
@@ -234,7 +280,7 @@ void processWeather() {
 
   // Sensor recovery is explicit and separate from the OLED reading flags.
   if (gotDHT) {
-    if (dhtConsecutiveFailures) Serial.println("[DHT20] Recovered; T/RH source may switch");
+    if (dhtConsecutiveFailures) Serial.println("[DHT20] Recovered; DHT20 T/RH valid again");
     dhtConsecutiveFailures = 0;
   } else if (dhtConsecutiveFailures < 255) {
     ++dhtConsecutiveFailures;
@@ -247,32 +293,24 @@ void processWeather() {
     ++bmeConsecutiveFailures;
   }
 
-  // Prefer DHT20 for T/RH; fall back to BME680 if DHT20 failed.
-  if (!gotDHT && gotBMETempHumidity) {
-    t = bmeT;
-    h = bmeH;
-  }
+  // Strict source policy: DHT20 is the sole source of selected T/RH.
+  // Keep independently measured BME680 T/RH in weatherMeasurement for
+  // diagnostics/SD, but never substitute them for a failed DHT20.
 
   // Store current-cycle status independently of the overall weather result.
   dhtReadingValid = gotDHT;
   bmePressureReadingValid = gotBMEPressure;
-  tempHumidityReadingValid = gotDHT || gotBMETempHumidity;
+  tempHumidityReadingValid = gotDHT;
   tempHumidityFromDHT = gotDHT;
   weatherInputsValid = tempHumidityReadingValid && bmePressureReadingValid;
 
-  // Publish each valid measurement even if the other sensor failed.
-  if (tempHumidityReadingValid) {
-    temperatureC = t;
-    humidityPercent = h;
-  }
-  if (bmePressureReadingValid) {
-    pressureStationHpa = pStation;
-    // If T/RH is unavailable, keep the raw station pressure for display.
-    // Forecast calculations remain disabled until all inputs are valid.
-    pressureMSL = tempHumidityReadingValid
-                    ? normalizePressure(pStation, temperatureC)
-                    : pStation;
-  }
+  // Invalidate failed sensor values immediately; never show stale values.
+  temperatureC = tempHumidityReadingValid ? t : NAN;
+  humidityPercent = tempHumidityReadingValid ? h : NAN;
+  pressureStationHpa = bmePressureReadingValid ? pStation : NAN;
+  // Sea-level normalization requires both live physical inputs.
+  pressureMSL = weatherInputsValid
+                  ? normalizePressure(pStation, temperatureC) : NAN;
 
   // Restore OLED I2C configuration before any display update.
   switchI2C(OLED_SDA_PIN, OLED_SCL_PIN);
@@ -283,13 +321,14 @@ void processWeather() {
   // otherwise valid readings or make the working sensor look broken.
   // ----------------------------------------------------------
   if (!weatherInputsValid) {
-    pressureDelta = 0.0f;
+    pressureDelta = NAN;
     zambrettiIndex = 0;
     temperatureChangeC = NAN;
     humidityChangePoints = NAN;
     resetWeatherCalibration("missing/rejected weather input");
     sensorFusionState = WEATHER_CALIBRATING;
     weatherState = WEATHER_CALIBRATING;
+    completeWeatherMeasurement();
 
     Serial.print("[WEATHER-A] T=");
     if (tempHumidityReadingValid) {
@@ -311,9 +350,8 @@ void processWeather() {
   }
 
   // ----------------------------------------------------------
-  // Both T/RH and pressure are valid: run manuscript decision hierarchy.
-  // Compare only consecutive valid samples from the SAME T/RH source;
-  // switching DHT20 to BME680 can cause an artificial temperature jump.
+  // DHT20 T/RH and BME680 pressure are both valid: run decision hierarchy.
+  // Only independently measured physical values enter weather history.
   // ----------------------------------------------------------
   pressureMSL = normalizePressure(pStation, temperatureC);
   bool comparable = havePreviousWeatherSample &&
@@ -336,13 +374,14 @@ void processWeather() {
   previousHumidityPercent = humidityPercent;
   previousTempHumidityFromDHT = tempHumidityFromDHT;
   havePreviousWeatherSample = true;
+  completeWeatherMeasurement();
 
   Serial.printf(
     "[WEATHER-A] T=%.1fC RH=%.1f%% Psta=%.2f Pmsl=%.2f "
     "dP=%+.2f Z=%u hist=%u/%u DHT=%s BME=%s State=%s\n",
     temperatureC, humidityPercent, pressureStationHpa, pressureMSL,
     pressureDelta, zambrettiIndex, historyCount, WEATHER_HISTORY_SIZE,
-    gotDHT ? "OK" : "FAIL (BME T/RH fallback)",
+    gotDHT ? "OK" : "FAIL",
     gotBMEPressure ? "OK" : "FAIL", weatherName(weatherState)
   );
   if (comparable) {

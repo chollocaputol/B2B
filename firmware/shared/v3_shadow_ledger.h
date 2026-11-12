@@ -2,7 +2,7 @@
 // PHASE 5.1.9A: RECEIVE-ONLY, VOLATILE SHADOW STATE.
 // Not a durable ledger. Not production SOS, ACK, or relay permission.
 // Without independently authorized provisioning, every v3 frame is rejected.
-#include "phase5_1_7_verify_boundary.h"
+#include "v3_verification_boundary.h"
 #include <stdint.h>
 #include <stddef.h>
 namespace Phase519 {

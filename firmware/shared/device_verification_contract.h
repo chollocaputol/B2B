@@ -4,7 +4,7 @@
 // Intentionally returns unavailable: no keys, no crypto, no authorization.
 // DO NOT change these defaults to accept without reviewed device crypto,
 // root-approved key provisioning, replay-safe lifecycle and hardware tests.
-#include "phase5_1_7_verify_boundary.h"
+#include "v3_verification_boundary.h"
 
 namespace Phase518 {
 enum class DeviceCryptoState : uint8_t {Unavailable=0};

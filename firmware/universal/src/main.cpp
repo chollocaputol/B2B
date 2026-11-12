@@ -83,6 +83,25 @@ static_assert(V003F08BuzzerLive::kOutputsEnabled &&
               PhysicalIndicators::kBuzzerDriverPin == -1,
               "Live buzzer must be isolated from the production indicators");
 #endif
+// Isolated GPIO38/39/44 combined F08 bench profile, NOT field firmware.
+#ifndef THESIS_V003_F08_COMBINED_PROFILE
+#define THESIS_V003_F08_COMBINED_PROFILE 0
+#endif
+#if THESIS_V003_F08_COMBINED_PROFILE == 1
+#if THESIS_V003_F08_INDICATOR_BENCH != 1 || THESIS_V003_F08_LED_BENCH == 1 || \
+    THESIS_V003_F08_BUZZER_PREFLIGHT == 1 || THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+#error "F08 combined bench must isolate weather sensors, SD, relay and other GPIO owners"
+#endif
+#include "v003_f08_combined_bench.h"
+static_assert(V003F08CombinedBench::kOutputsEnabled &&
+              V003F08CombinedBench::kYellowPin == 39 &&
+              V003F08CombinedBench::kRedPin == 44 &&
+              V003F08CombinedBench::kBuzzerPin == 38 &&
+              !PhysicalIndicators::kOutputsEnabled &&
+              PhysicalIndicators::kBuzzerDriverPin == -1,
+              "Combined test must keep the production adapter disabled");
+#endif
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -559,6 +578,15 @@ void setup() {
                 unsigned(V003F08BuzzerLive::instance().authorized()),
                 V003F08BuzzerLive::instance().authorized() ? "READY_OFF" : "DISABLED");
 #endif
+#if THESIS_V003_F08_COMBINED_PROFILE == 1
+  const bool combinedIsV003 = VesselIdentity::nodeId() == 3U;
+  const bool combinedRailEnabled = pmu.isEnableBLDO2();
+  V003F08CombinedBench::instance().begin(combinedIsV003, combinedRailEnabled);
+  Serial.printf("[F08-COMBINED] id=%lu rail=%u authorized=%u GPIO38/39/44=%s DEMO_ONLY\n",
+                (unsigned long)VesselIdentity::nodeId(), unsigned(combinedRailEnabled),
+                unsigned(V003F08CombinedBench::instance().authorized()),
+                V003F08CombinedBench::instance().authorized() ? "READY_OFF" : "DISABLED");
+#endif
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
@@ -687,6 +715,10 @@ void loop() {
   // Software timeout. Loop blocking can lengthen 250ms; not a hardware timer.
   V003F08BuzzerLive::instance().tick(
       millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
+#endif
+#if THESIS_V003_F08_COMBINED_PROFILE == 1
+  V003F08CombinedBench::instance().tick(
+      millis(), hasActiveLocalSOS(), getActiveSOSCount() > 0);
 #endif
 
   // PHASE 5.2.2C-3G-4E2: decentralized, nonblocking CAD experiment.

@@ -6,6 +6,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <DHT20.h>
+#if THESIS_V003_F08_COMBINED_PROFILE == 1
+#include "v003_f08_combined_bench.h"
+#endif
 #if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
 #include "v003_f08_buzzer_live.h"
 #endif
@@ -574,6 +577,30 @@ void processSerialTestCommands() {
           Serial.printf("[F08-BUZZER-LIVE] request=%s active=%u authorized=%u gpio=38\n",
                         V003F08BuzzerLive::requestName(request),
                         unsigned(bench.active()), unsigned(bench.authorized()));
+        }
+#endif
+#if THESIS_V003_F08_COMBINED_PROFILE == 1
+      } else if (strncmp(testLine, "F08 IND ", 8) == 0) {
+        auto &ind = V003F08CombinedBench::instance();
+        const auto request = V003F08CombinedBench::parse(testLine);
+        if (request == V003F08CombinedBench::Request::Help) {
+          Serial.println("[F08-COMBINED] F08 IND FRONT | SQUALL | SOS | OFF | STATUS | HELP");
+          Serial.println("[F08-COMBINED] SIMULATED_ONLY_NO_RADIO, 6s demo limit; real SOS overrides");
+        } else if (request == V003F08CombinedBench::Request::Invalid) {
+          Serial.println("[F08-COMBINED] Invalid request; type F08 IND HELP");
+        } else {
+          const bool localSOS = hasActiveLocalSOS();
+          const bool receivedSOS = getActiveSOSCount() > 0;
+          if (request != V003F08CombinedBench::Request::Status &&
+              !ind.command(request, millis(), localSOS || receivedSOS)) {
+            Serial.println("[F08-COMBINED] BLOCKED: identity/rail/active SOS/demo already running");
+          }
+          ind.tick(millis(), localSOS, receivedSOS);
+          const auto &levels = ind.outputs();
+          Serial.printf("[F08-COMBINED] request=%s demo=%s authorized=%u yellow=%u red=%u buzzer=%u SIMULATED_ONLY_NO_RADIO\n",
+                        V003F08CombinedBench::requestName(request),
+                        V003F08CombinedBench::requestName(ind.demo()), unsigned(ind.authorized()),
+                        unsigned(levels.yellow), unsigned(levels.red), unsigned(levels.buzzer));
         }
 #endif
       } else if (strcmp(testLine, "TEST HELP") == 0) {

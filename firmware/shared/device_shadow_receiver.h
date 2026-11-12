@@ -1,7 +1,7 @@
 #pragma once
 // Phase 5.1.9D: ESP32 receive-only shadow integration, HARD LOCKED without keys.
 // No trust anchor, persisted replay state, NVS access, RF ACK, operational SOS or relay.
-#include "phase5_1_9_shadow.h"
+#include "v3_shadow_ledger.h"
 #include <stdint.h>
 #include <stddef.h>
 

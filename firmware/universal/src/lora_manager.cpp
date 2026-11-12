@@ -12,9 +12,9 @@
 #include "../../shared/control_retry_schedule.h"
 #include "weather_manager.h"
 #include "../../shared/compact_position_v2.h"
-#include "../../shared/phase5_1_6_rx_guard.h"
-#include "../../shared/phase5_1_8_device_backend.h"
-#include "../../shared/phase5_1_9D_shadow_rx.h"
+#include "../../shared/receive_format_guard.h"
+#include "../../shared/device_verification_contract.h"
+#include "../../shared/device_shadow_receiver.h"
 // Set to 0 to perform the original 62-byte baseline comparison.
 // In either mode, SOS/ACK/CANCEL remain unchanged legacy v1 packets.
 // A manually enabled, bench-only forwarding experiment. OFF in normal builds.

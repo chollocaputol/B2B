@@ -3,9 +3,10 @@
 #include <stdint.h>
 #include <string.h>
 
-// Vessel-003 LED-only bench PREPARATION. It is NOT the production F08 driver.
-// The checked-in build-only profile enforces outputs OFF; enabling hardware
-// needs a separately reviewed firmware profile and electrically checked wiring.
+// Vessel-003 LED-only *manual* test; not the production F08 indicator driver.
+// Only the explicitly opted-in V003 live test build configures GPIO39/44.
+// The buzzer and production F08 physical outputs remain permanently disabled.
+// User-confirmed LED wiring is not an instrument-based electrical certification.
 #ifndef THESIS_V003_F08_LED_BENCH
 #define THESIS_V003_F08_LED_BENCH 0
 #endif
@@ -15,13 +16,19 @@
 #ifndef THESIS_V003_F08_LED_HARDWARE_REVIEWED
 #define THESIS_V003_F08_LED_HARDWARE_REVIEWED 0
 #endif
+#ifndef THESIS_V003_F08_LED_LIVE_PROFILE
+#define THESIS_V003_F08_LED_LIVE_PROFILE 0
+#endif
+#if THESIS_V003_F08_LED_LIVE_PROFILE != 0 && THESIS_V003_F08_LED_LIVE_PROFILE != 1
+#error "Invalid Vessel-003 live LED profile flag"
+#endif
 #if (THESIS_V003_F08_LED_OUTPUTS_ENABLE != 0 && THESIS_V003_F08_LED_OUTPUTS_ENABLE != 1) || \
     (THESIS_V003_F08_LED_HARDWARE_REVIEWED != 0 && THESIS_V003_F08_LED_HARDWARE_REVIEWED != 1)
 #error "Invalid Vessel-003 LED test gate"
 #endif
 #if THESIS_V003_F08_LED_OUTPUTS_ENABLE == 1 && \
     (THESIS_V003_F08_LED_HARDWARE_REVIEWED != 1 || THESIS_V003_F08_LED_BENCH != 1 || \
-     THESIS_V003_F08_INDICATOR_BENCH != 1)
+     THESIS_V003_F08_INDICATOR_BENCH != 1 || THESIS_V003_F08_LED_LIVE_PROFILE != 1)
 #error "LED output requires separately reviewed Vessel-003-only electrical authorization"
 #endif
 
@@ -60,11 +67,14 @@ inline const char *requestName(Request r) {
 
 class Controller {
  public:
-  void begin() {
+  // Called once *after* VesselIdentity::load(). The caller must pass true
+  // only for node ID 3; otherwise no GPIO configuration or writes occur.
+  void begin(bool vessel003) {
     selected_ = Request::Off;
+    authorized_ = vessel003;
 #if THESIS_V003_F08_LED_OUTPUTS_ENABLE == 1
-    // Write LOW before output configuration; external startup behavior still
-    // requires separate GPIO44/UART0 and polarity verification.
+    if (!authorized_) return;
+    // LOW before output mode; boot-ROM states are outside firmware control.
     digitalWrite(kYellowPin, LOW);
     digitalWrite(kRedPin, LOW);
     pinMode(kYellowPin, OUTPUT);
@@ -72,8 +82,11 @@ class Controller {
 #endif
   }
 
+  bool authorized() const { return authorized_; }
+
   // Only one LED may be selected. Live local/received SOS always preempts.
   bool command(Request r, uint32_t nowMs, bool sosActive) {
+    if (!authorized_) return false;
     if (r == Request::Off) {
       selected_ = Request::Off;
       apply();
@@ -92,6 +105,7 @@ class Controller {
   }
 
   void tick(uint32_t nowMs, bool sosActive) {
+    if (!authorized_) return;
     if (sosActive ||
         (selected_ != Request::Off && uint32_t(nowMs - startedAtMs_) >= kMaximumOnMs)) {
       selected_ = Request::Off;
@@ -106,12 +120,14 @@ class Controller {
  private:
   void apply() {
 #if THESIS_V003_F08_LED_OUTPUTS_ENABLE == 1
+    if (!authorized_) return;
     digitalWrite(kYellowPin, yellow() ? HIGH : LOW);
     digitalWrite(kRedPin, red() ? HIGH : LOW);
 #endif
   }
 
   Request selected_ = Request::Off;
+  bool authorized_ = false;
   uint32_t startedAtMs_ = 0;
 };
 

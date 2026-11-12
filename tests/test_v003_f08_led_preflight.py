@@ -72,7 +72,7 @@ int main() {
   assert(parse(nullptr)==Request::NotLed);
   assert(std::strcmp(requestName(Request::Red),"RED")==0);
   Controller c;
-  c.begin();
+  c.begin(true);
   assert(!c.yellow() && !c.red());
 #if THESIS_V003_F08_LED_OUTPUTS_ENABLE == 1
   assert(modes==2 && writes==2 && yellowLevel==LOW && redLevel==LOW);
@@ -119,7 +119,8 @@ int main() {
         reviewed = ['-DTHESIS_V003_F08_LED_OUTPUTS_ENABLE=1',
                     '-DTHESIS_V003_F08_LED_HARDWARE_REVIEWED=1',
                     '-DTHESIS_V003_F08_LED_BENCH=1',
-                    '-DTHESIS_V003_F08_INDICATOR_BENCH=1']
+                    '-DTHESIS_V003_F08_INDICATOR_BENCH=1',
+                    '-DTHESIS_V003_F08_LED_LIVE_PROFILE=1']
         subprocess.run(cmd[:1]+reviewed+cmd[1:], check=True)
         subprocess.run([str(exe)], check=True)
         unauthorized = subprocess.run(cmd[:1]+['-DTHESIS_V003_F08_LED_OUTPUTS_ENABLE=1']+cmd[1:],

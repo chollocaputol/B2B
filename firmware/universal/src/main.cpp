@@ -39,9 +39,17 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 #error "V003 LED preflight requires the weather-disabled Vessel-003 bench"
 #endif
 #include "v003_f08_led_bench.h"
-static_assert(!V003F08LedBench::kOutputsEnabled &&
-              V003F08LedBench::kBuzzerPin == -1,
+static_assert(V003F08LedBench::kBuzzerPin == -1 &&
+              PhysicalIndicators::kBuzzerDriverPin == -1 &&
+              !PhysicalIndicators::kOutputsEnabled,
+              "V003 LED test must not enable buzzer or production indicators");
+#if THESIS_V003_F08_LED_LIVE_PROFILE == 0
+static_assert(!V003F08LedBench::kOutputsEnabled,
               "V003 LED preflight build must keep ALL physical outputs OFF");
+#else
+static_assert(V003F08LedBench::kOutputsEnabled,
+              "Live LED profile must be explicitly opted in");
+#endif
 #endif
 #include <Wire.h>
 #include <SPI.h>
@@ -470,8 +478,8 @@ void setup() {
   SOSControls::begin();
   PhysicalIndicators::begin();
 #if THESIS_V003_F08_LED_BENCH == 1
-  V003F08LedBench::instance().begin();
-  Serial.println("[F08-LED] preflight=BUILD_ONLY GPIO39/44=DISABLED buzzer=DISABLED");
+  Serial.printf("[F08-LED] profile=%s buzzer=DISABLED node-gate=ID3\n",
+                V003F08LedBench::kOutputsEnabled ? "LED_LIVE" : "BUILD_ONLY");
 #endif
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
   buttonLastReading = digitalRead(USER_BUTTON_PIN);
@@ -495,6 +503,14 @@ void setup() {
 #endif
   setupGPS();
   VesselIdentity::load();
+#if THESIS_V003_F08_LED_BENCH == 1
+  const bool isVessel003 = VesselIdentity::nodeId() == 3U;
+  // Runtime gate: even a misflashed live test cannot drive LED GPIOs on 001/002.
+  V003F08LedBench::instance().begin(isVessel003);
+  Serial.printf("[F08-LED] vessel_id=%lu authorized=%u GPIO39/44=%s\n",
+                (unsigned long)VesselIdentity::nodeId(), unsigned(isVessel003),
+                V003F08LedBench::kOutputsEnabled && isVessel003 ? "READY_OFF" : "DISABLED");
+#endif
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
@@ -610,7 +626,7 @@ void loop() {
   PhysicalIndicators::update(millis(), weatherState, weatherInputsValid,
                              hasActiveLocalSOS(), getActiveSOSCount() > 0);
 #if THESIS_V003_F08_LED_BENCH == 1
-  // SOS ALWAYS clears any virtual LED test, with a rollover-safe 500ms limit.
+  // SOS preempts any LED test; normal loop scheduling enforces the 500ms limit.
   V003F08LedBench::instance().tick(
       millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
 #endif

@@ -6,6 +6,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <DHT20.h>
+#if THESIS_V003_F08_INDICATOR_BENCH == 1
+#include "v003_f08_dryrun.h"
+#endif
 
 // Shared OLED bus restored after each weather reading cycle.
 #define OLED_SDA_PIN 17
@@ -475,6 +478,23 @@ void processSerialTestCommands() {
         if (testLine[i] >= 'a' && testLine[i] <= 'z') testLine[i] -= ('a' - 'A');
       if (strcmp(testLine, "CANCEL SOS") == 0) {
         cancelActiveSOS();
+#if THESIS_V003_F08_INDICATOR_BENCH == 1
+      } else if (strncmp(testLine, "F08 TEST ", 9) == 0) {
+        const auto request = V003F08DryRun::parse(testLine);
+        if (request == V003F08DryRun::Request::Help) {
+          Serial.println("[F08-DRY] F08 TEST OFF | YELLOW | RED | BUZZER | ALL | HELP");
+          Serial.println("[F08-DRY] ACTUATION=DISABLED INDICATOR_GPIO_WRITES=0");
+        } else if (request == V003F08DryRun::Request::Invalid) {
+          Serial.println("[F08-DRY] Unknown channel; type F08 TEST HELP");
+        } else {
+          const auto channels = V003F08DryRun::requestedChannels(request);
+          Serial.printf("[F08-DRY] request=%s yellow=%u red=%u buzzer=%u "
+                        "ACTUATION=DISABLED INDICATOR_GPIO_WRITES=0\n",
+                        V003F08DryRun::requestName(request),
+                        unsigned(channels.yellow), unsigned(channels.red),
+                        unsigned(channels.buzzer));
+        }
+#endif
       } else if (strcmp(testLine, "TEST HELP") == 0) {
         Serial.println("[TEST] Commands: TEST ALL | NORMAL | FRONT | SQUALL | BOTH | CALIB | Z");
         Serial.println("[TEST] Synthetic tests do not overwrite live weather or LoRa payloads");

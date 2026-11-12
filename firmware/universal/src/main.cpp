@@ -9,6 +9,24 @@
 #include <Arduino.h>
 #include "sos_controls.h"
 #include "physical_indicators.h"
+// Isolated Vessel-003 preflight. Never changes normal firmware behavior.
+#ifndef THESIS_V003_F08_INDICATOR_BENCH
+#define THESIS_V003_F08_INDICATOR_BENCH 0
+#endif
+#if THESIS_V003_F08_INDICATOR_BENCH != 0 && THESIS_V003_F08_INDICATOR_BENCH != 1
+#error "THESIS_V003_F08_INDICATOR_BENCH must be 0 or 1"
+#endif
+#if THESIS_V003_F08_INDICATOR_BENCH == 1
+#if THESIS_LAB_RELAY_TX != 0
+#error "V003 F08 preflight cannot enable laboratory relay TX"
+#endif
+static_assert(!PhysicalIndicators::kOutputsEnabled &&
+              !PhysicalIndicators::kWiringAndDriverReviewed &&
+              PhysicalIndicators::kYellowPin == -1 &&
+              PhysicalIndicators::kRedPin == -1 &&
+              PhysicalIndicators::kBuzzerDriverPin == -1,
+              "V003 F08 preflight must keep all physical outputs unassigned/OFF");
+#endif
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -34,6 +52,10 @@
 #endif
 #if THESIS_F07_WEATHER_LOG == 1 && THESIS_SD_LOGGER != 1
 #error "F07 weather logging requires the SD logger"
+#endif
+#if THESIS_V003_F08_INDICATOR_BENCH == 1 && \
+    (THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0)
+#error "V003 F08 preflight cannot enable SD logging or weather records"
 #endif
 // Display-only SD OLED view. Enabled only in its dedicated F06 test profile.
 #ifndef THESIS_SD_OLED_UI
@@ -421,9 +443,13 @@ void setup() {
   Serial.println();
   Serial.println("=== UNIVERSAL VESSEL: SCHEDULED TX + RX ===");
   Serial.println("Packet: 62 bytes | MAC adaptive telemetry (min base 5s)");
+#if THESIS_V003_F08_INDICATOR_BENCH == 1
+  Serial.println("[F08-BENCH] Weather operations DISABLED; physical outputs OFF/unassigned");
+#else
   Serial.printf("[WEATHER] %s, sample interval %lu ms; history %u samples\n",
                 WEATHER_FAST_TEST ? "ACCELERATED DEVELOPMENT (NOT REAL 100-MIN HISTORY)" : "FIELD",
                 WEATHER_INTERVAL, WEATHER_HISTORY_SIZE);
+#endif
 
   SOSControls::begin();
   PhysicalIndicators::begin();
@@ -438,7 +464,15 @@ void setup() {
   ThesisSD::probe(pmu);
 #endif
   setupOLED();
+#if THESIS_V003_F08_INDICATOR_BENCH == 1
+  // GPIO38/39 are NOT configured for sensor I2C in this build-only profile.
+  // Weather alerts are unavailable; authoritative SOS remains independent.
+  weatherInputsValid = false;
+  weatherState = WEATHER_CALIBRATING;
+  Serial.println("[F08-BENCH] DHT20/BME680 initialization SKIPPED");
+#else
   setupSensors();
+#endif
   setupGPS();
   VesselIdentity::load();
   setupLoRa();
@@ -528,6 +562,7 @@ void loop() {
   processSOSRetries();
   processCancelRetries();
 
+#if THESIS_V003_F08_INDICATOR_BENCH == 0
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();
     processWeather();
@@ -549,6 +584,7 @@ void loop() {
       Serial.println("[WX-LOG] QUEUE_FAILED (not recorded)");
 #endif
   }
+#endif  // THESIS_V003_F08_INDICATOR_BENCH == 0
 
   // Live authoritative inputs only; OLED demo modes never reach physical outputs.
   PhysicalIndicators::update(millis(), weatherState, weatherInputsValid,

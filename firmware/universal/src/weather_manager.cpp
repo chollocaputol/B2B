@@ -6,6 +6,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <DHT20.h>
+#if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
+#include "v003_f08_buzzer_live.h"
+#endif
 #if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
 #include "v003_f08_buzzer_bench.h"
 #endif
@@ -550,6 +553,27 @@ void processSerialTestCommands() {
           Serial.printf("[F08-BUZZER] request=%s virtual_active=%u authorized=%u ACTUATION=DISABLED GPIO38_WRITES=0\n",
                         V003F08BuzzerBench::requestName(request),
                         unsigned(bench.virtualActive()), unsigned(bench.authorized()));
+        }
+#endif
+#if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
+      } else if (strncmp(testLine, "F08 BUZZER ", 11) == 0) {
+        const auto request = V003F08BuzzerLive::parse(testLine);
+        auto &bench = V003F08BuzzerLive::instance();
+        if (request == V003F08BuzzerLive::Request::Help) {
+          Serial.println("[F08-BUZZER-LIVE] F08 BUZZER TEST | OFF | STATUS | HELP");
+          Serial.println("[F08-BUZZER-LIVE] 250ms maximum nominal pulse; repeated TEST blocked");
+        } else if (request == V003F08BuzzerLive::Request::Invalid) {
+          Serial.println("[F08-BUZZER-LIVE] Invalid request; type F08 BUZZER HELP");
+        } else {
+          const bool sos = hasActiveLocalSOS() || getActiveSOSCount() > 0;
+          if (request == V003F08BuzzerLive::Request::Test ||
+              request == V003F08BuzzerLive::Request::Off) {
+            if (!bench.command(request, millis(), sos))
+              Serial.println("[F08-BUZZER-LIVE] BLOCKED: identity/rail/SOS/already-active");
+          }
+          Serial.printf("[F08-BUZZER-LIVE] request=%s active=%u authorized=%u gpio=38\n",
+                        V003F08BuzzerLive::requestName(request),
+                        unsigned(bench.active()), unsigned(bench.authorized()));
         }
 #endif
       } else if (strcmp(testLine, "TEST HELP") == 0) {

@@ -66,6 +66,23 @@ static_assert(!V003F08BuzzerBench::kOutputsEnabled &&
               PhysicalIndicators::kBuzzerDriverPin == -1,
               "F08 buzzer preflight must never drive the physical buzzer");
 #endif
+// Independent Vessel-003 live buzzer profile. Separate from software preflight.
+#ifndef THESIS_V003_F08_BUZZER_LIVE_PROFILE
+#define THESIS_V003_F08_BUZZER_LIVE_PROFILE 0
+#endif
+#if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
+#if THESIS_V003_F08_INDICATOR_BENCH != 1 || THESIS_V003_F08_LED_BENCH == 1 || \
+    THESIS_V003_F08_BUZZER_PREFLIGHT == 1 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+#error "F08 buzzer live requires weather-disabled, SD-off, relay-off, LED-off profile"
+#endif
+#include "v003_f08_buzzer_live.h"
+static_assert(V003F08BuzzerLive::kOutputsEnabled &&
+              V003F08BuzzerLive::kBuzzerPin == 38 &&
+              !PhysicalIndicators::kOutputsEnabled &&
+              PhysicalIndicators::kBuzzerDriverPin == -1,
+              "Live buzzer must be isolated from the production indicators");
+#endif
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -532,6 +549,16 @@ void setup() {
   Serial.printf("[F08-BUZZER] profile=BUILD_ONLY id=%lu authorized=%u ACTUATION=DISABLED GPIO38_WRITES=0\n",
                 (unsigned long)VesselIdentity::nodeId(), unsigned(isBuzzerVessel003));
 #endif
+#if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
+  // Firmware sees the PMU enable bit; this is NOT a voltage measurement.
+  const bool isLiveBuzzerV003 = VesselIdentity::nodeId() == 3U;
+  const bool buzzerRailEnabled = pmu.isEnableBLDO2();
+  V003F08BuzzerLive::instance().begin(isLiveBuzzerV003, buzzerRailEnabled);
+  Serial.printf("[F08-BUZZER-LIVE] id=%lu pmu_rail_enabled=%u authorized=%u GPIO38=%s\n",
+                (unsigned long)VesselIdentity::nodeId(), unsigned(buzzerRailEnabled),
+                unsigned(V003F08BuzzerLive::instance().authorized()),
+                V003F08BuzzerLive::instance().authorized() ? "READY_OFF" : "DISABLED");
+#endif
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
@@ -654,6 +681,11 @@ void loop() {
 #if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
   // Virtual pulse timeout / SOS preemption; NEVER writes to a GPIO pin.
   V003F08BuzzerBench::instance().tick(
+      millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
+#endif
+#if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
+  // Software timeout. Loop blocking can lengthen 250ms; not a hardware timer.
+  V003F08BuzzerLive::instance().tick(
       millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
 #endif
 

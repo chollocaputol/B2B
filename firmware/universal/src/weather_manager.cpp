@@ -6,6 +6,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <DHT20.h>
+#if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
+#include "v003_f08_buzzer_bench.h"
+#endif
 #if THESIS_V003_F08_INDICATOR_BENCH == 1
 #include "v003_f08_dryrun.h"
 #endif
@@ -524,6 +527,29 @@ void processSerialTestCommands() {
                         unsigned(bench.yellow()), unsigned(bench.red()),
                         V003F08LedBench::kOutputsEnabled ? "LED_LIVE" : "DRY_RUN",
                         unsigned(bench.authorized()));
+        }
+#endif
+#if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
+      } else if (strncmp(testLine, "F08 BUZZER ", 11) == 0) {
+        const auto request = V003F08BuzzerBench::parse(testLine);
+        if (request == V003F08BuzzerBench::Request::Help) {
+          Serial.println("[F08-BUZZER] F08 BUZZER TEST | OFF | STATUS | HELP");
+          Serial.println("[F08-BUZZER] SOFTWARE ONLY: 250ms virtual pulse, ACTUATION=DISABLED");
+        } else if (request == V003F08BuzzerBench::Request::Invalid) {
+          Serial.println("[F08-BUZZER] Invalid command; type F08 BUZZER HELP");
+        } else {
+          const bool sos = hasActiveLocalSOS() || getActiveSOSCount() > 0;
+          auto &bench = V003F08BuzzerBench::instance();
+          if (!bench.authorized())
+            Serial.println("[F08-BUZZER] BLOCKED: identity is not Vessel-003");
+          if (request == V003F08BuzzerBench::Request::Test ||
+              request == V003F08BuzzerBench::Request::Off) {
+            if (bench.authorized() && !bench.command(request, millis(), sos))
+              Serial.println("[F08-BUZZER] BLOCKED: active SOS overrides buzzer test");
+          }
+          Serial.printf("[F08-BUZZER] request=%s virtual_active=%u authorized=%u ACTUATION=DISABLED GPIO38_WRITES=0\n",
+                        V003F08BuzzerBench::requestName(request),
+                        unsigned(bench.virtualActive()), unsigned(bench.authorized()));
         }
 #endif
       } else if (strcmp(testLine, "TEST HELP") == 0) {

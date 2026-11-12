@@ -51,6 +51,21 @@ static_assert(V003F08LedBench::kOutputsEnabled,
               "Live LED profile must be explicitly opted in");
 #endif
 #endif
+// Separate buzzer *software-only* profile. Never configures GPIO38.
+#ifndef THESIS_V003_F08_BUZZER_PREFLIGHT
+#define THESIS_V003_F08_BUZZER_PREFLIGHT 0
+#endif
+#if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
+#if THESIS_V003_F08_INDICATOR_BENCH != 1 || THESIS_V003_F08_LED_BENCH == 1
+#error "F08 buzzer preflight requires the isolated weather-disabled, LED-off profile"
+#endif
+#include "v003_f08_buzzer_bench.h"
+static_assert(!V003F08BuzzerBench::kOutputsEnabled &&
+              V003F08BuzzerBench::kActualOutputPin == -1 &&
+              !PhysicalIndicators::kOutputsEnabled &&
+              PhysicalIndicators::kBuzzerDriverPin == -1,
+              "F08 buzzer preflight must never drive the physical buzzer");
+#endif
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -511,6 +526,12 @@ void setup() {
                 (unsigned long)VesselIdentity::nodeId(), unsigned(isVessel003),
                 V003F08LedBench::kOutputsEnabled && isVessel003 ? "READY_OFF" : "DISABLED");
 #endif
+#if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
+  const bool isBuzzerVessel003 = VesselIdentity::nodeId() == 3U;
+  V003F08BuzzerBench::instance().begin(isBuzzerVessel003);
+  Serial.printf("[F08-BUZZER] profile=BUILD_ONLY id=%lu authorized=%u ACTUATION=DISABLED GPIO38_WRITES=0\n",
+                (unsigned long)VesselIdentity::nodeId(), unsigned(isBuzzerVessel003));
+#endif
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
@@ -628,6 +649,11 @@ void loop() {
 #if THESIS_V003_F08_LED_BENCH == 1
   // SOS preempts any LED test; normal loop scheduling enforces the 500ms limit.
   V003F08LedBench::instance().tick(
+      millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
+#endif
+#if THESIS_V003_F08_BUZZER_PREFLIGHT == 1
+  // Virtual pulse timeout / SOS preemption; NEVER writes to a GPIO pin.
+  V003F08BuzzerBench::instance().tick(
       millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
 #endif
 

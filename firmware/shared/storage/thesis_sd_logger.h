@@ -8,7 +8,7 @@
 #define THESIS_F07_WEATHER_LOG 0
 #endif
 #if THESIS_F07_WEATHER_LOG == 1
-#include "../universal/include/weather_manager.h"
+#include "../../universal/include/weather_manager.h"
 #endif
 #ifndef THESIS_F06_SD_HYBRID
 #define THESIS_F06_SD_HYBRID 0

@@ -1,3 +1,3 @@
 #pragma once
 // Compatibility wrapper; existing includes continue to work.
-#include "../../shared/packet_protocol.h"
+#include "../../shared/communication/packet_protocol.h"

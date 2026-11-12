@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "packet_protocol.h"
+#include "../communication/packet_protocol.h"
 // Laboratory routing restriction, NOT origin authentication.
 // Additional guards in radio path include VesselIdentity::ready(), event
 // admission/duplicate cache and state preflight. This is NOT a security proof.

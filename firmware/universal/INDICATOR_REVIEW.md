@@ -65,8 +65,8 @@ legacy LED/buzzer pins must stay disabled. Button handling stays intact.
 | Explicitly prohibited without approval | 3, 45, 46 |
 | Vendor expansion candidates, not assigned or physically verified | 43, 44 (UART/QWIIC) |
 
-Source: shared/tbeam_pins.h, include/weather_manager.h, include/sos_controls.h,
-shared/thesis_sd_logger.h and the official LILYGO pin map:
+Source: shared/hardware/tbeam_pins.h, include/weather_manager.h, include/sos_controls.h,
+shared/storage/thesis_sd_logger.h and the official LILYGO pin map:
 https://wiki.lilygo.cc/products/t-beam-series/t-beam-supreme/#pin-mapping
 Vendor documentation is not proof of the actual board revision or connector wiring.
 The generic PlatformIO board definition does not establish physical availability.

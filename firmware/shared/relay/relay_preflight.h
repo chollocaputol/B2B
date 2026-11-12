@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "relay_policy.h"
-#include "multi_peer_sos.h"
+#include "../communication/multi_peer_sos.h"
 
 // R2-B2: final state gate for a queued SOS/CANCEL frame. This is a
 // RAM-state consistency check, NOT origin authentication or a TX permission.

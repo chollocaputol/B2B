@@ -23,7 +23,7 @@ PREFIX = r"""
 #include <cstdio>
 #include <iostream>
 #include "physical_indicators.h"
-#include "multi_peer_sos.h"
+#include "communication/multi_peer_sos.h"
 int gpioWrites = 0, gpioModes = 0;
 uint8_t weatherState = WEATHER_NORMAL;
 bool weatherInputsValid = true;

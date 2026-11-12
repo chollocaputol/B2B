@@ -1,11 +1,11 @@
 #ifndef THESIS_LAB_RELAY_TX
 #define THESIS_LAB_RELAY_TX 0
 #endif
-#include "../../shared/tbeam_pins.h"
-#include "../../shared/vessel_identity.h"
-#include "../../shared/oled_button_debounce.h"
-#include "../../shared/tbeam_hardware_service.h"
-#include "../../shared/gps_service.h"
+#include "../../shared/hardware/tbeam_pins.h"
+#include "../../shared/hardware/vessel_identity.h"
+#include "../../shared/hardware/oled_button_debounce.h"
+#include "../../shared/hardware/tbeam_hardware_service.h"
+#include "../../shared/hardware/gps_service.h"
 #include <Arduino.h>
 #include "sos_controls.h"
 #include "physical_indicators.h"
@@ -15,8 +15,8 @@
 #include <string.h>
 #include <TinyGPSPlus.h>
 #include "lora_manager.h"
-#include "../../shared/decentralized_mac.h"
-#include "../../shared/mac_contention_gate.h"
+#include "../../shared/communication/decentralized_mac.h"
+#include "../../shared/communication/mac_contention_gate.h"
 // 0=original airtime scheduler; 1=OBSERVE CAD (default); 2=ENFORCE CAD.
 // Mode 2 is experimental: use only after Mode 1 has passed hardware tests.
 #ifndef MAC_CAD_MODE
@@ -62,7 +62,7 @@ static constexpr uint8_t kOLEDPageCount = 8;
 static constexpr uint8_t kOLEDPageCount = 7;
 #endif
 #if THESIS_SD_LOGGER == 1
-#include "../../shared/thesis_sd_logger.h"
+#include "../../shared/storage/thesis_sd_logger.h"
 #endif
 #include <U8g2lib.h>
 #include "weather_manager.h"
@@ -70,7 +70,7 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #define THESIS_SD_PROBE 0
 #endif
 #if THESIS_SD_PROBE == 1
-#include "../../shared/sd_probe.h"
+#include "../../shared/storage/sd_probe.h"
 #endif
 #include <esp_timer.h>  // 64-bit uptime counter
 

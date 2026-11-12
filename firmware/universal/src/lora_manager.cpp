@@ -1,20 +1,20 @@
-#include "../../shared/tbeam_pins.h"
-#include "../../shared/vessel_identity.h"
-#include "../../shared/relay_policy.h"
-#include "../../shared/relay_queue.h"
-#include "../../shared/relay_dryrun_scheduler.h"
-#include "../../shared/relay_preflight.h"
-#include "../../shared/relay_receipt_state.h"
-#include "../../shared/relay_tx_readiness.h"
-#include "../../shared/relay_authorization_contract.h"
-#include "../../shared/lab_relay_gate.h"
+#include "../../shared/hardware/tbeam_pins.h"
+#include "../../shared/hardware/vessel_identity.h"
+#include "../../shared/relay/relay_policy.h"
+#include "../../shared/relay/relay_queue.h"
+#include "../../shared/relay/relay_dryrun_scheduler.h"
+#include "../../shared/relay/relay_preflight.h"
+#include "../../shared/relay/relay_receipt_state.h"
+#include "../../shared/relay/relay_tx_readiness.h"
+#include "../../shared/relay/relay_authorization_contract.h"
+#include "../../shared/relay/lab_relay_gate.h"
 #include "lora_manager.h"
-#include "../../shared/control_retry_schedule.h"
+#include "../../shared/communication/control_retry_schedule.h"
 #include "weather_manager.h"
-#include "../../shared/compact_position_v2.h"
-#include "../../shared/receive_format_guard.h"
-#include "../../shared/device_verification_contract.h"
-#include "../../shared/device_shadow_receiver.h"
+#include "../../shared/communication/compact_position_v2.h"
+#include "../../shared/communication/receive_format_guard.h"
+#include "../../shared/communication/device_verification_contract.h"
+#include "../../shared/communication/device_shadow_receiver.h"
 // Set to 0 to perform the original 62-byte baseline comparison.
 // In either mode, SOS/ACK/CANCEL remain unchanged legacy v1 packets.
 // A manually enabled, bench-only forwarding experiment. OFF in normal builds.
@@ -31,8 +31,8 @@
 #if POSITION_V2_TX_ENABLED != 0 && POSITION_V2_TX_ENABLED != 1
 #error "POSITION_V2_TX_ENABLED must be 0 or 1"
 #endif
-#include "../../shared/multi_peer_telemetry.h"
-#include "../../shared/multi_peer_sos.h"
+#include "../../shared/communication/multi_peer_telemetry.h"
+#include "../../shared/communication/multi_peer_sos.h"
 #include <SPI.h>
 #include <RadioLib.h>
 #include <TinyGPSPlus.h>
@@ -46,7 +46,7 @@
 #error "THESIS_F05_RECOVERY must be 0 or 1"
 #endif
 #if THESIS_F05_RECOVERY == 1
-#include "../../shared/f05_sos_recovery.h"
+#include "../../shared/storage/f05_sos_recovery.h"
 #endif
 #ifndef THESIS_SD_LOGGER
 #define THESIS_SD_LOGGER 0

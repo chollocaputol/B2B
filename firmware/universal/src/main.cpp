@@ -27,6 +27,22 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
               PhysicalIndicators::kBuzzerDriverPin == -1,
               "V003 F08 preflight must keep all physical outputs unassigned/OFF");
 #endif
+// This LED bench uses virtual states only in this build-only environment.
+#ifndef THESIS_V003_F08_LED_BENCH
+#define THESIS_V003_F08_LED_BENCH 0
+#endif
+#if THESIS_V003_F08_LED_BENCH != 0 && THESIS_V003_F08_LED_BENCH != 1
+#error "THESIS_V003_F08_LED_BENCH must be 0 or 1"
+#endif
+#if THESIS_V003_F08_LED_BENCH == 1
+#if THESIS_V003_F08_INDICATOR_BENCH != 1
+#error "V003 LED preflight requires the weather-disabled Vessel-003 bench"
+#endif
+#include "v003_f08_led_bench.h"
+static_assert(!V003F08LedBench::kOutputsEnabled &&
+              V003F08LedBench::kBuzzerPin == -1,
+              "V003 LED preflight build must keep ALL physical outputs OFF");
+#endif
 #include <Wire.h>
 #include <SPI.h>
 #include <math.h>
@@ -453,6 +469,10 @@ void setup() {
 
   SOSControls::begin();
   PhysicalIndicators::begin();
+#if THESIS_V003_F08_LED_BENCH == 1
+  V003F08LedBench::instance().begin();
+  Serial.println("[F08-LED] preflight=BUILD_ONLY GPIO39/44=DISABLED buzzer=DISABLED");
+#endif
   pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
   buttonLastReading = digitalRead(USER_BUTTON_PIN);
   buttonStableState = buttonLastReading;
@@ -589,6 +609,11 @@ void loop() {
   // Live authoritative inputs only; OLED demo modes never reach physical outputs.
   PhysicalIndicators::update(millis(), weatherState, weatherInputsValid,
                              hasActiveLocalSOS(), getActiveSOSCount() > 0);
+#if THESIS_V003_F08_LED_BENCH == 1
+  // SOS ALWAYS clears any virtual LED test, with a rollover-safe 500ms limit.
+  V003F08LedBench::instance().tick(
+      millis(), hasActiveLocalSOS() || getActiveSOSCount() > 0);
+#endif
 
   // PHASE 5.2.2C-3G-4E2: decentralized, nonblocking CAD experiment.
   // Mode 1 OBSERVE (default): busy CAD is logged but does not block telemetry.

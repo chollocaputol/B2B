@@ -9,6 +9,9 @@
 #if THESIS_V003_F08_INDICATOR_BENCH == 1
 #include "v003_f08_dryrun.h"
 #endif
+#if THESIS_V003_F08_LED_BENCH == 1
+#include "v003_f08_led_bench.h"
+#endif
 
 // Shared OLED bus restored after each weather reading cycle.
 #define OLED_SDA_PIN 17
@@ -493,6 +496,29 @@ void processSerialTestCommands() {
                         V003F08DryRun::requestName(request),
                         unsigned(channels.yellow), unsigned(channels.red),
                         unsigned(channels.buzzer));
+        }
+#endif
+#if THESIS_V003_F08_LED_BENCH == 1
+      } else if (strncmp(testLine, "F08 LED ", 8) == 0) {
+        const auto request = V003F08LedBench::parse(testLine);
+        if (request == V003F08LedBench::Request::Help) {
+          Serial.println("[F08-LED] F08 LED OFF | YELLOW | RED | STATUS | HELP");
+          Serial.println("[F08-LED] BUILD_ONLY ACTUATION=DISABLED, pulse limit=500ms");
+        } else if (request == V003F08LedBench::Request::Invalid) {
+          Serial.println("[F08-LED] Invalid LED command; type F08 LED HELP");
+        } else {
+          const bool sos = hasActiveLocalSOS() || getActiveSOSCount() > 0;
+          if (request == V003F08LedBench::Request::Yellow ||
+              request == V003F08LedBench::Request::Red ||
+              request == V003F08LedBench::Request::Off) {
+            if (!V003F08LedBench::instance().command(request, millis(), sos))
+              Serial.println("[F08-LED] BLOCKED: active SOS overrides LED test");
+          }
+          const auto &bench = V003F08LedBench::instance();
+          Serial.printf("[F08-LED] request=%s virtual_yellow=%u virtual_red=%u "
+                        "ACTUATION=DISABLED INDICATOR_GPIO_WRITES=0\n",
+                        V003F08LedBench::requestName(request),
+                        unsigned(bench.yellow()), unsigned(bench.red()));
         }
 #endif
       } else if (strcmp(testLine, "TEST HELP") == 0) {

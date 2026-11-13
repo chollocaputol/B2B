@@ -128,6 +128,34 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #if THESIS_F07_WEATHER_LOG == 1 && THESIS_SD_LOGGER != 1
 #error "F07 weather logging requires the SD logger"
 #endif
+#ifndef THESIS_V003_F15_MACRO_SD_SANDBOX
+#define THESIS_V003_F15_MACRO_SD_SANDBOX 0
+#endif
+#if THESIS_V003_F15_MACRO_SD_SANDBOX != 0 && THESIS_V003_F15_MACRO_SD_SANDBOX != 1
+#error "Invalid F15 macro SD sandbox flag"
+#endif
+// Separate F15 hardware opt-in: the existing build-only profile cannot mount
+// the microSD card or queue weather data even if accidentally uploaded.
+#ifndef THESIS_V003_F15_SD_PILOT_ARMED
+#define THESIS_V003_F15_SD_PILOT_ARMED 0
+#endif
+#if THESIS_V003_F15_SD_PILOT_ARMED != 0 && THESIS_V003_F15_SD_PILOT_ARMED != 1
+#error "Invalid F15 supervised SD pilot flag"
+#endif
+#if THESIS_V003_F15_SD_PILOT_ARMED == 1 && THESIS_V003_F15_MACRO_SD_SANDBOX != 1
+#error "F15 supervised SD pilot requires the complete F15 sandbox profile"
+#endif
+#if THESIS_V003_F15_MACRO_SD_SANDBOX == 1 && \
+    (THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || \
+     THESIS_V003_F10_MICRO_NOWCAST != 1 || \
+     THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || \
+     THESIS_SD_LOGGER != 1 || THESIS_SD_FLEET != 1 || \
+     THESIS_F05_RECOVERY != 1 || THESIS_F06_SD_SANDBOX != 1 || \
+     THESIS_F07_WEATHER_LOG != 1 || WEATHER_FAST_TEST != 0 || \
+     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F12_INDICATOR_PREVIEW != 0 || \
+     THESIS_V003_F13_SUPERVISED_DRIVER != 0 || THESIS_V003_F14_INDICATOR_PROBE != 0)
+#error "F15 requires Vessel-003 real F09-F11, F05/F06 sandbox SD, relay and physical indicators OFF"
+#endif
 #if THESIS_V003_F08_INDICATOR_BENCH == 1 && \
     (THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0)
 #error "V003 F08 preflight cannot enable SD logging or weather records"
@@ -210,8 +238,9 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 #if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
     THESIS_V003_F08_COMBINED_PROFILE != 0 || THESIS_LAB_RELAY_TX != 0 || \
-    THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
-#error "F09 shared sensor profile requires outputs/relay/SD/F08 profiles OFF"
+    ((THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0) && \
+     THESIS_V003_F15_MACRO_SD_SANDBOX != 1)
+#error "F09 requires F08/relay OFF; SD permitted only by guarded F15 sandbox"
 #endif
 static_assert(!PhysicalIndicators::kOutputsEnabled &&
               PhysicalIndicators::kBuzzerDriverPin == -1 &&
@@ -595,6 +624,35 @@ bool pollSDExportCommand() {
 }
 #endif
 
+#if THESIS_V003_F15_MACRO_SD_SANDBOX == 1
+// A completed F11 median already represents five physical sensor readings.
+// Stamp a fresh GNSS UTC value only when date AND time are valid and recent;
+// otherwise the logger must serialize gps_utc as JSON null. No extra I2C read.
+static void f15QueuePhysicalMacroMedian() {
+  weatherMeasurement.gpsUtcValid = false;
+  weatherMeasurement.gpsUtcIso8601[0] = '\0';
+  if (gps.date.isValid() && gps.time.isValid() &&
+      gps.date.age() <= 10000UL && gps.time.age() <= 10000UL) {
+    const int n = snprintf(weatherMeasurement.gpsUtcIso8601,
+        sizeof(weatherMeasurement.gpsUtcIso8601),
+        "%04u-%02u-%02uT%02u:%02u:%02uZ",
+        (unsigned)gps.date.year(), (unsigned)gps.date.month(),
+        (unsigned)gps.date.day(), (unsigned)gps.time.hour(),
+        (unsigned)gps.time.minute(), (unsigned)gps.time.second());
+    weatherMeasurement.gpsUtcValid = (n == 20);
+  }
+#if THESIS_V003_F15_SD_PILOT_ARMED == 1
+  const bool queued = ThesisSDLogger::queueWeatherSample(weatherMeasurement);
+  Serial.printf("[F15-WX] median_queued=%u inputs=%u history=%u utc_valid=%u\n",
+                unsigned(queued), unsigned(weatherMeasurement.inputsOK),
+                unsigned(weatherMeasurement.historyCount),
+                unsigned(weatherMeasurement.gpsUtcValid));
+#else
+  Serial.println("[F15-WX] BUILD_ONLY_NO_SD_QUEUE");
+#endif
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(1200);
@@ -690,10 +748,25 @@ void setup() {
   setupEmergencyIdentity();
   startReceive();
 #if THESIS_SD_LOGGER == 1
+#if THESIS_V003_F15_MACRO_SD_SANDBOX == 1
+#if THESIS_V003_F15_SD_PILOT_ARMED == 1
+  if (f09SensorAuthorized && VesselIdentity::ready() &&
+      VesselIdentity::nodeId() == 3U) {
+    const bool f15SdReady = ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
+    Serial.printf("[F15-SD] V003_AUTHORIZED; sandbox_mount_ok=%u\n",
+                  unsigned(f15SdReady));
+  } else {
+    Serial.println("[F15-SD] BLOCKED: Vessel-003 sensor/identity authorization required");
+  }
+#else
+  Serial.println("[F15-SD] BUILD_ONLY_NO_SD_MOUNT");
+#endif
+#else
   ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
 #endif
+#endif
 
-#if THESIS_F07_WEATHER_LOG == 1
+#if THESIS_F07_WEATHER_LOG == 1 && THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1
   // One REAL reading at boot for immediate OLED fault detection.
   // Log the same physical sample, then continue at 10-minute intervals.
   processWeather();
@@ -849,6 +922,11 @@ void loop() {
                       median.stationPressureHpa,
                       unsigned(weatherMeasurement.historyCount), unsigned(WEATHER_HISTORY_SIZE),
                       pressureDelta, unsigned(zambrettiIndex), weatherName(weatherState));
+#if THESIS_V003_F15_MACRO_SD_SANDBOX == 1
+        // Precisely ONE queued record per completed 5-reading macro batch.
+        // F10 may reuse this median; it MUST NOT trigger another SD record.
+        f15QueuePhysicalMacroMedian();
+#endif
       }
     }
   }

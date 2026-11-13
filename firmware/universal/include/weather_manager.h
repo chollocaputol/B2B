@@ -38,6 +38,11 @@ struct MicroWeatherSample {
   float stationPressureHpa = NAN;
 };
 bool readMicroWeatherSample(MicroWeatherSample &sample);
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+// Feed the completed physical five-reading median into the existing weather
+// state/pressure rejection path without performing a sixth I2C acquisition.
+void processWeatherFromF11Median(bool valid, float t, float rh, float pStation);
+#endif
 #endif
 void processSerialTestCommands();
 const char *weatherName(uint8_t state);

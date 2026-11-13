@@ -169,6 +169,11 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
               DHT_SDA_PIN == 21 && DHT_SCL_PIN == 48,
               "F10 must not actuate hardware; use F09 shared weather sensor bus");
 #endif
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+#include "v003_f11_macro_median.h"
+static_assert(!PhysicalIndicators::kOutputsEnabled,
+              "F11 macro profile must not drive physical indicators");
+#endif
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
 #if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
@@ -233,6 +238,11 @@ static V003F10Micro::Forecaster f10Forecaster;
 static uint32_t lastF10MicroTime = 0;
 // Real first measurement is due on the first authorized loop.
 static bool f10InitialSamplePending = true;
+#endif
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+static V003F11Macro::Batch f11MacroBatch;
+static bool f11InitialBatchPending = true;
+static bool f11MacroSampleForMicro = false;
 #endif
 
 // -------------------- Hardware --------------------------------
@@ -655,6 +665,11 @@ void setup() {
     (unsigned long)(uint32_t)(telemetryMac.nextDueMs() - millis()), (unsigned)MAC_CAD_MODE);
 
   lastWeatherTime = millis();
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  f11InitialBatchPending = true;
+  f11MacroSampleForMicro = false;
+  Serial.println("[F11-MACRO] five physical readings per 10min; gap=2000ms; tendency=100min; OUTPUTS=OFF");
+#endif
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
   lastF10MicroTime = lastWeatherTime;
   f10InitialSamplePending = true;
@@ -723,6 +738,47 @@ void loop() {
   processCancelRetries();
 
 #if THESIS_V003_F08_INDICATOR_BENCH == 0
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  if (f09SensorAuthorized) {
+    const uint32_t batchNow = millis();
+    const bool startDue = f11InitialBatchPending ||
+        (!f11MacroBatch.active() && uint32_t(batchNow - lastWeatherTime) >= WEATHER_INTERVAL);
+    if (startDue) {
+      f11InitialBatchPending = false;
+      lastWeatherTime = batchNow;
+      f11MacroBatch.start(batchNow);
+      Serial.printf("[F11-MACRO] START ms=%lu count=5 gapMs=2000\n",
+                    (unsigned long)batchNow);
+    }
+    if (f11MacroBatch.due(millis())) {
+      MicroWeatherSample physical{};
+      const bool readOK = readMicroWeatherSample(physical);
+      V003F11Macro::Sample sample{};
+      if (readOK) {
+        sample.temperatureC = physical.temperatureC;
+        sample.humidityPercent = physical.humidityPercent;
+        sample.stationPressureHpa = physical.stationPressureHpa;
+      }
+      const bool finished = f11MacroBatch.push(millis(), readOK, sample);
+      Serial.printf("[F11-MACRO-READ] n=%u/5 valid=%u\n",
+                    unsigned(f11MacroBatch.count()), unsigned(readOK));
+      if (finished) {
+        const bool batchOK = f11MacroBatch.valid();
+        const auto median = f11MacroBatch.result();
+        processWeatherFromF11Median(batchOK, median.temperatureC,
+                                     median.humidityPercent, median.stationPressureHpa);
+        f11MacroSampleForMicro = true; // one fresh, accepted batch; no sixth read
+        Serial.printf("[F11-MACRO] samples=5/5 valid=%u Tmed=%.2f RHmed=%.2f "
+                      "Pmed=%.2f history=%u/%u dP100=%+.2f Z=%u state=%s\n",
+                      unsigned(batchOK && weatherInputsValid),
+                      median.temperatureC, median.humidityPercent,
+                      median.stationPressureHpa,
+                      unsigned(weatherMeasurement.historyCount), unsigned(WEATHER_HISTORY_SIZE),
+                      pressureDelta, unsigned(zambrettiIndex), weatherName(weatherState));
+      }
+    }
+  }
+#else
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
@@ -754,20 +810,36 @@ void loop() {
       Serial.println("[WX-LOG] QUEUE_FAILED (not recorded)");
 #endif
   }
+#endif  // THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
 #endif  // THESIS_V003_F08_INDICATOR_BENCH == 0
 
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  // F11 owns the I2C bus during its nonblocking five-reading batch.
+  // The completed median is the micro sample on each shared boundary.
+  if (f09SensorAuthorized && !f11MacroBatch.active() &&
+      (f11MacroSampleForMicro || f10InitialSamplePending ||
+       uint32_t(millis() - lastF10MicroTime) >= V003F10Micro::kIntervalMs)) {
+#else
   if (f09SensorAuthorized &&
       (f10InitialSamplePending ||
        uint32_t(millis() - lastF10MicroTime) >= V003F10Micro::kIntervalMs)) {
+#endif
     f10InitialSamplePending = false;
     lastF10MicroTime = millis();
     MicroWeatherSample sample{};
     // The macro layer can complete a physical read at the same 10-minute
     // boundary. Reuse its accepted, fresh sample instead of issuing a second
     // back-to-back DHT20/BME680 transaction that can invalidate the micro FIFO.
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+    const bool reusedMacro = f11MacroSampleForMicro &&
+        V003F10Micro::shouldReuseMacroSample(
+            lastF10MicroTime, weatherSampleAttempted, weatherMeasurement.uptimeMs);
+    f11MacroSampleForMicro = false;
+#else
     const bool reusedMacro = V003F10Micro::shouldReuseMacroSample(
         lastF10MicroTime, weatherSampleAttempted, weatherMeasurement.uptimeMs);
+#endif
     bool valid = false;
     if (reusedMacro) {
       valid = weatherMeasurement.inputsOK && weatherMeasurement.dhtOK &&

@@ -6,6 +6,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 #include <DHT20.h>
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+#include "v003_f11_macro_median.h"
+#endif
 #if THESIS_V003_F08_COMBINED_PROFILE == 1
 #include "v003_f08_combined_bench.h"
 #endif
@@ -65,6 +68,12 @@ bool previousTempHumidityFromDHT = false;
 float temperatureChangeC = NAN;
 float humidityChangePoints = NAN;
 uint32_t validWeatherSamples = 0;
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+static uint32_t f11PressureHistoryTimeMs[WEATHER_HISTORY_SIZE] = {};
+static uint32_t f11PreviousAcceptedMs = 0;
+static bool f11MedianArmed = false, f11MedianValid = false;
+static float f11MedianT = NAN, f11MedianRH = NAN, f11MedianP = NAN;
+#endif
 
 // Copy only results of the just-completed physical cycle.  Forecast history
 // remains exclusively owned by the existing weather algorithm.
@@ -226,6 +235,16 @@ bool readMicroWeatherSample(MicroWeatherSample &sample) {
   return true;
 }
 #endif
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+void processWeatherFromF11Median(bool valid, float t, float rh, float pStation) {
+  f11MedianArmed = true;
+  f11MedianValid = valid;
+  f11MedianT = valid ? t : NAN;
+  f11MedianRH = valid ? rh : NAN;
+  f11MedianP = valid ? pStation : NAN;
+  processWeather();
+}
+#endif
 void processWeather() {
   weatherMeasurement = WeatherMeasurement{};
   weatherMeasurement.uptimeMs = millis();
@@ -242,11 +261,27 @@ void processWeather() {
   bool gotDHT = false;
   bool gotBMEPressure = false;
   bool gotBMETempHumidity = false;
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  // Only the F11 development build may inject a fresh five-reading median.
+  // This bypasses I2C *only* for the completed batch, never on other profiles.
+  const bool f11UseMedian = f11MedianArmed;
+  f11MedianArmed = false;
+  if (f11UseMedian && f11MedianValid) {
+    t = f11MedianT; h = f11MedianRH;
+    gotDHT = isfinite(t) && isfinite(h) && t >= -40.0f && t <= 85.0f &&
+             h > 0.0f && h <= 100.0f;
+    if (gotDHT) { weatherMeasurement.dhtTempC = t; weatherMeasurement.dhtRH = h; }
+  }
+#else
+  const bool f11UseMedian = false;
+#endif
+  float candidateBMEPressure = NAN;
+  bool bmeReadSucceeded = false;
 
   // ----------------------------------------------------------
   // Read DHT20 temperature and humidity independently
   // ----------------------------------------------------------
-  if (dhtAvailable) {
+  if (!f11UseMedian && dhtAvailable) {
     switchI2C(DHT_SDA_PIN, DHT_SCL_PIN);
     // Verify the actual DHT20 responds before trusting library readback.
     if (!dht.isConnected()) {
@@ -276,38 +311,25 @@ void processWeather() {
   }
 
   // ----------------------------------------------------------
-  // Read BME680 pressure and independent T/RH diagnostics (never T/RH fallback)
+  // BME680 physical pressure and optional T/RH diagnostics. F11 median is
+  // trusted only as a *fresh batch input*, never as an accepted forecast value:
+  // the original 8 hPa pressure discontinuity filter remains authoritative.
   // ----------------------------------------------------------
-  if (bmeAvailable) {
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  if (f11UseMedian && f11MedianValid) {
+    candidateBMEPressure = f11MedianP;
+    bmeReadSucceeded = true;
+    weatherMeasurement.bmeRawPressureHpa = candidateBMEPressure;
+  }
+#endif
+  if (!f11UseMedian && bmeAvailable) {
     switchI2C(BME_SDA_PIN, BME_SCL_PIN);
-
     if (bme.performReading()) {
       bmeT = bme.temperature;
       bmeH = bme.humidity;
-      float bmeP = bme.pressure / 100.0f;
-      weatherMeasurement.bmeRawPressureHpa = bmeP;
-
-      bool plausible = isfinite(bmeP) && bmeP >= PRESSURE_MIN_HPA &&
-                       bmeP <= PRESSURE_MAX_HPA;
-      bool jump = plausible && isfinite(lastAcceptedStationPressure) &&
-                  fabsf(bmeP - lastAcceptedStationPressure) > MAX_SINGLE_PRESSURE_STEP_HPA;
-      // Reuse the existing step limit to confirm a sustained plausible shift.
-      // Only the fresh confirming reading is accepted; never insert the candidate.
-      const bool recoveredShift = jump && isfinite(previousPendingPressure) &&
-          fabsf(bmeP - previousPendingPressure) <= MAX_SINGLE_PRESSURE_STEP_HPA;
-      if (plausible && (!jump || recoveredShift)) {
-        if (recoveredShift) {
-          resetWeatherCalibration("confirmed pressure discontinuity");
-          Serial.println("[BME680] Plausible pressure shift confirmed; fresh calibration required");
-        }
-        pStation = bmeP;
-        gotBMEPressure = true;
-      } else {
-        if (jump) pendingStationPressure = bmeP;
-        Serial.printf("[BME680] PRESSURE REJECTED: %.2f hPa (%s). Not used for history/forecast.\n",
-                      bmeP, jump ? "abrupt jump" : "outside configured range");
-      }
-
+      candidateBMEPressure = bme.pressure / 100.0f;
+      bmeReadSucceeded = true;
+      weatherMeasurement.bmeRawPressureHpa = candidateBMEPressure;
       if (isfinite(bmeT) && isfinite(bmeH) &&
           bmeT >= -40.0f && bmeT <= 85.0f &&
           bmeH >= 0.0f && bmeH <= 100.0f) {
@@ -318,6 +340,27 @@ void processWeather() {
       }
     } else {
       Serial.println("[BME680] Reading failed");
+    }
+  }
+  if (bmeReadSucceeded) {
+    const float bmeP = candidateBMEPressure;
+    const bool plausible = isfinite(bmeP) && bmeP >= PRESSURE_MIN_HPA &&
+                           bmeP <= PRESSURE_MAX_HPA;
+    const bool jump = plausible && isfinite(lastAcceptedStationPressure) &&
+                      fabsf(bmeP - lastAcceptedStationPressure) > MAX_SINGLE_PRESSURE_STEP_HPA;
+    const bool recoveredShift = jump && isfinite(previousPendingPressure) &&
+        fabsf(bmeP - previousPendingPressure) <= MAX_SINGLE_PRESSURE_STEP_HPA;
+    if (plausible && (!jump || recoveredShift)) {
+      if (recoveredShift) {
+        resetWeatherCalibration("confirmed pressure discontinuity");
+        Serial.println("[BME680] Plausible pressure shift confirmed; fresh calibration required");
+      }
+      pStation = bmeP;
+      gotBMEPressure = true;
+    } else {
+      if (jump) pendingStationPressure = bmeP;
+      Serial.printf("[BME680] PRESSURE REJECTED: %.2f hPa (%s). Not used for history/forecast.\n",
+                    bmeP, jump ? "abrupt jump" : "outside configured range");
     }
   }
 
@@ -397,6 +440,16 @@ void processWeather() {
   // Only independently measured physical values enter weather history.
   // ----------------------------------------------------------
   pressureMSL = normalizePressure(pStation, temperatureC);
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  // Do not pass off discontinuous or out-of-phase samples as a 100-min trend.
+  if (historyCount && !V003F11Macro::validStep(millis(), f11PreviousAcceptedMs)) {
+    resetWeatherCalibration("F11 macro interval gap");
+  }
+  if (historyCount == WEATHER_HISTORY_SIZE &&
+      !V003F11Macro::validTendencySpan(uint32_t(millis() - f11PressureHistoryTimeMs[historyIndex]))) {
+    resetWeatherCalibration("F11 history not exactly 100 minutes");
+  }
+#endif
   bool comparable = havePreviousWeatherSample &&
                     previousTempHumidityFromDHT == tempHumidityFromDHT;
   // Evaluate the EXACT same function used by the synthetic test harness.
@@ -404,6 +457,20 @@ void processWeather() {
     pressureMSL, pressureHistory, historyCount,
     previousTemperatureC, previousHumidityPercent,
     temperatureC, humidityPercent, comparable);
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  if (historyCount < WEATHER_HISTORY_SIZE) {
+    // Never label an average-over-short-history as a 100-minute tendency.
+    decision.dP = NAN;
+  } else {
+    // Next insertion overwrites the *oldest* of ten previous median points.
+    // At the eleventh point that oldest median is 100 minutes old.
+    decision.dP = pressureMSL - pressureHistory[historyIndex];
+    decision.z = calculateZambretti(pressureMSL, decision.dP);
+    if (decision.fusion == WEATHER_SQUALL) decision.state = WEATHER_SQUALL;
+    else if (decision.dP < -1.6f) decision.state = WEATHER_FRONT;
+    else decision.state = WEATHER_NORMAL;
+  }
+#endif
   pressureDelta = decision.dP;
   temperatureChangeC = decision.dT;
   humidityChangePoints = decision.dRH;
@@ -411,6 +478,10 @@ void processWeather() {
   sensorFusionState = decision.fusion;
   weatherState = decision.state;
 
+#if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
+  f11PressureHistoryTimeMs[historyIndex] = millis();
+  f11PreviousAcceptedMs = millis();
+#endif
   addPressure(pressureMSL);
   validWeatherSamples++;
   previousTemperatureC = temperatureC;

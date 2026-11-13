@@ -179,6 +179,33 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #if THESIS_F06_SD_HYBRID == 1 && (THESIS_SD_OLED_UI != 1 || THESIS_SD_LOGGER != 1 || THESIS_F06_SD_SANDBOX != 1)
 #error "F06 hybrid requires OLED UI and isolated sandbox SD logger"
 #endif
+// F16: restore the tested F06 8th-page SD UI and hybrid routine logging only
+// when paired with the F15 isolated V003 5-median SD profile. No GPIO outputs.
+#ifndef THESIS_V003_F16_SD_OLED_HYBRID
+#define THESIS_V003_F16_SD_OLED_HYBRID 0
+#endif
+#ifndef THESIS_V003_F16_EXPLICIT_OPT_IN
+#define THESIS_V003_F16_EXPLICIT_OPT_IN 0
+#endif
+#if (THESIS_V003_F16_SD_OLED_HYBRID != 0 && THESIS_V003_F16_SD_OLED_HYBRID != 1) || \
+    (THESIS_V003_F16_EXPLICIT_OPT_IN != 0 && THESIS_V003_F16_EXPLICIT_OPT_IN != 1)
+#error "Invalid F16 SD OLED hybrid opt-in flags"
+#endif
+#if THESIS_V003_F16_SD_OLED_HYBRID == 1 && \
+    (THESIS_V003_F16_EXPLICIT_OPT_IN != 1 || \
+     THESIS_V003_F15_MACRO_SD_SANDBOX != 1 || \
+     THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || \
+     THESIS_V003_F10_MICRO_NOWCAST != 1 || \
+     THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || \
+     THESIS_SD_LOGGER != 1 || THESIS_SD_FLEET != 1 || \
+     THESIS_F05_RECOVERY != 1 || THESIS_F06_SD_SANDBOX != 1 || \
+     THESIS_F07_WEATHER_LOG != 1 || THESIS_SD_OLED_UI != 1 || \
+     THESIS_F06_SD_HYBRID != 1 || WEATHER_FAST_TEST != 0 || \
+     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F12_INDICATOR_PREVIEW != 0 || \
+     THESIS_V003_F13_SUPERVISED_DRIVER != 0 || \
+     THESIS_V003_F14_INDICATOR_PROBE != 0)
+#error "F16 requires isolated V003 F15 macro SD, F06 hybrid OLED, relay/indicators OFF"
+#endif
 #if THESIS_SD_OLED_UI == 1
 #define OLED_PAGE_TOTAL "8"
 static constexpr uint8_t kOLEDPageCount = 8;
@@ -1689,7 +1716,13 @@ void oledSDStoragePage() {
 #endif
   } else {
     u8g2.drawStr(0, 9, "SD USB READBACK 8/8");
-#if THESIS_F06_SD_SANDBOX == 1
+#if THESIS_V003_F16_SD_OLED_HYBRID == 1
+    // V003 SD LIST / SD READ history is not authorized by the old V002-only
+    // readback implementation. Show only the supported current-session export.
+    u8g2.drawStr(0, 21, "PC: SD EXPORT");
+    u8g2.drawStr(0, 33, "USB SERIAL 115200");
+    u8g2.drawStr(0, 45, "ACTIVE SESSION ONLY");
+#elif THESIS_F06_SD_SANDBOX == 1
     u8g2.drawStr(0, 21, "PC COMMAND: SD LIST");
     u8g2.drawStr(0, 33, "SD READ Sxxxxxxx");
     u8g2.drawStr(0, 45, "OR: SD READ LEGACY");

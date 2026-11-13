@@ -190,6 +190,9 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 #endif
 #if THESIS_V003_F13_SUPERVISED_DRIVER == 1
 #include "v003_f13_supervised_indicators.h"
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+#include "v003_f14_indicator_probe.h"
+#endif
 #if THESIS_V003_F12_INDICATOR_PREVIEW != 1 || THESIS_V003_F08_INDICATOR_BENCH != 0 || \
     THESIS_V003_F08_LED_BENCH != 0 || THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || \
     THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || THESIS_V003_F08_COMBINED_PROFILE != 0 || \
@@ -277,6 +280,10 @@ static V003F13Indicators::Controller f13Indicators;
 static uint32_t f13LastReportMs = 0;
 static uint32_t f13LastRailPollMs = 0;
 static bool f13RailEnableBitCached = false;
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+static V003F14Probe::Controller f14Probe;
+static bool f14PreviousSynthetic = false;
+#endif
 #endif
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
 static V003F11Macro::Batch f11MacroBatch;
@@ -724,6 +731,13 @@ void setup() {
                 (unsigned long)VesselIdentity::nodeId(),
                 unsigned(f13Indicators.authorized()), unsigned(f13RailEnableBitCached),
                 V003F13Indicators::kPhysicalOutputsEnabled ? "LIVE" : "DISABLED");
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+  f14Probe.begin(f13Indicators.authorized() &&
+                 V003F13Indicators::kPhysicalOutputsEnabled);
+  Serial.printf("[F14-PROBE] authorized=%u limitMs=6000 LOCAL_ONLY "
+                "NO_SENSOR_HISTORY_OR_RADIO_WRITES\n",
+                unsigned(f14Probe.authorized()));
+#endif
 #endif
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
   f11InitialBatchPending = true;
@@ -961,7 +975,20 @@ void loop() {
     f13LastRailPollMs = f13Now;
     f13RailEnableBitCached = pmu.isEnableBLDO2();
   }
-  f13Indicators.tick(f13Now, weatherState, weatherInputsValid,
+  uint8_t f13HardwareState = weatherState;
+  bool f13HardwareValid = weatherInputsValid;
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+  const auto f14Selection = f14Probe.select(
+      f13Now, hasActiveLocalSOS() || getActiveSOSCount() > 0,
+      f13RailEnableBitCached && !f13Indicators.railLost(),
+      weatherState, weatherInputsValid);
+  f13HardwareState = f14Selection.state;
+  f13HardwareValid = f14Selection.valid;
+  if (f14PreviousSynthetic && !f14Selection.synthetic)
+    Serial.println("[F14-PROBE] ENDED; REAL_MACRO_RESTORED");
+  f14PreviousSynthetic = f14Selection.synthetic;
+#endif
+  f13Indicators.tick(f13Now, f13HardwareState, f13HardwareValid,
                      hasActiveLocalSOS(), getActiveSOSCount() > 0,
                      f13RailEnableBitCached);
   if (f13Indicators.authorized() &&
@@ -1603,3 +1630,35 @@ void oledSDStoragePage() {
   u8g2.sendBuffer();
 }
 #endif // THESIS_SD_OLED_UI
+
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+// Local *indicator-driver-only* probe: no mutation of weatherState, SOS,
+// radio packets, micro/macro sensor history, or OLED demonstration state.
+void v003F14HandleSerialCommand(const char* line) {
+  const auto request = V003F14Probe::parse(line);
+  if (request == V003F14Probe::Command::Help) {
+    Serial.println("[F14-PROBE] F14 IND FRONT | SQUALL | OFF | STATUS | HELP");
+    Serial.println("[F14-PROBE] LOCAL_ONLY; 6s MAX; no real SOS or radio changes");
+    return;
+  }
+  if (request == V003F14Probe::Command::Invalid) {
+    Serial.println("[F14-PROBE] INVALID; type F14 IND HELP");
+    return;
+  }
+  if (request == V003F14Probe::Command::Status) {
+    Serial.printf("[F14-PROBE] authorized=%u active=%u mode=%s\n",
+                  unsigned(f14Probe.authorized()), unsigned(f14Probe.active()),
+                  V003F14Probe::name(f14Probe.mode()));
+    return;
+  }
+  const bool activeSOS = hasActiveLocalSOS() || getActiveSOSCount() > 0;
+  const bool railGood = f13RailEnableBitCached && !f13Indicators.railLost();
+  const bool realAlert = V003F14Probe::actualWarning(weatherState, weatherInputsValid);
+  const bool accepted = f14Probe.request(request, millis(), activeSOS,
+                                          railGood, realAlert);
+  Serial.printf("[F14-PROBE] request=%s accepted=%u active=%u "
+                "REAL_WEATHER_UNCHANGED=1 NO_RADIO_SOS=1\n",
+                V003F14Probe::name(request), unsigned(accepted),
+                unsigned(f14Probe.active()));
+}
+#endif

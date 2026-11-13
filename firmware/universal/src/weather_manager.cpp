@@ -12,6 +12,9 @@
 #if THESIS_V003_F08_COMBINED_PROFILE == 1
 #include "v003_f08_combined_bench.h"
 #endif
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+void v003F14HandleSerialCommand(const char* line);
+#endif
 #if THESIS_V003_F08_BUZZER_LIVE_PROFILE == 1
 #include "v003_f08_buzzer_live.h"
 #endif
@@ -701,6 +704,10 @@ void processSerialTestCommands() {
                         V003F08CombinedBench::requestName(ind.demo()), unsigned(ind.authorized()),
                         unsigned(levels.yellow), unsigned(levels.red), unsigned(levels.buzzer));
         }
+#endif
+#if THESIS_V003_F14_INDICATOR_PROBE == 1
+      } else if (strncmp(testLine, "F14 IND ", 8) == 0) {
+        v003F14HandleSerialCommand(testLine);
 #endif
       } else if (strcmp(testLine, "TEST HELP") == 0) {
         Serial.println("[TEST] Commands: TEST ALL | NORMAL | FRONT | SQUALL | BOTH | CALIB | Z");

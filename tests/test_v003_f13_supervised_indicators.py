@@ -143,7 +143,24 @@ def run():
     header=HDR.read_text()
     assert main.count('f13Indicators.tick(') == 1
     call=main[main.index('f13Indicators.tick('):].split(';',1)[0]
-    assert 'weatherState' in call and 'weatherInputsValid' in call
+    # F14 supplies an optional driver-only selection. In all other builds,
+    # these arguments must still originate from the actual F11 weather state.
+    if 'weatherState' not in call or 'weatherInputsValid' not in call:
+        assert 'f13HardwareState' in call and 'f13HardwareValid' in call
+        baseline = '  uint8_t f13HardwareState = weatherState;\n  bool f13HardwareValid = weatherInputsValid;'
+        assert baseline in main, 'F13 input defaults must be real macro weather'
+        begin = main.index(baseline)
+        end = main.index('  f13Indicators.tick(', begin)
+        route = main[begin:end]
+        gate = '#if THESIS_V003_F14_INDICATOR_PROBE == 1'
+        assert route.count(gate) == 1 and route.count('#endif') == 1
+        guarded = route.split(gate, 1)[1].split('#endif', 1)[0]
+        assert 'f14Probe.select(' in guarded
+        assert 'weatherState, weatherInputsValid' in guarded
+        assert 'hasActiveLocalSOS() || getActiveSOSCount() > 0' in guarded
+        assert 'f13HardwareState = f14Selection.state;' in guarded
+        assert 'f13HardwareValid = f14Selection.valid;' in guarded
+        assert route.strip().endswith('#endif'), 'F14 override must be compile-time gated'
     assert 'hasActiveLocalSOS()' in call and 'getActiveSOSCount() > 0' in call
     assert 'f10Forecaster' not in call and 'alertDemoMode' not in call
     assert 'f09SensorAuthorized && VesselIdentity::ready()' in main

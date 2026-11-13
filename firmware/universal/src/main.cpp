@@ -188,6 +188,21 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
               PhysicalIndicators::kBuzzerDriverPin == -1,
               "F12 preview makes no physical indicator GPIO assignments");
 #endif
+#if THESIS_V003_F13_SUPERVISED_DRIVER == 1
+#include "v003_f13_supervised_indicators.h"
+#if THESIS_V003_F12_INDICATOR_PREVIEW != 1 || THESIS_V003_F08_INDICATOR_BENCH != 0 || \
+    THESIS_V003_F08_LED_BENCH != 0 || THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || \
+    THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || THESIS_V003_F08_COMBINED_PROFILE != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+#error "F13 must not share GPIO ownership, relay, or SD profiles"
+#endif
+static_assert(!PhysicalIndicators::kOutputsEnabled &&
+              DHT_SDA_PIN == 21 && DHT_SCL_PIN == 48 &&
+              V003F13Indicators::kYellowPin == 39 &&
+              V003F13Indicators::kRedPin == 44 &&
+              V003F13Indicators::kBuzzerDriverPin == 38,
+              "F13 pins must be free of I2C and production indicator ownership");
+#endif
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
 #if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
@@ -256,6 +271,12 @@ static bool f10InitialSamplePending = true;
 #if THESIS_V003_F12_INDICATOR_PREVIEW == 1
 static V003F12Preview::Controller f12IndicatorPreview;
 static uint32_t f12LastReportMs = 0;
+#endif
+#if THESIS_V003_F13_SUPERVISED_DRIVER == 1
+static V003F13Indicators::Controller f13Indicators;
+static uint32_t f13LastReportMs = 0;
+static uint32_t f13LastRailPollMs = 0;
+static bool f13RailEnableBitCached = false;
 #endif
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
 static V003F11Macro::Batch f11MacroBatch;
@@ -691,6 +712,19 @@ void setup() {
                 (unsigned long)VesselIdentity::nodeId(),
                 unsigned(f12IndicatorPreview.authorized()));
 #endif
+#if THESIS_V003_F13_SUPERVISED_DRIVER == 1
+  // F13 is a separate output owner. Normal F12 and PhysicalIndicators remain
+  // software-only; physical outputs need a dedicated explicit LIVE profile.
+  f13RailEnableBitCached = pmu.isEnableBLDO2();
+  f13LastRailPollMs = millis();
+  f13Indicators.begin(f09SensorAuthorized && VesselIdentity::ready() &&
+                      VesselIdentity::nodeId() == 3U, f13RailEnableBitCached);
+  Serial.printf("[F13-DRIVER] id=%lu authorized=%u BLDO2_ENABLE_BIT=%u "
+                "GPIO_OUTPUTS=%s micro=VIRTUAL_ONLY; BENCH_ONLY\n",
+                (unsigned long)VesselIdentity::nodeId(),
+                unsigned(f13Indicators.authorized()), unsigned(f13RailEnableBitCached),
+                V003F13Indicators::kPhysicalOutputsEnabled ? "LIVE" : "DISABLED");
+#endif
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
   f11InitialBatchPending = true;
   f11MacroSampleForMicro = false;
@@ -915,6 +949,31 @@ void loop() {
                   unsigned(f12Result.virtualOutputs.yellow),
                   unsigned(f12Result.virtualOutputs.red),
                   unsigned(f12Result.virtualOutputs.buzzer));
+  }
+#endif
+#if THESIS_V003_F13_SUPERVISED_DRIVER == 1
+  // Independent F13 production-weather policy; never uses OLED demos or
+  // experimental F10 micro-watch as a physical warning source.
+  const uint32_t f13Now = millis();
+  // PMU enable-bit polling is limited to 1 Hz; sensor/radio loop stays free.
+  // This bit is not a measurement of the external rail voltage/current.
+  if (uint32_t(f13Now - f13LastRailPollMs) >= 1000U) {
+    f13LastRailPollMs = f13Now;
+    f13RailEnableBitCached = pmu.isEnableBLDO2();
+  }
+  f13Indicators.tick(f13Now, weatherState, weatherInputsValid,
+                     hasActiveLocalSOS(), getActiveSOSCount() > 0,
+                     f13RailEnableBitCached);
+  if (f13Indicators.authorized() &&
+      uint32_t(f13Now - f13LastReportMs) >= 60000UL) {
+    f13LastReportMs = f13Now;
+    const auto physical = f13Indicators.outputs();
+    Serial.printf("[F13-DRIVER] mode=%u yellow=%u red=%u buzzer=%u "
+                  "GPIO_OUTPUTS=%s railLost=%u micro=VIRTUAL_ONLY\n",
+                  unsigned(f13Indicators.mode()), unsigned(physical.yellow),
+                  unsigned(physical.red), unsigned(physical.buzzer),
+                  V003F13Indicators::kPhysicalOutputsEnabled ? "LIVE" : "DISABLED",
+                  unsigned(f13Indicators.railLost()));
   }
 #endif
 #if THESIS_V003_F08_LED_BENCH == 1

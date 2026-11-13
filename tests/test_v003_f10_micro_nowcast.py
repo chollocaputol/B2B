@@ -161,6 +161,13 @@ def run():
             "F10 acquisition must be identity-gated")
     require("[F10-MICRO]" in main and "f10Forecaster.ingest" in main,
             "F10 serial diagnostics missing")
+    require("static bool f10InitialSamplePending = true;" in main and
+            "f10InitialSamplePending = true;" in main and
+            "(f10InitialSamplePending ||" in main and
+            "f10InitialSamplePending = false;" in main and
+            "first read at boot; then 60s" in main,
+            "F10 must acquire a physical sample on its first authorized loop")
+    print("PASS: minute-zero physical sample scheduling; 11 samples span 10 minutes")
     require("V003F10Micro::shouldReuseMacroSample(" in main and
             "weatherSampleAttempted, weatherMeasurement.uptimeMs" in main and
             "weatherMeasurement.inputsOK" in main and

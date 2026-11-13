@@ -231,6 +231,8 @@ static bool f09SensorAuthorized = false;
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
 static V003F10Micro::Forecaster f10Forecaster;
 static uint32_t lastF10MicroTime = 0;
+// Real first measurement is due on the first authorized loop.
+static bool f10InitialSamplePending = true;
 #endif
 
 // -------------------- Hardware --------------------------------
@@ -655,7 +657,8 @@ void setup() {
   lastWeatherTime = millis();
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
   lastF10MicroTime = lastWeatherTime;
-  Serial.println("[F10-MICRO] 60s sensor reads; 10min window; EXPERIMENTAL risk outlook; OUTPUTS=OFF");
+  f10InitialSamplePending = true;
+  Serial.println("[F10-MICRO] first read at boot; then 60s; 10min window; EXPERIMENTAL risk outlook; OUTPUTS=OFF");
 #endif
   lastOLEDUpdate = millis();
   Serial.printf("[UNIVERSAL] %s (ID %lu): firmware initialized; relay forwarding controlled by build; multi-vessel validation PENDING\n",
@@ -755,7 +758,9 @@ void loop() {
 
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
   if (f09SensorAuthorized &&
-      uint32_t(millis() - lastF10MicroTime) >= V003F10Micro::kIntervalMs) {
+      (f10InitialSamplePending ||
+       uint32_t(millis() - lastF10MicroTime) >= V003F10Micro::kIntervalMs)) {
+    f10InitialSamplePending = false;
     lastF10MicroTime = millis();
     MicroWeatherSample sample{};
     // The macro layer can complete a physical read at the same 10-minute

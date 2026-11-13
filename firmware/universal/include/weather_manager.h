@@ -13,11 +13,18 @@ enum WeatherState : uint8_t {
 
 #define WEATHER_HISTORY_SIZE 10
 
-// Measurement pins, unchanged from tested Board A firmware.
+// Default pins preserve existing Vessel-001/002 and F08 bench behavior.
+// Only the opt-in Vessel-003 F09 sensor profile shares BME680 I2C pins.
+#include "v003_f09_shared_sensor_bus.h"
 #define BME_SDA_PIN 21
 #define BME_SCL_PIN 48
+#if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+#define DHT_SDA_PIN BME_SDA_PIN
+#define DHT_SCL_PIN BME_SCL_PIN
+#else
 #define DHT_SDA_PIN 38
 #define DHT_SCL_PIN 39
+#endif
 
 // The I2C switch remains owned by main.cpp and shared with the OLED.
 void switchI2C(uint8_t sda, uint8_t scl);

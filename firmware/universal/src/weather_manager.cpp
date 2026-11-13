@@ -163,9 +163,13 @@ void setupSensors() {
   }
 
   // ----------------------------------------------------------
-  // DHT20: SDA 38, SCL 39
+  // DHT20: isolated F09 profile shares SDA21/SCL48 with BME680.
+  // Other builds retain the original SDA38/SCL39 selection.
   // ----------------------------------------------------------
   switchI2C(DHT_SDA_PIN, DHT_SCL_PIN);
+#if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+  Serial.println("[F09-I2C] sensor bus SDA=21 SCL=48; BME680=0x76/0x77 DHT20=0x38");
+#endif
 
   Serial.println("[I2C-DHT] Scanning address 0x38...");
 

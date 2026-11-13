@@ -163,6 +163,18 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #endif
 #include <U8g2lib.h>
 #include "weather_manager.h"
+#if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+#if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
+    THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
+    THESIS_V003_F08_COMBINED_PROFILE != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+#error "F09 shared sensor profile requires outputs/relay/SD/F08 profiles OFF"
+#endif
+static_assert(!PhysicalIndicators::kOutputsEnabled &&
+              PhysicalIndicators::kBuzzerDriverPin == -1 &&
+              DHT_SDA_PIN == 21 && DHT_SCL_PIN == 48,
+              "F09 sensors must share external bus without physical alert outputs");
+#endif
 #ifndef THESIS_SD_PROBE
 #define THESIS_SD_PROBE 0
 #endif
@@ -206,7 +218,10 @@ const unsigned long GPS_STATUS_INTERVAL = 5000UL;
 const unsigned long OLED_UPDATE_INTERVAL = 500UL;
 const unsigned long UPTIME_PRINT_INTERVAL = 60000UL; // Serial heartbeat every minute
 unsigned long lastWeatherTime = 0;
-
+#if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+// Runtime guard: don't touch GPIO21/48 sensor bus on misflashed vessels.
+static bool f09SensorAuthorized = false;
+#endif
 
 // -------------------- Hardware --------------------------------
 HardwareSerial GPSSerial(1);
@@ -549,11 +564,27 @@ void setup() {
   weatherInputsValid = false;
   weatherState = WEATHER_CALIBRATING;
   Serial.println("[F08-BENCH] DHT20/BME680 initialization SKIPPED");
+#elif THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+  // Move only this profile's identity check before external sensor access.
+  VesselIdentity::load();
+  f09SensorAuthorized = V003F09SharedSensorBus::authorized(
+      VesselIdentity::ready(), VesselIdentity::nodeId());
+  Serial.printf("[F09-I2C] id=%lu authorized=%u SDA=21 SCL=48 OUTPUTS=OFF\n",
+                (unsigned long)VesselIdentity::nodeId(), unsigned(f09SensorAuthorized));
+  if (f09SensorAuthorized) {
+    setupSensors();
+  } else {
+    weatherInputsValid = false;
+    weatherState = WEATHER_CALIBRATING;
+    Serial.println("[F09-I2C] SENSOR ACCESS BLOCKED: requires Vessel-003");
+  }
 #else
   setupSensors();
 #endif
   setupGPS();
+#if THESIS_V003_F09_SHARED_SENSOR_BUS != 1
   VesselIdentity::load();
+#endif
 #if THESIS_V003_F08_LED_BENCH == 1
   const bool isVessel003 = VesselIdentity::nodeId() == 3U;
   // Runtime gate: even a misflashed live test cannot drive LED GPIOs on 001/002.
@@ -677,7 +708,17 @@ void loop() {
 #if THESIS_V003_F08_INDICATOR_BENCH == 0
   if (millis() - lastWeatherTime >= WEATHER_INTERVAL) {
     lastWeatherTime = millis();
+#if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+    if (f09SensorAuthorized) {
+      processWeather();
+      Serial.printf("[F09-SAMPLE] dht=%u bme_pressure=%u inputs=%u history=%u weather=%s\n",
+                    unsigned(dhtReadingValid), unsigned(bmePressureReadingValid),
+                    unsigned(weatherInputsValid), unsigned(weatherMeasurement.historyCount),
+                    weatherName(weatherState));
+    }
+#else
     processWeather();
+#endif
 #if THESIS_SD_LOGGER == 1 && THESIS_F07_WEATHER_LOG == 1
     // GNSS time is usable without a position fix, but only if both the
     // date and time were received recently. Otherwise JSON gets null.

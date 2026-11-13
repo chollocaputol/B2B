@@ -193,7 +193,9 @@ def run():
         cpp.write_text("\n".join((STUBS, header, weather, oled, CASES)))
         env = dict(os.environ)
         env["PATH"] = str(Path(compiler).parent) + os.pathsep + env.get("PATH", "")
-        subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", str(cpp), "-o", str(exe)], check=True, env=env)
+        subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra",
+                        "-I", str(HEADER.parent), str(cpp), "-o", str(exe)],
+                       check=True, env=env)
         subprocess.run([str(exe)], check=True, env=env)
 
 if __name__ == "__main__":

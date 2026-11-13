@@ -202,6 +202,30 @@ void setupSensors() {
 // ============================================================
 // HARDWARE WEATHER READINGS
 // ============================================================
+#if THESIS_V003_F10_MICRO_NOWCAST == 1
+bool readMicroWeatherSample(MicroWeatherSample &sample) {
+  sample = MicroWeatherSample{};
+  if (!dhtAvailable || !bmeAvailable) return false;
+  // Both sensors already share GPIO21/48 in this opt-in F09 configuration.
+  switchI2C(BME_SDA_PIN, BME_SCL_PIN);
+  bool dhtOK = dht.isConnected() && dht.read() == DHT20_OK;
+  const float t = dhtOK ? dht.getTemperature() : NAN;
+  const float h = dhtOK ? dht.getHumidity() : NAN;
+  bool bmeOK = bme.performReading();
+  const float p = bmeOK ? (bme.pressure / 100.0f) : NAN;
+  switchI2C(OLED_SDA_PIN, OLED_SCL_PIN);
+  Wire.setClock(400000);
+  // No source substitution: DHT20 is T/RH, BME680 is pressure.
+  if (!dhtOK || !bmeOK || !isfinite(t) || t < -40.0f || t > 85.0f ||
+      !isfinite(h) || h <= 0.0f || h > 100.0f ||
+      !isfinite(p) || p < PRESSURE_MIN_HPA || p > PRESSURE_MAX_HPA)
+    return false;
+  sample.temperatureC = t;
+  sample.humidityPercent = h;
+  sample.stationPressureHpa = p;
+  return true;
+}
+#endif
 void processWeather() {
   weatherMeasurement = WeatherMeasurement{};
   weatherMeasurement.uptimeMs = millis();

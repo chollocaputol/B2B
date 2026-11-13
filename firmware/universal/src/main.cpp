@@ -163,6 +163,12 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #endif
 #include <U8g2lib.h>
 #include "weather_manager.h"
+#if THESIS_V003_F10_MICRO_NOWCAST == 1
+#include "v003_f10_micro_nowcast.h"
+static_assert(!PhysicalIndicators::kOutputsEnabled &&
+              DHT_SDA_PIN == 21 && DHT_SCL_PIN == 48,
+              "F10 must not actuate hardware; use F09 shared weather sensor bus");
+#endif
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
 #if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
@@ -221,6 +227,10 @@ unsigned long lastWeatherTime = 0;
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
 // Runtime guard: don't touch GPIO21/48 sensor bus on misflashed vessels.
 static bool f09SensorAuthorized = false;
+#endif
+#if THESIS_V003_F10_MICRO_NOWCAST == 1
+static V003F10Micro::Forecaster f10Forecaster;
+static uint32_t lastF10MicroTime = 0;
 #endif
 
 // -------------------- Hardware --------------------------------
@@ -643,6 +653,10 @@ void setup() {
     (unsigned long)(uint32_t)(telemetryMac.nextDueMs() - millis()), (unsigned)MAC_CAD_MODE);
 
   lastWeatherTime = millis();
+#if THESIS_V003_F10_MICRO_NOWCAST == 1
+  lastF10MicroTime = lastWeatherTime;
+  Serial.println("[F10-MICRO] 60s sensor reads; 10min window; EXPERIMENTAL risk outlook; OUTPUTS=OFF");
+#endif
   lastOLEDUpdate = millis();
   Serial.printf("[UNIVERSAL] %s (ID %lu): firmware initialized; relay forwarding controlled by build; multi-vessel validation PENDING\n",
                 VesselIdentity::label(), (unsigned long)VesselIdentity::nodeId());
@@ -738,6 +752,29 @@ void loop() {
 #endif
   }
 #endif  // THESIS_V003_F08_INDICATOR_BENCH == 0
+
+#if THESIS_V003_F10_MICRO_NOWCAST == 1
+  if (f09SensorAuthorized &&
+      uint32_t(millis() - lastF10MicroTime) >= V003F10Micro::kIntervalMs) {
+    lastF10MicroTime = millis();
+    MicroWeatherSample sample{};
+    const bool valid = readMicroWeatherSample(sample);
+    if (valid) {
+      f10Forecaster.ingest(lastF10MicroTime, sample.temperatureC,
+                           sample.humidityPercent, sample.stationPressureHpa);
+    } else {
+      f10Forecaster.invalidate();
+    }
+    Serial.printf("[F10-MICRO] valid=%u count=%u/11 state=%s pattern=%s "
+                  "dT10=%+.2fC dRH10=%+.2fpp dP10=%+.2fhPa dewGap=%.2fC "
+                  "horizon=EXPERIMENTAL_10_30_MIN OUTPUTS=OFF\n",
+                  unsigned(valid), unsigned(f10Forecaster.count()),
+                  V003F10Micro::stateName(f10Forecaster.state()),
+                  V003F10Micro::patternName(f10Forecaster.pattern()),
+                  f10Forecaster.deltaTemperature(), f10Forecaster.deltaHumidity(),
+                  f10Forecaster.deltaPressure(), f10Forecaster.dewPointGap());
+  }
+#endif
 
   // Live authoritative inputs only; OLED demo modes never reach physical outputs.
   PhysicalIndicators::update(millis(), weatherState, weatherInputsValid,

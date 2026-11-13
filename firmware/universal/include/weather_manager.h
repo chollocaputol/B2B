@@ -30,6 +30,15 @@ enum WeatherState : uint8_t {
 void switchI2C(uint8_t sda, uint8_t scl);
 void setupSensors();
 void processWeather();
+#if THESIS_V003_F10_MICRO_NOWCAST == 1
+// Separate one-minute physical acquisition. Never changes macro/Zambretti state.
+struct MicroWeatherSample {
+  float temperatureC = NAN;
+  float humidityPercent = NAN;
+  float stationPressureHpa = NAN;
+};
+bool readMicroWeatherSample(MicroWeatherSample &sample);
+#endif
 void processSerialTestCommands();
 const char *weatherName(uint8_t state);
 const char *shortWeatherName(uint8_t state);

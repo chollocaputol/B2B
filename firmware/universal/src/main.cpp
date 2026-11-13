@@ -758,7 +758,23 @@ void loop() {
       uint32_t(millis() - lastF10MicroTime) >= V003F10Micro::kIntervalMs) {
     lastF10MicroTime = millis();
     MicroWeatherSample sample{};
-    const bool valid = readMicroWeatherSample(sample);
+    // The macro layer can complete a physical read at the same 10-minute
+    // boundary. Reuse its accepted, fresh sample instead of issuing a second
+    // back-to-back DHT20/BME680 transaction that can invalidate the micro FIFO.
+    const bool reusedMacro = V003F10Micro::shouldReuseMacroSample(
+        lastF10MicroTime, weatherSampleAttempted, weatherMeasurement.uptimeMs);
+    bool valid = false;
+    if (reusedMacro) {
+      valid = weatherMeasurement.inputsOK && weatherMeasurement.dhtOK &&
+              weatherMeasurement.bmePressureOK && weatherMeasurement.tempSource == 1U;
+      if (valid) {
+        sample.temperatureC = weatherMeasurement.selectedTempC;
+        sample.humidityPercent = weatherMeasurement.selectedRH;
+        sample.stationPressureHpa = weatherMeasurement.stationPressureHpa;
+      }
+    } else {
+      valid = readMicroWeatherSample(sample);
+    }
     if (valid) {
       f10Forecaster.ingest(lastF10MicroTime, sample.temperatureC,
                            sample.humidityPercent, sample.stationPressureHpa);
@@ -767,12 +783,13 @@ void loop() {
     }
     Serial.printf("[F10-MICRO] valid=%u count=%u/11 state=%s pattern=%s "
                   "dT10=%+.2fC dRH10=%+.2fpp dP10=%+.2fhPa dewGap=%.2fC "
-                  "horizon=EXPERIMENTAL_10_30_MIN OUTPUTS=OFF\n",
+                  "horizon=EXPERIMENTAL_10_30_MIN OUTPUTS=OFF source=%s\n",
                   unsigned(valid), unsigned(f10Forecaster.count()),
                   V003F10Micro::stateName(f10Forecaster.state()),
                   V003F10Micro::patternName(f10Forecaster.pattern()),
                   f10Forecaster.deltaTemperature(), f10Forecaster.deltaHumidity(),
-                  f10Forecaster.deltaPressure(), f10Forecaster.dewPointGap());
+                  f10Forecaster.deltaPressure(), f10Forecaster.dewPointGap(),
+                  reusedMacro ? "MACRO_REUSED" : "DIRECT");
   }
 #endif
 

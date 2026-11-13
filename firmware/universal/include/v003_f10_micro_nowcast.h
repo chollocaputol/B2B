@@ -28,6 +28,14 @@ constexpr uint32_t kMinWindowMs = 540000UL;
 constexpr uint32_t kMaxWindowMs = 660000UL;
 constexpr uint8_t kWindowCount = 11; // 11 one-minute points span ten minutes
 
+// If the ten-minute macro reader has just sampled the same sensors, reuse
+// its fresh, validated measurement. This avoids immediately repeating the
+// DHT20/BME680 I2C transaction at the shared sampling boundary.
+constexpr uint32_t kMacroReuseMaxAgeMs = 5000UL;
+inline bool shouldReuseMacroSample(uint32_t now, bool attempted, uint32_t macroMs) {
+  return attempted && uint32_t(now - macroMs) <= kMacroReuseMaxAgeMs;
+}
+
 // Initial engineering hypotheses, NOT validated meteorological thresholds.
 constexpr float kMinPressureChangeHpa = 1.2f;
 constexpr float kMaxTemperatureChangeC = -1.0f;

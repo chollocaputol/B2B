@@ -28,6 +28,27 @@ int main() {
   assert(std::isnan(dewPointDepression(30.0f, 0.0f)));
   assert(std::fabs(dewPointDepression(30.0f, 70.0f) - 6.0f) < 1.0f);
 
+  // Micro + macro coincide at 10 min: use the fresh macro sample, not a
+  // duplicate physical read. Reuse is bounded, including millis() rollover.
+  assert(shouldReuseMacroSample(600500U, true, 600100U));
+  assert(shouldReuseMacroSample(604999U, true, 600000U));
+  assert(!shouldReuseMacroSample(605001U, true, 600000U));
+  assert(!shouldReuseMacroSample(600500U, false, 600100U));
+  assert(!shouldReuseMacroSample(660000U, true, 600000U));
+  assert(shouldReuseMacroSample(0x000000F0U, true, 0xFFFFF100U));
+
+  Forecaster sharedBoundary;
+  for (int i = 1; i <= 9; ++i)
+    assert(sharedBoundary.ingest(uint32_t(i)*60000U, 30.0f, 70.0f, 1010.0f));
+  // At 600s the macro's valid measurement supplies the tenth minute point.
+  assert(shouldReuseMacroSample(600250U, true, 600100U));
+  assert(sharedBoundary.ingest(600250U, 30.0f, 70.0f, 1010.0f));
+  assert(sharedBoundary.count() == 10 && sharedBoundary.state() == State::WARMUP);
+  // No history reset: the next direct micro sample completes the full window.
+  assert(sharedBoundary.ingest(660250U, 30.0f, 70.0f, 1010.0f));
+  assert(sharedBoundary.count() == 11 && sharedBoundary.state() == State::NO_PATTERN);
+  std::puts("PASS: fresh macro sample reuse avoids 10-minute double-read reset");
+
   Forecaster normal;
   for (int i = 0; i < 11; ++i) {
     assert(normal.ingest(uint32_t(i)*60000U, 30.0f, 70.0f, 1010.0f));
@@ -140,6 +161,14 @@ def run():
             "F10 acquisition must be identity-gated")
     require("[F10-MICRO]" in main and "f10Forecaster.ingest" in main,
             "F10 serial diagnostics missing")
+    require("V003F10Micro::shouldReuseMacroSample(" in main and
+            "weatherSampleAttempted, weatherMeasurement.uptimeMs" in main and
+            "weatherMeasurement.inputsOK" in main and
+            "weatherMeasurement.selectedTempC" in main and
+            "weatherMeasurement.selectedRH" in main and
+            "weatherMeasurement.stationPressureHpa" in main and
+            "source=%s" in main and "MACRO_REUSED" in main,
+            "F10 must reuse fresh macro sensor samples at colliding sample times")
     require("#if THESIS_V003_F10_MICRO_NOWCAST == 1" in wx and
             "switchI2C(OLED_SDA_PIN, OLED_SCL_PIN);" in wx,
             "F10 should restore OLED bus after sensor reads")

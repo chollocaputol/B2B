@@ -174,6 +174,20 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 static_assert(!PhysicalIndicators::kOutputsEnabled,
               "F11 macro profile must not drive physical indicators");
 #endif
+#if THESIS_V003_F12_INDICATOR_PREVIEW == 1
+#include "v003_f12_indicator_preview.h"
+#if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
+    THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
+    THESIS_V003_F08_COMBINED_PROFILE != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+#error "F12 preview must isolate GPIO bench, SD and relay profiles"
+#endif
+static_assert(!PhysicalIndicators::kOutputsEnabled &&
+              PhysicalIndicators::kYellowPin == -1 &&
+              PhysicalIndicators::kRedPin == -1 &&
+              PhysicalIndicators::kBuzzerDriverPin == -1,
+              "F12 preview makes no physical indicator GPIO assignments");
+#endif
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
 #if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
@@ -238,6 +252,10 @@ static V003F10Micro::Forecaster f10Forecaster;
 static uint32_t lastF10MicroTime = 0;
 // Real first measurement is due on the first authorized loop.
 static bool f10InitialSamplePending = true;
+#endif
+#if THESIS_V003_F12_INDICATOR_PREVIEW == 1
+static V003F12Preview::Controller f12IndicatorPreview;
+static uint32_t f12LastReportMs = 0;
 #endif
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
 static V003F11Macro::Batch f11MacroBatch;
@@ -665,6 +683,14 @@ void setup() {
     (unsigned long)(uint32_t)(telemetryMac.nextDueMs() - millis()), (unsigned)MAC_CAD_MODE);
 
   lastWeatherTime = millis();
+#if THESIS_V003_F12_INDICATOR_PREVIEW == 1
+  f12IndicatorPreview.begin(f09SensorAuthorized &&
+                            VesselIdentity::ready() && VesselIdentity::nodeId() == 3U);
+  Serial.printf("[F12-PREVIEW] id=%lu authorized=%u GPIO_WRITES=0 "
+                "micro=EXPERIMENTAL; weather/SOS routing VIRTUAL_ONLY\n",
+                (unsigned long)VesselIdentity::nodeId(),
+                unsigned(f12IndicatorPreview.authorized()));
+#endif
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1
   f11InitialBatchPending = true;
   f11MacroSampleForMicro = false;
@@ -873,6 +899,24 @@ void loop() {
   // Live authoritative inputs only; OLED demo modes never reach physical outputs.
   PhysicalIndicators::update(millis(), weatherState, weatherInputsValid,
                              hasActiveLocalSOS(), getActiveSOSCount() > 0);
+#if THESIS_V003_F12_INDICATOR_PREVIEW == 1
+  // F12 is a separate, VIRTUAL policy instance. Production physical adapter
+  // remains disabled. The OLED demo state never enters this decision path.
+  const uint32_t f12Now = millis();
+  const auto f12Result = f12IndicatorPreview.preview(
+      f12Now, weatherState, weatherInputsValid, f10Forecaster.state(),
+      hasActiveLocalSOS(), getActiveSOSCount() > 0);
+  if (f12Result.authorized &&
+      (f12Result.changed || uint32_t(f12Now - f12LastReportMs) >= 60000UL)) {
+    f12LastReportMs = f12Now;
+    Serial.printf("[F12-PREVIEW] source=%s mode=%u yellow=%u red=%u buzzer=%u "
+                  "GPIO_WRITES=0 micro=EXPERIMENTAL\n",
+                  V003F12Preview::name(f12Result.source), unsigned(f12Result.mode),
+                  unsigned(f12Result.virtualOutputs.yellow),
+                  unsigned(f12Result.virtualOutputs.red),
+                  unsigned(f12Result.virtualOutputs.buzzer));
+  }
+#endif
 #if THESIS_V003_F08_LED_BENCH == 1
   // SOS preempts any LED test; normal loop scheduling enforces the 500ms limit.
   V003F08LedBench::instance().tick(

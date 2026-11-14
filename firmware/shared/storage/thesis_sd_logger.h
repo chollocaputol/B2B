@@ -212,6 +212,44 @@ inline bool queueWeatherSample(const WeatherMeasurement& s) {
     ++q.count;
     return true;
 }
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+// One experimental near-term outlook per F10 attempt. Separate JSON "kind"
+// from F11 macro weather, same isolated F06 session and bounded queue.
+// This is not a calibrated forecast and never alters an SOS or LoRa packet.
+inline bool queueMicroOutlook(uint32_t uptimeMs, bool inputValid, uint8_t historyCount,
+                              const char* state, const char* pattern,
+                              float dt, float drh, float dp, float dewGap,
+                              bool reusedMacro) {
+    if (!ready || vesselId != 3U) return false;
+    EventQueue& q = telemetryQueue;
+    if (q.count >= EVENT_CAPACITY) { ++lostTelemetry; return false; }
+    char dT[20], dRH[20], dP[20], gap[20];
+    weatherJsonNumber(dT, sizeof(dT), dt);
+    weatherJsonNumber(dRH, sizeof(dRH), drh);
+    weatherJsonNumber(dP, sizeof(dP), dp);
+    weatherJsonNumber(gap, sizeof(gap), dewGap);
+    char* dest = q.entries[q.write].line;
+    const int size = snprintf(dest, sizeof(q.entries[q.write].line),
+        "{\"kind\":\"micro_outlook\",\"vessel_id\":%lu,\"boot_token\":%lu,"
+        "\"event_index\":%lu,\"uptime_ms\":%lu,\"input_valid\":%u,"
+        "\"history_count\":%u,\"state\":\"%s\",\"pattern\":\"%s\","
+        "\"dt10_c\":%s,\"drh10_pp\":%s,\"dp10_hpa\":%s,"
+        "\"dew_gap_c\":%s,\"source\":\"%s\","
+        "\"horizon\":\"EXPERIMENTAL_10_30_MIN\"}",
+        (unsigned long)vesselId, (unsigned long)bootToken,
+        (unsigned long)(eventCounter + 1UL), (unsigned long)uptimeMs,
+        unsigned(inputValid), unsigned(historyCount), state, pattern,
+        dT, dRH, dP, gap, reusedMacro ? "MACRO_REUSED" : "DIRECT");
+    if (size < 0 || (size_t)size >= sizeof(q.entries[q.write].line)) {
+        ++lostTelemetry;
+        return false;
+    }
+    ++eventCounter;
+    q.write = (q.write + 1U) % EVENT_CAPACITY;
+    ++q.count;
+    return true;
+}
+#endif // F18
 #endif // THESIS_F07_WEATHER_LOG
 
 inline void pollEvents() {

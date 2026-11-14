@@ -146,6 +146,33 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
     (THESIS_V003_F17_EXPLICIT_OPT_IN != 0 && THESIS_V003_F17_EXPLICIT_OPT_IN != 1)
 #error "Invalid F17 integrated preflight flags"
 #endif
+// F18: weather-first integration. Adds ONLY virtual UI + research SD trace.
+// Never changes weather thresholds, LoRa frames, SOS logic or physical GPIO.
+#ifndef THESIS_V003_F18_WEATHER_INTERFACE
+#define THESIS_V003_F18_WEATHER_INTERFACE 0
+#endif
+#ifndef THESIS_V003_F18_EXPLICIT_OPT_IN
+#define THESIS_V003_F18_EXPLICIT_OPT_IN 0
+#endif
+#if (THESIS_V003_F18_WEATHER_INTERFACE != 0 && THESIS_V003_F18_WEATHER_INTERFACE != 1) || \
+    (THESIS_V003_F18_EXPLICIT_OPT_IN != 0 && THESIS_V003_F18_EXPLICIT_OPT_IN != 1)
+#error "Invalid F18 weather-integration flags"
+#endif
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1 && \
+    (THESIS_V003_F18_EXPLICIT_OPT_IN != 1 || \
+     THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1 || \
+     THESIS_V003_F10_MICRO_NOWCAST != 1 || \
+     THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || \
+     THESIS_V003_F12_INDICATOR_PREVIEW != 1 || \
+     THESIS_V003_F13_SUPERVISED_DRIVER != 1 || \
+     THESIS_V003_F15_MACRO_SD_SANDBOX != 1 || \
+     THESIS_SD_OLED_UI != 1 || \
+     THESIS_V003_F13_LIVE_OUTPUTS != 0 || \
+     THESIS_LAB_RELAY_TX != 0 || \
+     THESIS_V003_F14_INDICATOR_PROBE != 0)
+#error "F18 requires F17 V003 outputs-OFF macro/micro SD OLED integration"
+#endif
+
 // Separate F15 hardware opt-in: the existing build-only profile cannot mount
 // the microSD card or queue weather data even if accidentally uploaded.
 #ifndef THESIS_V003_F15_SD_PILOT_ARMED
@@ -416,6 +443,11 @@ int buttonStableState = HIGH;
 unsigned long buttonLastDebounceTime = 0;
 unsigned long buttonPressStartedAt = 0;
 const unsigned long BUTTON_LONG_PRESS_MS = 900UL;
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+// Hold GPIO0 on the existing weather page to toggle MACRO / MICRO.
+// Does not change SOS menu, storage mode, sensor clocks or OLED page count.
+static bool f18WeatherMicroView = false;
+#endif
 // OLED-only alert demonstrations: 0 = LIVE, 1 = NORMAL, 2 = FRONT, 3 = SQUALL.
 // These NEVER modify real weatherState, radio telemetry, or sensor history.
 uint8_t alertDemoMode = 0;
@@ -907,6 +939,9 @@ void setup() {
 #if THESIS_V003_F17_INTEGRATED_PREFLIGHT == 1
   Serial.println("[F17-INTEGRATED] F10_FORECAST=EXPERIMENTAL_VIRTUAL F11_MACRO=REAL F12=VIRTUAL F13_GPIO=DISABLED F16_SD_OLED=ENABLED RELAY=OFF");
 #endif
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+  Serial.println("[F18-WEATHER] MACRO=EMPIRICAL_100MIN MICRO=EXPERIMENTAL_10_30MIN OLED=LONG_HOLD_PAGE1 SD=V003_SANDBOX GPIO=OFF");
+#endif
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 
@@ -1096,6 +1131,23 @@ void loop() {
                   f10Forecaster.deltaTemperature(), f10Forecaster.deltaHumidity(),
                   f10Forecaster.deltaPressure(), f10Forecaster.dewPointGap(),
                   reusedMacro ? "MACRO_REUSED" : "DIRECT");
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+#if THESIS_V003_F15_SD_PILOT_ARMED == 1
+    // Micro data is an independent research product, NOT a physical alert.
+    // Same bounded telemetry FIFO as F15: urgent SOS always dequeues first.
+    const bool microQueued = ThesisSDLogger::queueMicroOutlook(
+        lastF10MicroTime, valid, f10Forecaster.count(),
+        V003F10Micro::stateName(f10Forecaster.state()),
+        V003F10Micro::patternName(f10Forecaster.pattern()),
+        f10Forecaster.deltaTemperature(), f10Forecaster.deltaHumidity(),
+        f10Forecaster.deltaPressure(), f10Forecaster.dewPointGap(), reusedMacro);
+    Serial.printf("[F18-MICRO-SD] queued=%u state=%s source=%s\n",
+                  unsigned(microQueued), V003F10Micro::stateName(f10Forecaster.state()),
+                  reusedMacro ? "MACRO_REUSED" : "DIRECT");
+#else
+    Serial.println("[F18-MICRO-SD] BUILD_ONLY_NO_SD_QUEUE");
+#endif
+#endif
   }
 #endif
 
@@ -1336,6 +1388,13 @@ void handleOLEDButton() {
       buttonPressStartedAt = millis();
     } else {
       unsigned long duration = millis() - buttonPressStartedAt;
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+      if (oledPage == 1 && duration >= BUTTON_LONG_PRESS_MS) {
+        f18WeatherMicroView = !f18WeatherMicroView;
+        Serial.printf("[F18-WX-UI] VIEW=%s OUTPUTS=OFF\n",
+                      f18WeatherMicroView ? "MICRO_EXPERIMENTAL" : "MACRO_EMPIRICAL");
+      } else
+#endif
       if (oledPage == 2 && duration >= BUTTON_LONG_PRESS_MS) {
         if (oledPeerMenuOpen) confirmOLEDPeerMenu();
         else openOLEDPeerMenu();
@@ -1465,7 +1524,110 @@ void oledGPSPage() {
   u8g2.sendBuffer();
 }
 
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+// F18 OLED CONSISTENCY: shared six-row 6x10 layout with macro view.
+// Separate experimental scientific state; no weather or output side effects.
+void oledMicroWeatherPage() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  char line[32];
+  u8g2.drawStr(0, 9, "MICRO WX 2/8 EXP");
+  const auto state = f10Forecaster.state();
+  const char* label = "INVALID";
+  switch (state) {
+    case V003F10Micro::State::WARMUP: label = "BASELINE"; break;
+    case V003F10Micro::State::NO_PATTERN: label = "NO_PATTERN"; break;
+    case V003F10Micro::State::CANDIDATE: label = "CANDIDATE"; break;
+    case V003F10Micro::State::RISK_WATCH: label = "RISK_WATCH"; break;
+    default: break;
+  }
+  snprintf(line, sizeof(line), "STATE:%.15s", label);
+  u8g2.drawStr(0, 19, line);
+  const char* pattern = "--";
+  if (state != V003F10Micro::State::INVALID &&
+      state != V003F10Micro::State::WARMUP) {
+    switch (f10Forecaster.pattern()) {
+      case V003F10Micro::Pattern::PRESSURE_RISE: pattern = "RISE"; break;
+      case V003F10Micro::Pattern::PRESSURE_FALL: pattern = "FALL"; break;
+      default: pattern = "NONE"; break;
+    }
+  }
+  snprintf(line, sizeof(line), "H:%u/11 PAT:%s",
+           unsigned(f10Forecaster.count()), pattern);
+  u8g2.drawStr(0, 29, line);
+  const bool trendReady = f10Forecaster.count() == V003F10Micro::kWindowCount &&
+      state != V003F10Micro::State::INVALID &&
+      state != V003F10Micro::State::WARMUP &&
+      isfinite(f10Forecaster.deltaTemperature()) &&
+      isfinite(f10Forecaster.deltaHumidity()) &&
+      isfinite(f10Forecaster.deltaPressure());
+  if (trendReady) {
+    snprintf(line, sizeof(line), "dT:%+.1fC dRH:%+.0fpp",
+             (double)f10Forecaster.deltaTemperature(),
+             (double)f10Forecaster.deltaHumidity());
+    u8g2.drawStr(0, 39, line);
+    snprintf(line, sizeof(line), "dP:%+.2fhPa",
+             (double)f10Forecaster.deltaPressure());
+    u8g2.drawStr(0, 49, line);
+  } else {
+    u8g2.drawStr(0, 39, "TRENDS: NOT READY");
+    u8g2.drawStr(0, 49, "NO SAFETY ALL-CLEAR");
+  }
+  u8g2.drawStr(0, 59, "EXPERIMENTAL 10-30m");
+  u8g2.sendBuffer();
+}
+#endif
+
 void oledWeatherPage() {
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+  if (f18WeatherMicroView) { oledMicroWeatherPage(); return; }
+  {  // Isolate F18 renderer locals from legacy renderer.
+  // F18 OLED CONSISTENCY: no changes to legacy F10/F11 calculations or to
+  // earlier F10-F17 profiles, which retain their original macro renderer.
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  char line[32];
+  u8g2.drawStr(0, 9, "MACRO WX 2/8 EMP");
+  const char* macroState = !weatherSampleAttempted ? "CHECKING"
+      : !weatherInputsValid ? "SENSOR_FAIL" : shortWeatherName(weatherState);
+  snprintf(line, sizeof(line), "STATE:%.15s", macroState);
+  u8g2.drawStr(0, 19, line);
+  snprintf(line, sizeof(line), "H:%u/%u D:%s B:%s",
+           unsigned(weatherMeasurement.historyCount), unsigned(WEATHER_HISTORY_SIZE),
+           dhtReadingValid ? "OK" : "--",
+           bmePressureReadingValid ? "OK" : "--");
+  u8g2.drawStr(0, 29, line);
+  if (tempHumidityReadingValid) {
+    snprintf(line, sizeof(line), "T:%.1fC RH:%.1f%%",
+             (double)temperatureC, (double)humidityPercent);
+  } else {
+    strcpy(line, "T:--.-C RH:--.-%");
+  }
+  u8g2.drawStr(0, 39, line);
+  if (bmePressureReadingValid && isfinite(pressureStationHpa)) {
+    snprintf(line, sizeof(line), "P:%.1fhPa", (double)pressureStationHpa);
+  } else {
+    strcpy(line, "P:-- hPa (BME FAIL)");
+  }
+  u8g2.drawStr(0, 49, line);
+  if (!weatherSampleAttempted) {
+    strcpy(line, "WAIT: FIRST READ");
+  } else if (!weatherInputsValid) {
+    strcpy(line, "FORECAST: DISABLED");
+  } else if (weatherState == WEATHER_CALIBRATING ||
+             weatherMeasurement.historyCount < WEATHER_HISTORY_SIZE) {
+    strcpy(line, "WAIT: MACRO HISTORY");
+  } else if (isfinite(pressureDelta)) {
+    snprintf(line, sizeof(line), "Z:%u dP:%+.1fhPa",
+             unsigned(zambrettiIndex), (double)pressureDelta);
+  } else {
+    strcpy(line, "Z:-- dP:--");
+  }
+  u8g2.drawStr(0, 59, line);
+  u8g2.sendBuffer();
+  }
+  return;
+#endif
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
   char line[32];

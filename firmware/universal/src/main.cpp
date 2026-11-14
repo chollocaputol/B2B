@@ -134,6 +134,18 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #if THESIS_V003_F15_MACRO_SD_SANDBOX != 0 && THESIS_V003_F15_MACRO_SD_SANDBOX != 1
 #error "Invalid F15 macro SD sandbox flag"
 #endif
+// F17: the ONLY exception for combining F12/F13 policy with F15/F16 storage.
+// This phase is deliberately OUTPUTS-DISABLED; no live-output profile exists.
+#ifndef THESIS_V003_F17_INTEGRATED_PREFLIGHT
+#define THESIS_V003_F17_INTEGRATED_PREFLIGHT 0
+#endif
+#ifndef THESIS_V003_F17_EXPLICIT_OPT_IN
+#define THESIS_V003_F17_EXPLICIT_OPT_IN 0
+#endif
+#if (THESIS_V003_F17_INTEGRATED_PREFLIGHT != 0 && THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1) || \
+    (THESIS_V003_F17_EXPLICIT_OPT_IN != 0 && THESIS_V003_F17_EXPLICIT_OPT_IN != 1)
+#error "Invalid F17 integrated preflight flags"
+#endif
 // Separate F15 hardware opt-in: the existing build-only profile cannot mount
 // the microSD card or queue weather data even if accidentally uploaded.
 #ifndef THESIS_V003_F15_SD_PILOT_ARMED
@@ -152,8 +164,10 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
      THESIS_SD_LOGGER != 1 || THESIS_SD_FLEET != 1 || \
      THESIS_F05_RECOVERY != 1 || THESIS_F06_SD_SANDBOX != 1 || \
      THESIS_F07_WEATHER_LOG != 1 || WEATHER_FAST_TEST != 0 || \
-     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F12_INDICATOR_PREVIEW != 0 || \
-     THESIS_V003_F13_SUPERVISED_DRIVER != 0 || THESIS_V003_F14_INDICATOR_PROBE != 0)
+     THESIS_LAB_RELAY_TX != 0 || \
+     ((THESIS_V003_F12_INDICATOR_PREVIEW != 0 || THESIS_V003_F13_SUPERVISED_DRIVER != 0) && \
+      THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1) || \
+     THESIS_V003_F14_INDICATOR_PROBE != 0)
 #error "F15 requires Vessel-003 real F09-F11, F05/F06 sandbox SD, relay and physical indicators OFF"
 #endif
 #if THESIS_V003_F08_INDICATOR_BENCH == 1 && \
@@ -201,10 +215,36 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
      THESIS_F05_RECOVERY != 1 || THESIS_F06_SD_SANDBOX != 1 || \
      THESIS_F07_WEATHER_LOG != 1 || THESIS_SD_OLED_UI != 1 || \
      THESIS_F06_SD_HYBRID != 1 || WEATHER_FAST_TEST != 0 || \
-     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F12_INDICATOR_PREVIEW != 0 || \
-     THESIS_V003_F13_SUPERVISED_DRIVER != 0 || \
+     THESIS_LAB_RELAY_TX != 0 || \
+     ((THESIS_V003_F12_INDICATOR_PREVIEW != 0 || THESIS_V003_F13_SUPERVISED_DRIVER != 0) && \
+      THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1) || \
      THESIS_V003_F14_INDICATOR_PROBE != 0)
 #error "F16 requires isolated V003 F15 macro SD, F06 hybrid OLED, relay/indicators OFF"
+#endif
+// F17 is authorized only when all proven F09-F16 features are deliberately
+// combined, and F13 remains compiled with ZERO GPIO output capability.
+#if THESIS_V003_F17_INTEGRATED_PREFLIGHT == 1 && \
+    (THESIS_V003_F17_EXPLICIT_OPT_IN != 1 || \
+     THESIS_V003_F15_MACRO_SD_SANDBOX != 1 || \
+     THESIS_V003_F16_SD_OLED_HYBRID != 1 || THESIS_V003_F16_EXPLICIT_OPT_IN != 1 || \
+     THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || \
+     THESIS_V003_F10_MICRO_NOWCAST != 1 || THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || \
+     THESIS_V003_F12_INDICATOR_PREVIEW != 1 || THESIS_V003_F12_INDICATOR_PREVIEW_OPT_IN != 1 || \
+     THESIS_V003_F13_SUPERVISED_DRIVER != 1 || \
+     THESIS_V003_F13_LIVE_OUTPUTS != 0 || \
+     THESIS_V003_F13_EXPLICIT_OPT_IN != 0 || THESIS_V003_F13_HARDWARE_REVIEWED != 0 || \
+     THESIS_SD_LOGGER != 1 || THESIS_SD_FLEET != 1 || THESIS_F05_RECOVERY != 1 || \
+     THESIS_F06_SD_SANDBOX != 1 || THESIS_F07_WEATHER_LOG != 1 || \
+     THESIS_SD_OLED_UI != 1 || THESIS_F06_SD_HYBRID != 1 || \
+     WEATHER_FAST_TEST != 0 || THESIS_LAB_RELAY_TX != 0 || \
+     THESIS_V003_F14_INDICATOR_PROBE != 0 || \
+     THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
+     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
+     THESIS_V003_F08_COMBINED_PROFILE != 0)
+#error "F17 requires V003 F09-F16, F12 virtual, F13 GPIO OFF, isolated SD, relay OFF"
+#endif
+#if THESIS_V003_F17_EXPLICIT_OPT_IN == 1 && THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1
+#error "F17 opt-in requires integrated preflight mode"
 #endif
 #if THESIS_SD_OLED_UI == 1
 #define OLED_PAGE_TOTAL "8"
@@ -234,7 +274,8 @@ static_assert(!PhysicalIndicators::kOutputsEnabled,
 #if THESIS_V003_F08_INDICATOR_BENCH != 0 || THESIS_V003_F08_LED_BENCH != 0 || \
     THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || \
     THESIS_V003_F08_COMBINED_PROFILE != 0 || THESIS_LAB_RELAY_TX != 0 || \
-    THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+    ((THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0) && \
+     THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1)
 #error "F12 preview must isolate GPIO bench, SD and relay profiles"
 #endif
 static_assert(!PhysicalIndicators::kOutputsEnabled &&
@@ -245,13 +286,19 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 #endif
 #if THESIS_V003_F13_SUPERVISED_DRIVER == 1
 #include "v003_f13_supervised_indicators.h"
+#if THESIS_V003_F17_INTEGRATED_PREFLIGHT == 1
+static_assert(!V003F13Indicators::kPhysicalOutputsEnabled,
+              "F17 integrated preflight must never enable F13 physical GPIO");
+#endif
 #if THESIS_V003_F14_INDICATOR_PROBE == 1
 #include "v003_f14_indicator_probe.h"
 #endif
 #if THESIS_V003_F12_INDICATOR_PREVIEW != 1 || THESIS_V003_F08_INDICATOR_BENCH != 0 || \
     THESIS_V003_F08_LED_BENCH != 0 || THESIS_V003_F08_BUZZER_PREFLIGHT != 0 || \
     THESIS_V003_F08_BUZZER_LIVE_PROFILE != 0 || THESIS_V003_F08_COMBINED_PROFILE != 0 || \
-    THESIS_LAB_RELAY_TX != 0 || THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0
+    THESIS_LAB_RELAY_TX != 0 || \
+    ((THESIS_SD_LOGGER != 0 || THESIS_F07_WEATHER_LOG != 0) && \
+     THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1)
 #error "F13 must not share GPIO ownership, relay, or SD profiles"
 #endif
 static_assert(!PhysicalIndicators::kOutputsEnabled &&
@@ -856,6 +903,9 @@ void setup() {
   Serial.println("[LAB-RELAY] BUILD=ENABLED; BENCH ONLY; VESSEL-002 GATE");
 #else
   Serial.println("[LAB-RELAY] BUILD=DISABLED");
+#endif
+#if THESIS_V003_F17_INTEGRATED_PREFLIGHT == 1
+  Serial.println("[F17-INTEGRATED] F10_FORECAST=EXPERIMENTAL_VIRTUAL F11_MACRO=REAL F12=VIRTUAL F13_GPIO=DISABLED F16_SD_OLED=ENABLED RELAY=OFF");
 #endif
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }

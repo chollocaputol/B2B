@@ -18,12 +18,14 @@ extern uint8_t bWeatherState;
 struct PeerDisplaySnapshot {
   bool present = false, active = false, gpsValid = false;
   uint32_t id = 0, unique = 0, duplicates = 0, missing = 0, ageSeconds = 0;
+  uint32_t session = 0, received = 0;
   double latitude = 0, longitude = 0;
   int16_t rssi = 0;
   float snr = 0, pdr = 0;
 };
 bool getLivePeerSnapshot(PeerDisplaySnapshot &out);
 bool getPeerSnapshotById(uint32_t id, PeerDisplaySnapshot &out);
+bool getPeerSnapshotByIndex(size_t index, PeerDisplaySnapshot &out);
 bool nextActivePeerId(uint32_t current, uint32_t &next);
 size_t getTrackedPeerCount();
 uint32_t getTotalPeerTelemetryReceived();

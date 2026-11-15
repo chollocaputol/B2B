@@ -152,6 +152,82 @@ inline bool queueEvent(bool urgent, const char* kind, uint32_t origin,
     return true;
 }
 
+#if THESIS_V003_F19_DUAL_DISPLAY == 1 && THESIS_V003_F15_SD_PILOT_ARMED == 1
+// F19R3 research snapshots: RAM queue ONLY, SD writes remain in pollEvents().
+// Only explicit CONTINUOUS mode can produce these new research records.
+// Urgent SOS/ACK/CANCEL journaling is independent and retains priority.
+struct ResearchSystemSnapshot {
+    uint32_t uptimeMs=0, txOk=0, txFail=0, rxTelemetry=0, invalidPackets=0;
+    uint32_t peerCount=0, satellites=0;
+    bool gpsFix=false, utcValid=false, positionValid=false;
+    bool satellitesValid=false, hdopValid=false, speedValid=false;
+    double latitude=0.0, longitude=0.0, hdop=0.0, speedKmph=0.0;
+    char gpsUtc[21]={};  // ISO8601 Z from validated numeric GPS fields only.
+};
+inline void researchNumber(char* dst,size_t capacity,double value,bool valid,uint8_t digits=2) {
+    if (!valid || !isfinite(value)) { snprintf(dst,capacity,"null"); return; }
+    snprintf(dst,capacity,digits==6?"%.6f":"%.2f",value);
+}
+inline bool queueResearchSystem(const ResearchSystemSnapshot& s) {
+    if (!ready || vesselId!=3U || !hybridState.continuous) return false;
+    EventQueue& q=telemetryQueue;
+    if (q.count>=EVENT_CAPACITY) { ++lostTelemetry;return false; }
+    char lat[24],lon[24],hdop[20],speed[20],sats[16],utc[25]="null";
+    researchNumber(lat,sizeof(lat),s.latitude,s.positionValid,6);
+    researchNumber(lon,sizeof(lon),s.longitude,s.positionValid,6);
+    researchNumber(hdop,sizeof(hdop),s.hdop,s.hdopValid);
+    researchNumber(speed,sizeof(speed),s.speedKmph,s.speedValid);
+    if (s.satellitesValid) snprintf(sats,sizeof(sats),"%lu",(unsigned long)s.satellites);
+    else strcpy(sats,"null");
+    if (s.utcValid && strlen(s.gpsUtc)==20)
+        snprintf(utc,sizeof(utc),"\"%s\"",s.gpsUtc);
+    char* dst=q.entries[q.write].line;
+    const int n=snprintf(dst,sizeof(q.entries[q.write].line),
+        "{\"kind\":\"research_system\",\"vessel_id\":%lu,\"boot_token\":%lu,"
+        "\"event_index\":%lu,\"uptime_ms\":%lu,\"gps_fix\":%u,\"gps_utc\":%s,"
+        "\"lat\":%s,\"lon\":%s,\"satellites\":%s,\"hdop\":%s,\"speed_kmph\":%s,"
+        "\"tx_ok\":%lu,\"tx_fail\":%lu,\"rx_telemetry\":%lu,\"invalid_packets\":%lu,"
+        "\"known_peers\":%lu,\"sd_drop_tlm\":%lu,\"sd_drop_sos\":%lu}",
+        (unsigned long)vesselId,(unsigned long)bootToken,
+        (unsigned long)(eventCounter+1UL),(unsigned long)s.uptimeMs,
+        unsigned(s.gpsFix),utc,lat,lon,sats,hdop,speed,
+        (unsigned long)s.txOk,(unsigned long)s.txFail,(unsigned long)s.rxTelemetry,
+        (unsigned long)s.invalidPackets,(unsigned long)s.peerCount,
+        (unsigned long)lostTelemetry,(unsigned long)lostUrgent);
+    if (n<0 || (size_t)n>=sizeof(q.entries[q.write].line)) {
+        ++lostTelemetry;return false;
+    }
+    ++eventCounter;q.write=(q.write+1U)%EVENT_CAPACITY;++q.count;
+    return true;
+}
+inline bool queueResearchPeer(uint32_t id,uint32_t session,uint32_t received,
+        uint32_t unique,uint32_t duplicates,uint32_t missing,double pdrEstimate,
+        int16_t rssi,double snr,uint32_t ageSeconds,bool active) {
+    if (!ready || vesselId!=3U || !hybridState.continuous) return false;
+    EventQueue& q=telemetryQueue;
+    if (q.count>=EVENT_CAPACITY) { ++lostTelemetry;return false; }
+    char pdr[20],snrText[20];
+    researchNumber(pdr,sizeof(pdr),pdrEstimate,true);
+    researchNumber(snrText,sizeof(snrText),snr,true);
+    char* dst=q.entries[q.write].line;
+    const int n=snprintf(dst,sizeof(q.entries[q.write].line),
+        "{\"kind\":\"research_peer\",\"vessel_id\":%lu,\"boot_token\":%lu,"
+        "\"event_index\":%lu,\"uptime_ms\":%lu,\"peer_id\":%lu,\"session\":%lu,"
+        "\"received\":%lu,\"unique\":%lu,\"duplicates\":%lu,\"missing_est\":%lu,"
+        "\"pdr_est_pct\":%s,\"rssi_dbm\":%d,\"snr_db\":%s,\"age_s\":%lu,\"active\":%u}",
+        (unsigned long)vesselId,(unsigned long)bootToken,
+        (unsigned long)(eventCounter+1UL),(unsigned long)millis(),
+        (unsigned long)id,(unsigned long)session,(unsigned long)received,
+        (unsigned long)unique,(unsigned long)duplicates,(unsigned long)missing,
+        pdr,(int)rssi,snrText,(unsigned long)ageSeconds,unsigned(active));
+    if (n<0 || (size_t)n>=sizeof(q.entries[q.write].line)) {
+        ++lostTelemetry;return false;
+    }
+    ++eventCounter;q.write=(q.write+1U)%EVENT_CAPACITY;++q.count;
+    return true;
+}
+#endif // F19R3 V003 CONTINUOUS research snapshots
+
 #if THESIS_F07_WEATHER_LOG == 1
 inline void weatherJsonNumber(char* dst, size_t size, float value) {
     if (isfinite(value)) snprintf(dst, size, "%.2f", (double)value);
@@ -164,6 +240,12 @@ inline void weatherJsonNumber(char* dst, size_t size, float value) {
 // Queuing is RAM-only; the main-loop SD poll remains the only SPI writer.
 inline bool queueWeatherSample(const WeatherMeasurement& s) {
     if (!ready) return false;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    // F19R2: default SOS_ARMED suppresses routine weather journal writes.
+    // CONTINUOUS or authoritative SOS+10-minute tail may enable them.
+    // Return false to report NOT QUEUED; this is a policy skip, not SD failure.
+    if (!hybridState.routineEnabled(millis())) return false;
+#endif
     EventQueue& q = telemetryQueue;
     if (q.count >= EVENT_CAPACITY) { ++lostTelemetry; return false; }
 
@@ -221,6 +303,11 @@ inline bool queueMicroOutlook(uint32_t uptimeMs, bool inputValid, uint8_t histor
                               float dt, float drh, float dp, float dewGap,
                               bool reusedMacro) {
     if (!ready || vesselId != 3U) return false;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    // Match macro weather: experimental micro records also require consent
+    // or authoritative distress/tail; forecast processing itself continues.
+    if (!hybridState.routineEnabled(millis())) return false;
+#endif
     EventQueue& q = telemetryQueue;
     if (q.count >= EVENT_CAPACITY) { ++lostTelemetry; return false; }
     char dT[20], dRH[20], dP[20], gap[20];
@@ -721,7 +808,8 @@ inline void poll() {
 }
 
 #if THESIS_F06_SD_SANDBOX == 1
-// F06 historical inspection is COM13 USB-only, allowlisted and read-only.
+// F06 historical inspection: USB-only, allowlisted and read-only.
+// F19R2 additionally allows V003 F06 sessions when compiled with dual-display.
 // No caller-supplied path or filename is ever sent to SD.open().
 // Exactly two selectors are allowed: LEGACY or S + 7 uppercase hex digits.
 // These routines NEVER use FILE_APPEND, FILE_WRITE, mkdir, remove or rename.
@@ -763,7 +851,11 @@ inline void historyStop(const char* reason) {
 }
 
 inline void listHistory() {
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    if (!ready || (vesselId != 2 && vesselId != 3) || historyActive || exportActive) {
+#else
     if (!ready || vesselId != 2 || historyActive || exportActive) {
+#endif
         Serial.println("[SDH] ERROR LOGGER_NOT_READY_OR_BUSY"); return;
     }
     char root[48];
@@ -773,8 +865,18 @@ inline void listHistory() {
         if (directory) directory.close();
         Serial.println("[SDH] ERROR SESSION_DIRECTORY_MISSING"); return;
     }
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    Serial.printf("[SDH] LIST_BEGIN scope=V%03lu sessions_only=1\n",
+                  (unsigned long)vesselId);
+#else
     Serial.println("[SDH] LIST_BEGIN scope=V002 sessions_only=1");
+#endif
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    // V003 cannot read the legacy path; do not advertise an invalid target.
+    if (vesselId == 2) Serial.println("[SDH] TARGET LEGACY");
+#else
     Serial.println("[SDH] TARGET LEGACY");
+#endif
     uint8_t shown = 0;
     bool truncated = false;
     while (File entry = directory.openNextFile()) {
@@ -799,13 +901,23 @@ inline void listHistory() {
 }
 
 inline void requestHistory(const char* selector) {
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    if (!ready || (vesselId != 2 && vesselId != 3)) {
+#else
     if (!ready || vesselId != 2) {
+#endif
         Serial.println("[SDH] ERROR LOGGER_NOT_READY_OR_WRONG_VESSEL"); return;
     }
     if (historyActive || exportActive) {
         Serial.println("[SDH] ERROR EXPORT_BUSY"); return;
     }
     if (strcmp(selector, "LEGACY") == 0) {
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+        // V003 may read only its F06 isolated sessions, never legacy paths.
+        if (vesselId == 3) {
+            Serial.println("[SDH] ERROR LEGACY_V003_DISABLED"); return;
+        }
+#endif
         snprintf(historyRoot, sizeof(historyRoot), "/THESIS/VESSEL_%03lu",
                  (unsigned long)vesselId);
     } else if (validHistorySession(selector)) {
@@ -851,7 +963,11 @@ inline void requestHistory(const char* selector) {
 
 inline void pollHistory() {
     if (!historyActive) return;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    if (!ready || (vesselId != 2 && vesselId != 3)) {
+#else
     if (!ready || vesselId != 2) {
+#endif
         historyStop("LOGGER_NOT_READY"); return;
     }
     if (historyIndex == 3) {

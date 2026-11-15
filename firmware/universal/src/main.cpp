@@ -173,6 +173,31 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #error "F18 requires F17 V003 outputs-OFF macro/micro SD OLED integration"
 #endif
 
+// F19: new Vessel-003 presentation only; F18 and older profiles stay untouched.
+#ifndef THESIS_V003_F19_DUAL_DISPLAY
+#define THESIS_V003_F19_DUAL_DISPLAY 0
+#endif
+#ifndef THESIS_V003_F19_EXPLICIT_OPT_IN
+#define THESIS_V003_F19_EXPLICIT_OPT_IN 0
+#endif
+#if (THESIS_V003_F19_DUAL_DISPLAY != 0 && THESIS_V003_F19_DUAL_DISPLAY != 1) || \
+    (THESIS_V003_F19_EXPLICIT_OPT_IN != 0 && THESIS_V003_F19_EXPLICIT_OPT_IN != 1)
+#error "Invalid F19 display flags"
+#endif
+#if THESIS_V003_F19_DUAL_DISPLAY == 1 && \
+    (THESIS_V003_F19_EXPLICIT_OPT_IN != 1 || \
+     THESIS_V003_F18_WEATHER_INTERFACE != 1 || \
+     THESIS_V003_F18_EXPLICIT_OPT_IN != 1 || \
+     THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1 || \
+     THESIS_V003_F15_MACRO_SD_SANDBOX != 1 || \
+     THESIS_V003_F16_SD_OLED_HYBRID != 1 || \
+     THESIS_F06_SD_HYBRID != 1 || THESIS_SD_OLED_UI != 1 || \
+     THESIS_V003_F13_LIVE_OUTPUTS != 0 || \
+     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F14_INDICATOR_PROBE != 0 || \
+     WEATHER_FAST_TEST != 0)
+#error "F19 requires F18 V003 outputs-OFF isolated dual-display profile"
+#endif
+
 // Separate F15 hardware opt-in: the existing build-only profile cannot mount
 // the microSD card or queue weather data even if accidentally uploaded.
 #ifndef THESIS_V003_F15_SD_PILOT_ARMED
@@ -284,6 +309,9 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #include "../../shared/storage/thesis_sd_logger.h"
 #endif
 #include <U8g2lib.h>
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+#include "v003_f19_display_modes.h"
+#endif
 #include "weather_manager.h"
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
 #include "v003_f10_micro_nowcast.h"
@@ -447,6 +475,11 @@ const unsigned long BUTTON_LONG_PRESS_MS = 900UL;
 // Hold GPIO0 on the existing weather page to toggle MACRO / MICRO.
 // Does not change SOS menu, storage mode, sensor clocks or OLED page count.
 static bool f18WeatherMicroView = false;
+#endif
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+// Volatile operational menu / OLED sleep. Navigation does not own radio or SOS.
+static V003F19Display::State f19Display;
+static bool f19PhysicalScreenAsleep = false;
 #endif
 // OLED-only alert demonstrations: 0 = LIVE, 1 = NORMAL, 2 = FRONT, 3 = SQUALL.
 // These NEVER modify real weatherState, radio telemetry, or sensor history.
@@ -759,6 +792,57 @@ static void f15QueuePhysicalMacroMedian() {
 }
 #endif
 
+#if THESIS_V003_F19_DUAL_DISPLAY == 1 && THESIS_V003_F15_SD_PILOT_ARMED == 1
+// Sampling/persistence are intentionally separate: this queues only RAM records.
+// Never alters LoRa, radio scheduler, SOS control, NVS, or the sensor bus.
+static void f19r3CaptureResearch30s() {
+  static uint32_t lastCaptureMs=0;
+  const uint32_t now=millis();
+  if (!ThesisSDLogger::ready || !ThesisSDLogger::hybridIsContinuous()) {
+    lastCaptureMs=now;return;
+  }
+  if (uint32_t(now-lastCaptureMs)<30000UL) return;
+  lastCaptureMs=now;
+  ThesisSDLogger::ResearchSystemSnapshot s{};
+  s.uptimeMs=now;s.txOk=txCount;s.txFail=txFailures;
+  s.rxTelemetry=getTotalPeerTelemetryReceived();
+  s.invalidPackets=invalidPackets;s.peerCount=(uint32_t)getTrackedPeerCount();
+  s.gpsFix=gpsHasFix;
+  s.positionValid=gpsHasFix && gps.location.isValid() && gps.location.age()<=10000UL;
+  if (s.positionValid) {s.latitude=latitude;s.longitude=longitude;}
+  s.satellitesValid=gps.satellites.isValid() && gps.satellites.age()<=10000UL;
+  if (s.satellitesValid) s.satellites=(uint32_t)gps.satellites.value();
+  s.hdopValid=gps.hdop.isValid() && gps.hdop.age()<=10000UL;
+  if (s.hdopValid) s.hdop=gps.hdop.hdop();
+  s.speedValid=gps.speed.isValid() && gps.speed.age()<=10000UL;
+  if (s.speedValid) s.speedKmph=gps.speed.kmph();
+  if (gps.date.isValid() && gps.time.isValid() &&
+      gps.date.age()<=10000UL && gps.time.age()<=10000UL) {
+    const int n=snprintf(s.gpsUtc,sizeof(s.gpsUtc),
+        "%04u-%02u-%02uT%02u:%02u:%02uZ",
+        (unsigned)gps.date.year(),(unsigned)gps.date.month(),(unsigned)gps.date.day(),
+        (unsigned)gps.time.hour(),(unsigned)gps.time.minute(),(unsigned)gps.time.second());
+    s.utcValid=(n==20);
+  }
+  const bool systemQueued=ThesisSDLogger::queueResearchSystem(s);
+  uint32_t peerQueued=0,peerRejected=0;
+  const size_t peerCount=getTrackedPeerCount();
+  // At most 10 bounded peer snapshots per 30 seconds (even inactive peers).
+  for(size_t i=0;i<peerCount && i<10U;++i) {
+    PeerDisplaySnapshot peer{};
+    if(!getPeerSnapshotByIndex(i,peer)) {++peerRejected;continue;}
+    if(ThesisSDLogger::queueResearchPeer(peer.id,peer.session,peer.received,
+         peer.unique,peer.duplicates,peer.missing,peer.pdr,
+         peer.rssi,peer.snr,peer.ageSeconds,peer.active)) ++peerQueued;
+    else ++peerRejected;
+  }
+  Serial.printf("[F19R3-RESEARCH] system_queued=%u peer_queued=%lu peer_rejected=%lu "
+                "peers=%u mode=CONTINUOUS pdr=SEQUENCE_SPAN_ESTIMATE\n",
+      unsigned(systemQueued),(unsigned long)peerQueued,(unsigned long)peerRejected,
+      (unsigned)peerCount);
+}
+#endif // F19R3 research capture
+
 void setup() {
   Serial.begin(115200);
   delay(1200);
@@ -942,6 +1026,12 @@ void setup() {
 #if THESIS_V003_F18_WEATHER_INTERFACE == 1
   Serial.println("[F18-WEATHER] MACRO=EMPIRICAL_100MIN MICRO=EXPERIMENTAL_10_30MIN OLED=LONG_HOLD_PAGE1 SD=V003_SANDBOX GPIO=OFF");
 #endif
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  Serial.println("[F19-UI] MODE=OPERATIONAL OP_PAGES=4 DEV_PAGES=8 HOME_MENU=HOLD SOS=PRIORITY GPIO=OFF");
+#endif
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  Serial.println("[F19R3] DEFAULT=SOS_ARMED DEV7=SOS_ONLY DEV8=SD_RECORDING RESEARCH=CONTINUOUS_ONLY HISTORY=READ_ONLY");
+#endif
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 
@@ -962,6 +1052,9 @@ void loop() {
   ThesisSDLogger::pollHistory();
 #endif
   updateGPS();
+#if THESIS_V003_F19_DUAL_DISPLAY == 1 && THESIS_V003_F15_SD_PILOT_ARMED == 1
+  f19r3CaptureResearch30s();
+#endif
 #if THESIS_SD_LOGGER == 1
   const bool sdCommandInProgress = pollSDExportCommand();
   ThesisSDLogger::pollExport();
@@ -1388,6 +1481,70 @@ void handleOLEDButton() {
       buttonPressStartedAt = millis();
     } else {
       unsigned long duration = millis() - buttonPressStartedAt;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+      // Hardware-authoritative distress means the screen cannot be dismissed.
+      const bool f19ActiveSOS=V003F19Display::emergencyActive(
+          hasActiveLocalSOS(),getActiveSOSCount());
+      if (f19ActiveSOS) { lastOLEDUpdate=0; return; }
+      if (f19Display.wake()) {
+        Serial.println("[F19-UI] OLED_WAKE DISPLAY_ONLY");
+        lastOLEDUpdate=0; return;
+      }
+      if (f19Display.operational()) {
+        if (f19Display.homeMenuOpen()) {
+          if (f19Display.moveHomeCursor(duration,false)) {
+            Serial.printf("[F19-UI] HOME_MENU_CURSOR=%u\n",
+                unsigned(f19Display.homeMenuCursor()));
+          } else {
+            const auto choice=f19Display.confirmHomeMenu(duration,false);
+            if (choice==V003F19Display::HomeChoice::ScreenOff)
+              Serial.println("[F19-UI] OLED_SCREEN_OFF ONLY; CORE_RUNNING=1");
+            else if (choice==V003F19Display::HomeChoice::Development) {
+              oledPage=0; selectedOLEDPeerId=0; oledPeerMenuOpen=false;
+              sosMenuOpen=false; alertDemoMode=0; selectedSOSOrigin=0; selectedSOSEvent=0;
+#if THESIS_SD_OLED_UI == 1
+              sdOLEDSubview=0;
+#if THESIS_F06_SD_HYBRID == 1
+              sdStorageMenuOpen=false; sdHybridMenuOpen=false;
+#endif
+#endif
+              Serial.println("[F19-UI] MODE=DEVELOPMENT DISPLAY_ONLY OUTPUTS=OFF");
+            } else if (choice==V003F19Display::HomeChoice::Back)
+              Serial.println("[F19-UI] HOME_MENU_BACK");
+          }
+        } else if (f19Display.operationalPage()==2U && oledPeerMenuOpen) {
+          if (duration>=BUTTON_LONG_PRESS_MS) confirmOLEDPeerMenu();
+          else advanceOLEDPeerMenu();
+        } else if (f19Display.openHomeMenu(duration,false)) {
+          Serial.println("[F19-UI] HOME_MENU_OPEN");
+        } else if (f19Display.operationalPage()==2U &&
+                   duration>=BUTTON_LONG_PRESS_MS) {
+          openOLEDPeerMenu();
+          Serial.println("[F19-UI] OP_PEER_MENU_OPEN");
+        } else if (f19Display.tapOperational(duration,false)) {
+          if (f19Display.operationalPage()!=2U) oledPeerMenuOpen=false;
+          Serial.printf("[F19-UI] OP_PAGE=%u/4 DISPLAY_ONLY\n",
+                        unsigned(f19Display.operationalPage()+1U));
+        }
+        lastOLEDUpdate=0; return;
+      }
+      // Development page 1 long hold returns to Operational; all other eight
+      // existing F18 development page controls remain unchanged below.
+      if (f19Display.returnFromDevelopment(oledPage==0U,duration,false)) {
+        oledPage=0; oledPeerMenuOpen=false; sosMenuOpen=false; alertDemoMode=0;
+#if THESIS_SD_OLED_UI == 1
+        sdOLEDSubview=0;
+#if THESIS_F06_SD_HYBRID == 1
+        sdHybridMenuOpen=false; sdStorageMenuOpen=false;
+#endif
+#endif
+#if THESIS_V003_F18_WEATHER_INTERFACE == 1
+        f18WeatherMicroView=false;
+#endif
+        Serial.println("[F19-UI] MODE=OPERATIONAL DISPLAY_ONLY OUTPUTS=OFF");
+        lastOLEDUpdate=0; return;
+      }
+#endif
 #if THESIS_V003_F18_WEATHER_INTERFACE == 1
       if (oledPage == 1 && duration >= BUTTON_LONG_PRESS_MS) {
         f18WeatherMicroView = !f18WeatherMicroView;
@@ -1486,10 +1643,253 @@ void handleOLEDButton() {
 // ============================================================
 // OLED PAGES
 // ============================================================
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+// 128x64 landscape, six rows of 6x10 font. Optional portrait hardware
+// orientation is NOT enabled until physically inspected and separately tested.
+// These renderers use cached sensor/peer/SOS state only; never perform I/O.
+void oledF19HomeMenu() {
+  u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0,9,"HOME MENU OP 1/4");
+  const char *choices[]={"SCREEN OFF","DEVELOPMENT","BACK"};
+  for (uint8_t i=0;i<3;++i) {
+    char line[24];
+    snprintf(line,sizeof(line),"%c %s",
+             f19Display.homeMenuCursor()==i?'>':' ',choices[i]);
+    u8g2.drawStr(0,21+12*i,line);
+  }
+  u8g2.drawStr(0,62,"TAP:MOVE HOLD:SET");
+  u8g2.sendBuffer();
+}
+
+void oledF19GPSPage() {
+  if (f19Display.homeMenuOpen()) { oledF19HomeMenu(); return; }
+  u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
+  char line[40];
+  if (VesselIdentity::ready())
+    snprintf(line,sizeof(line),"V%03lu BAT:-- OP1/4",
+             (unsigned long)VesselIdentity::nodeId());
+  else strcpy(line,"V--- BAT:-- OP1/4");
+  u8g2.drawStr(0,9,line);
+  // GNSS UTC date/time must be fresh; only time-of-day converted to PHT (+8).
+  if (gps.date.isValid() && gps.time.isValid() &&
+      gps.date.age() <= 10000UL && gps.time.age() <= 10000UL)
+    snprintf(line,sizeof(line),"TIME:%02u:%02u PHT",
+        unsigned((gps.time.hour()+8U)%24U),unsigned(gps.time.minute()));
+  else strcpy(line,"TIME: --:-- NO SYNC");
+  u8g2.drawStr(0,19,line);
+  char uptime[40]; formatUptime(uptime,sizeof(uptime));
+  snprintf(line,sizeof(line),"UP:%.17s",uptime);
+  u8g2.drawStr(0,29,line);
+  // No home anchor or battery fuel-gauge calibration accepted yet.
+  u8g2.drawStr(0,39,"H DST: -- (NOT SET)");
+  unsigned livePeers=0; uint32_t previous=0,next=0;
+  while (livePeers<32U && nextActivePeerId(previous,next) && next>previous) {
+    ++livePeers; previous=next;
+  }
+  snprintf(line,sizeof(line),"GPS:%s PEERS:%u",gpsHasFix?"FIX":"NO FIX",livePeers);
+  u8g2.drawStr(0,49,line);
+  u8g2.drawStr(0,59,"HOLD:MENU TAP:NEXT");
+  u8g2.sendBuffer();
+}
+
+void oledF19WeatherPage() {
+  u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
+  char line[32];
+  u8g2.drawStr(0,9,"WEATHER OP 2/4");
+  const bool fresh=weatherSampleAttempted && weatherInputsValid &&
+      uint32_t(millis()-lastWeatherTime)<=720000UL;
+  // Current observational availability, NOT a direct sea-state diagnosis.
+  if (!weatherSampleAttempted) strcpy(line,"CURRENT: WAITING");
+  else if (!weatherInputsValid) strcpy(line,"CURRENT: SENSOR FAIL");
+  else if (!fresh) strcpy(line,"CURRENT: DATA STALE");
+  else strcpy(line,"CURRENT: DATA VALID");
+  u8g2.drawStr(0,19,line);
+  const bool ready=fresh && weatherState!=WEATHER_CALIBRATING &&
+      weatherMeasurement.historyCount>=WEATHER_HISTORY_SIZE;
+  if (!fresh) strcpy(line,"OUTLOOK: UNAVAILABLE");
+  else if (!ready) strcpy(line,"OUTLOOK: CALIBRATING");
+  else snprintf(line,sizeof(line),"OUTLOOK: %.12s",shortWeatherName(weatherState));
+  u8g2.drawStr(0,29,line);
+  if (ready) snprintf(line,sizeof(line),"Z:%u HIST:%u/%u",
+      unsigned(zambrettiIndex),unsigned(weatherMeasurement.historyCount),
+      unsigned(WEATHER_HISTORY_SIZE));
+  else snprintf(line,sizeof(line),"Z:-- HIST:%u/%u",
+      unsigned(weatherMeasurement.historyCount),unsigned(WEATHER_HISTORY_SIZE));
+  u8g2.drawStr(0,39,line);
+  if (!weatherSampleAttempted) strcpy(line,"UPDATE: NOT YET");
+  else snprintf(line,sizeof(line),"UPDATE: %lum AGO",
+      (unsigned long)(uint32_t(millis()-lastWeatherTime)/60000UL));
+  u8g2.drawStr(0,49,line);
+  u8g2.drawStr(0,59,"WEATHER GUIDANCE ONLY");
+  u8g2.sendBuffer();
+}
+
+void oledF19PeerMenu() {
+  u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0,9,"SELECT PEER OP 3/4");
+  const uint8_t total=oledMenuPeerCount+2U;
+  const uint8_t first=oledMenuCursor>=3U?oledMenuCursor-3U:0U;
+  for (uint8_t row=0;row<4U && first+row<total;++row) {
+    const uint8_t idx=first+row;
+    char label[28];
+    if (idx==0) strcpy(label,"AUTO");
+    else if (idx==oledMenuPeerCount+1U) strcpy(label,"BACK");
+    else snprintf(label,sizeof(label),"VESSEL-%03lu",
+        (unsigned long)oledMenuPeerIds[idx-1U]);
+    char line[32]; snprintf(line,sizeof(line),"%c %s",
+        idx==oledMenuCursor?'>':' ',label);
+    u8g2.drawStr(0,20+10*row,line);
+  }
+  u8g2.drawStr(0,60,"TAP:MOVE HOLD:SET");
+  u8g2.sendBuffer();
+}
+
+void oledF19NearbyPage() {
+  if (oledPeerMenuOpen) { oledF19PeerMenu(); return; }
+  u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
+  char line[36];
+  unsigned activeCount=0; uint32_t previous=0,next=0;
+  while (activeCount<32U && nextActivePeerId(previous,next) && next>previous) {
+    ++activeCount; previous=next;
+  }
+  snprintf(line,sizeof(line),"PEERS:%u OP 3/4",activeCount);
+  u8g2.drawStr(0,9,line);
+  if (selectedOLEDPeerId!=0U) {
+    PeerDisplaySnapshot peer{};
+    if (!getPeerSnapshotById(selectedOLEDPeerId,peer) || !peer.active) {
+      u8g2.drawStr(0,20,"SELECTED PEER LOST");
+      u8g2.drawStr(0,30,"DIST: UNKNOWN");
+      u8g2.drawStr(0,40,"DIR: UNKNOWN");
+    } else {
+      snprintf(line,sizeof(line),"SELECTED: V%03lu",(unsigned long)peer.id);
+      u8g2.drawStr(0,20,line);
+      if (gpsHasFix && peer.gpsValid && isfinite(latitude) &&
+          isfinite(longitude) && isfinite(peer.latitude) && isfinite(peer.longitude)) {
+        const double km=TinyGPSPlus::distanceBetween(latitude,longitude,
+                            peer.latitude,peer.longitude)/1000.0;
+        const double brg=TinyGPSPlus::courseTo(latitude,longitude,
+                            peer.latitude,peer.longitude);
+        if (isfinite(km)) snprintf(line,sizeof(line),"DIST:%.2fkm",km);
+        else strcpy(line,"DIST: UNKNOWN");
+        u8g2.drawStr(0,30,line);
+        snprintf(line,sizeof(line),"DIR:%s TRUE",V003F19Display::cardinal8(brg));
+      } else {
+        u8g2.drawStr(0,30,"DIST: UNKNOWN");
+        strcpy(line,"DIR: UNKNOWN");
+      }
+      u8g2.drawStr(0,40,line);
+      snprintf(line,sizeof(line),"LAST:%lus",(unsigned long)peer.ageSeconds);
+      u8g2.drawStr(0,50,line);
+    }
+  } else {
+    previous=0;next=0;
+    for (uint8_t row=0;row<3U && nextActivePeerId(previous,next) && next>previous;++row) {
+      previous=next;
+      PeerDisplaySnapshot peer{};
+      if (!getPeerSnapshotById(next,peer) || !peer.active) continue;
+      if (gpsHasFix && peer.gpsValid && isfinite(latitude) && isfinite(longitude) &&
+          isfinite(peer.latitude) && isfinite(peer.longitude)) {
+        const double km=TinyGPSPlus::distanceBetween(latitude,longitude,
+                           peer.latitude,peer.longitude)/1000.0;
+        const double brg=TinyGPSPlus::courseTo(latitude,longitude,
+                           peer.latitude,peer.longitude);
+        if (isfinite(km)) snprintf(line,sizeof(line),"V%03lu %.1fkm %s",
+           (unsigned long)peer.id,km,V003F19Display::cardinal8(brg));
+        else snprintf(line,sizeof(line),"V%03lu DIST:--",(unsigned long)peer.id);
+      } else snprintf(line,sizeof(line),"V%03lu DIST:--",(unsigned long)peer.id);
+      u8g2.drawStr(0,20+10*row,line);
+    }
+    if (!activeCount) u8g2.drawStr(0,30,"NO LIVE PEERS");
+  }
+  u8g2.drawStr(0,60,"HOLD:SELECT TAP:NEXT");
+  u8g2.sendBuffer();
+}
+
+void oledF19SOSPage() {
+  const bool local=hasActiveLocalSOS();
+  const unsigned incoming=getActiveSOSCount();
+  const bool distress=local || incoming>0U;
+  u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
+  char line[40];
+  u8g2.drawStr(0,9,distress?"!! SOS ACTIVE !!":"SOS STATUS OP 4/4");
+  u8g2.drawStr(0,19,local?"LOCAL: ACTIVE":"LOCAL: INACTIVE");
+  snprintf(line,sizeof(line),"INCOMING:%u",incoming);
+  u8g2.drawStr(0,29,line);
+  if (local) {
+    u8g2.drawStr(0,39,"TX: NOT CONFIRMED");
+    u8g2.drawStr(0,49,gpsHasFix?"GPS: FIX":"GPS: NO FIX");
+    u8g2.drawStr(0,59,"GPIO2: SOS CONTROL");
+    u8g2.sendBuffer(); return;
+  }
+  if (!incoming) {
+    u8g2.drawStr(0,39,"NO ACTIVE DISTRESS");
+    u8g2.drawStr(0,49,"GPIO2: SOS CONTROL");
+    u8g2.drawStr(0,59,"TAP: NEXT");
+    u8g2.sendBuffer(); return;
+  }
+  SOSRecordSnapshot chosen{}; bool found=false;
+  for (size_t i=0;i<kSOSMenuCapacity;++i) {
+    SOSRecordSnapshot rec{};
+    if (!getSOSRecordByIndex(i,rec) || !rec.known || rec.cancelled) continue;
+    if (!found || int32_t(rec.receivedAtMs-chosen.receivedAtMs)>0) {
+      chosen=rec;found=true;
+    }
+  }
+  if (!found) {
+    u8g2.drawStr(0,39,"RX SOS: DATA PENDING");
+    u8g2.drawStr(0,49,"DIST: UNKNOWN");
+    u8g2.drawStr(0,59,"DIR: UNKNOWN");
+    u8g2.sendBuffer();return;
+  }
+  snprintf(line,sizeof(line),"FROM:V%03lu EVENT:%lu",
+      (unsigned long)chosen.originId,(unsigned long)chosen.eventId);
+  u8g2.drawStr(0,39,line);
+  if (gpsHasFix && chosen.positionValid && isfinite(latitude) && isfinite(longitude) &&
+      isfinite(chosen.latitude) && isfinite(chosen.longitude)) {
+    const double km=TinyGPSPlus::distanceBetween(latitude,longitude,
+                     chosen.latitude,chosen.longitude)/1000.0;
+    const double bearing=TinyGPSPlus::courseTo(latitude,longitude,
+                     chosen.latitude,chosen.longitude);
+    if (isfinite(km)) snprintf(line,sizeof(line),"DIST:%.2fkm (LAST)",km);
+    else strcpy(line,"DIST: UNKNOWN");
+    u8g2.drawStr(0,49,line);
+    snprintf(line,sizeof(line),"DIR:%s TRUE (LAST)",
+             V003F19Display::cardinal8(bearing));
+    u8g2.drawStr(0,59,line);
+  } else {
+    u8g2.drawStr(0,49,"DIST: UNKNOWN");
+    u8g2.drawStr(0,59,"DIR: UNKNOWN");
+  }
+  u8g2.sendBuffer();
+}
+#endif // F19 renderer
+
 void updateOLED() {
   if (!oledAvailable) return;
   // Ensure OLED is targeted before drawing
   switchI2C(OLED_SDA_PIN, OLED_SCL_PIN);
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  // Screen sleep affects OLED ONLY. Distress wakes it and takes precedence.
+  const bool f19SOS=V003F19Display::emergencyActive(
+      hasActiveLocalSOS(),getActiveSOSCount());
+  const bool f19WantOff=f19Display.screenAsleep() && !f19SOS;
+  if (f19PhysicalScreenAsleep!=f19WantOff) {
+    u8g2.setPowerSave(f19WantOff?1:0);
+    f19PhysicalScreenAsleep=f19WantOff;
+  }
+  if (f19WantOff) return;
+  if (f19SOS) { oledF19SOSPage(); return; }
+  if (f19Display.operational()) {
+    switch (f19Display.operationalPage()) {
+      case 0: oledF19GPSPage(); break;
+      case 1: oledF19WeatherPage(); break;
+      case 2: oledF19NearbyPage(); break;
+      case 3: oledF19SOSPage(); break;
+      default: oledF19GPSPage(); break;
+    }
+    return;
+  }
+#endif
   switch (oledPage) {
     case 0: oledGPSPage(); break;
     case 1: oledWeatherPage(); break;
@@ -1929,11 +2329,17 @@ void oledSDStoragePage() {
   } else {
     u8g2.drawStr(0, 9, "SD USB READBACK 8/8");
 #if THESIS_V003_F16_SD_OLED_HYBRID == 1
-    // V003 SD LIST / SD READ history is not authorized by the old V002-only
-    // readback implementation. Show only the supported current-session export.
+    // F19R2 adds bounded V003 history, while F16 retains the old
+    // active-session-only export view.
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    u8g2.drawStr(0, 21, "PC: SD LIST/READ");
+    u8g2.drawStr(0, 33, "USB SERIAL 115200");
+    u8g2.drawStr(0, 45, "V003 HISTORY / EXPORT");
+#else
     u8g2.drawStr(0, 21, "PC: SD EXPORT");
     u8g2.drawStr(0, 33, "USB SERIAL 115200");
     u8g2.drawStr(0, 45, "ACTIVE SESSION ONLY");
+#endif
 #elif THESIS_F06_SD_SANDBOX == 1
     u8g2.drawStr(0, 21, "PC COMMAND: SD LIST");
     u8g2.drawStr(0, 33, "SD READ Sxxxxxxx");

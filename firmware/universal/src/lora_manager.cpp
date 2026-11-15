@@ -462,6 +462,8 @@ bool getLivePeerSnapshot(PeerDisplaySnapshot &out) {
   out.rssi = chosen->rssi;
   out.snr = chosen->snr;
   out.unique = chosen->unique;
+  out.session = chosen->session;
+  out.received = chosen->received;
   out.duplicates = chosen->duplicates;
   out.missing = chosen->missingEstimate();
   out.pdr = chosen->pdrEstimate();
@@ -478,9 +480,22 @@ bool getPeerSnapshotById(uint32_t id, PeerDisplaySnapshot &out) {
   out.latitude=x->latitude;out.longitude=x->longitude;
   out.rssi=x->rssi;out.snr=x->snr;
   out.unique=x->unique;out.duplicates=x->duplicates;
+  out.session=x->session;out.received=x->received;
   out.missing=x->missingEstimate();out.pdr=x->pdrEstimate();
   out.ageSeconds=uint32_t(now-x->lastSeenMs)/1000UL;
   return true;
+}
+// Read-only bounded snapshot enumeration for research; never mutates PDR.
+// IDs are bounded by the existing protocol (1..9999), max 10 tracked peers.
+bool getPeerSnapshotByIndex(size_t index, PeerDisplaySnapshot &out) {
+  out=PeerDisplaySnapshot{};
+  if(index>=getTrackedPeerCount()) return false;
+  size_t seen=0;
+  for(uint32_t id=1;id<=9999;++id) {
+    if (!peerTelemetry.find(id)) continue;
+    if (seen++==index) return getPeerSnapshotById(id,out);
+  }
+  return false;
 }
 bool nextActivePeerId(uint32_t current, uint32_t &next) {
   uint32_t first=0, after=0;

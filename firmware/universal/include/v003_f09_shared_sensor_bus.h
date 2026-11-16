@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "../../shared/hardware/f22_universal_capability_policy.h"
 
 // Vessel-003 isolated F09 external weather-sensor bus review profile.
 // Does not enable any physical indicator or change the weather algorithm.
@@ -24,5 +25,13 @@ static constexpr uint8_t kSdaPin = 21;
 static constexpr uint8_t kSclPin = 48;
 constexpr bool authorized(bool identityReady, uint32_t nodeId) {
   return identityReady && nodeId == 3U;
+}
+// F22R3A BUILD-ONLY preview: ID is deliberately no longer Vessel-003-only.
+// The third argument is a COMPILE-TIME standardized-wiring opt-in, NOT proof
+// that a particular board was physically reviewed. Never use for SD or GPIO.
+constexpr bool authorizedStandardPreview(bool identityReady, uint32_t nodeId,
+                                         bool standardV003WiringOptIn) {
+  return standardV003WiringOptIn &&
+         F22UniversalCapability::validIdentity(identityReady, nodeId);
 }
 } // namespace V003F09SharedSensorBus

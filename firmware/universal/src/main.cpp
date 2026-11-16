@@ -226,6 +226,26 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #endif
 #include "../../shared/hardware/f22_universal_capability_policy.h"
 #endif
+// F22R3A: standardized V003 wiring, multi-ID PREVIEW. Never a flashing profile.
+#ifndef THESIS_F22R3A_STANDARD_FLEET_PREVIEW
+#define THESIS_F22R3A_STANDARD_FLEET_PREVIEW 0
+#endif
+#ifndef THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN
+#define THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN 0
+#endif
+#if (THESIS_F22R3A_STANDARD_FLEET_PREVIEW != 0 && THESIS_F22R3A_STANDARD_FLEET_PREVIEW != 1) || \
+    (THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN != 0 && THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN != 1)
+#error "Invalid F22R3A fleet preview flags"
+#endif
+#if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
+#if THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN != 1 || \
+    THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || THESIS_V003_F19_DUAL_DISPLAY != 1 || \
+    THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F08_INDICATOR_BENCH != 0 || \
+    THESIS_V003_F14_INDICATOR_PROBE != 0
+#error "F22R3A requires standardized V003 shared I2C and SD/output/relay OFF"
+#endif
+#endif
 #line 212
 #if THESIS_V003_F15_MACRO_SD_SANDBOX == 1 && \
     (THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || \
@@ -912,6 +932,13 @@ void setup() {
   VesselIdentity::load();
   f09SensorAuthorized = V003F09SharedSensorBus::authorized(
       VesselIdentity::ready(), VesselIdentity::nodeId());
+#if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
+  // Override the legacy ID3-only rule in the separate BUILD-ONLY preview.
+  // Operator MUST confirm physical SDA21/SCL48 standard wiring before flashing.
+  f09SensorAuthorized = V003F09SharedSensorBus::authorizedStandardPreview(
+      VesselIdentity::ready(), VesselIdentity::nodeId(),
+      THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN == 1);
+#endif
   Serial.printf("[F09-I2C] id=%lu authorized=%u SDA=21 SCL=48 OUTPUTS=OFF\n",
                 (unsigned long)VesselIdentity::nodeId(), unsigned(f09SensorAuthorized));
   if (f09SensorAuthorized) {
@@ -919,7 +946,11 @@ void setup() {
   } else {
     weatherInputsValid = false;
     weatherState = WEATHER_CALIBRATING;
+#if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
+    Serial.println("[F22R3A-PREVIEW] SENSOR ACCESS BLOCKED: invalid/unprovisioned identity");
+#else
     Serial.println("[F09-I2C] SENSOR ACCESS BLOCKED: requires Vessel-003");
+#endif
   }
 #else
   setupSensors();

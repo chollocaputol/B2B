@@ -4,6 +4,21 @@
 #include <SPI.h>
 #include <SD.h>
 #include <XPowersLib.h>
+// F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
+#ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
+#define THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT 0
+#endif
+#if THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT != 0 && THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT != 1
+#error "Invalid F22R3C logger contract flag"
+#endif
+#if THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT == 1
+#if THESIS_F22R3B_STORAGE_POLICY_PREVIEW != 1 || THESIS_F22R3A_STANDARD_FLEET_PREVIEW != 1 || \
+    THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0 || THESIS_LAB_RELAY_TX != 0
+#error "F22R3C logger contract requires multi-ID build-only, SD pilot OFF, GPIO/relay OFF"
+#endif
+#include "f22_fleet_storage_policy.h"
+#include "../hardware/vessel_identity.h"
+#endif
 #ifndef THESIS_F07_WEATHER_LOG
 #define THESIS_F07_WEATHER_LOG 0
 #endif
@@ -65,7 +80,16 @@ static char TELEMETRY[64] = "/THESIS/VESSEL_002/telemetry.jsonl";
 static char SOS_EVENTS[64] = "/THESIS/VESSEL_002/sos_events.jsonl";
 
 inline bool isAuthorizedVessel(uint32_t id) {
-#if THESIS_SD_FLEET == 1
+#if THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT == 1
+    // Read ONLY the RAM-cached, already-loaded NVS identity. All unverified
+    // board/media/SD-consent fields deliberately remain false, so the policy
+    // DENIES mounting for every vessel, including valid IDs 1..9999.
+    F22FleetStoragePolicy::Evidence evidence{};
+    evidence.vesselId = id;
+    evidence.provisionedIdentity = VesselIdentity::ready() && VesselIdentity::nodeId() == id;
+    const auto decision = F22FleetStoragePolicy::evaluate(evidence);
+    return decision.mountEligible; // ALWAYS false in this build-only phase.
+#elif THESIS_SD_FLEET == 1
     return id >= 1 && id <= 3;
 #else
     return id == 2;

@@ -19,6 +19,20 @@
 #include "f22_fleet_storage_policy.h"
 #include "../hardware/vessel_identity.h"
 #endif
+// F22R3D dry-run: no source of approved media/board consent exists yet.
+#ifndef THESIS_F22R3D_FLEET_SD_DRYRUN
+#define THESIS_F22R3D_FLEET_SD_DRYRUN 0
+#endif
+#if THESIS_F22R3D_FLEET_SD_DRYRUN != 0 && THESIS_F22R3D_FLEET_SD_DRYRUN != 1
+#error "Invalid F22R3D SD dry-run flag"
+#endif
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+#if THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT != 1 || THESIS_V003_F19_DUAL_DISPLAY != 1 || \
+    THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0 || THESIS_LAB_RELAY_TX != 0
+#error "F22R3D dry-run needs F22R3C failclosed, F19 build-only, SD/relay/GPIO OFF"
+#endif
+#include "f22_fleet_storage_runtime_gate.h"
+#endif
 #ifndef THESIS_F07_WEATHER_LOG
 #define THESIS_F07_WEATHER_LOG 0
 #endif
@@ -80,7 +94,13 @@ static char TELEMETRY[64] = "/THESIS/VESSEL_002/telemetry.jsonl";
 static char SOS_EVENTS[64] = "/THESIS/VESSEL_002/sos_events.jsonl";
 
 inline bool isAuthorizedVessel(uint32_t id) {
-#if THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT == 1
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    // No hardware/media approval input in this phase. The following decision
+    // ALWAYS denies real SD mounting, for every valid and invalid vessel ID.
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(
+        id, VesselIdentity::ready() && VesselIdentity::nodeId() == id);
+    return F22FleetStorageRuntimeGate::mountAllowed(d,id);
+#elif THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT == 1
     // Read ONLY the RAM-cached, already-loaded NVS identity. All unverified
     // board/media/SD-consent fields deliberately remain false, so the policy
     // DENIES mounting for every vessel, including valid IDs 1..9999.
@@ -193,7 +213,13 @@ inline void researchNumber(char* dst,size_t capacity,double value,bool valid,uin
     snprintf(dst,capacity,digits==6?"%.6f":"%.2f",value);
 }
 inline bool queueResearchSystem(const ResearchSystemSnapshot& s) {
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(vesselId, VesselIdentity::ready() && VesselIdentity::nodeId() == vesselId);
+    if (!ready || !F22FleetStorageRuntimeGate::researchAllowed(
+            d,vesselId,hybridState.continuous)) return false;
+#else
     if (!ready || vesselId!=3U || !hybridState.continuous) return false;
+#endif
     EventQueue& q=telemetryQueue;
     if (q.count>=EVENT_CAPACITY) { ++lostTelemetry;return false; }
     char lat[24],lon[24],hdop[20],speed[20],sats[16],utc[25]="null";
@@ -227,7 +253,13 @@ inline bool queueResearchSystem(const ResearchSystemSnapshot& s) {
 inline bool queueResearchPeer(uint32_t id,uint32_t session,uint32_t received,
         uint32_t unique,uint32_t duplicates,uint32_t missing,double pdrEstimate,
         int16_t rssi,double snr,uint32_t ageSeconds,bool active) {
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(vesselId, VesselIdentity::ready() && VesselIdentity::nodeId() == vesselId);
+    if (!ready || !F22FleetStorageRuntimeGate::researchAllowed(
+            d,vesselId,hybridState.continuous)) return false;
+#else
     if (!ready || vesselId!=3U || !hybridState.continuous) return false;
+#endif
     EventQueue& q=telemetryQueue;
     if (q.count>=EVENT_CAPACITY) { ++lostTelemetry;return false; }
     char pdr[20],snrText[20];
@@ -326,7 +358,12 @@ inline bool queueMicroOutlook(uint32_t uptimeMs, bool inputValid, uint8_t histor
                               const char* state, const char* pattern,
                               float dt, float drh, float dp, float dewGap,
                               bool reusedMacro) {
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(vesselId, VesselIdentity::ready() && VesselIdentity::nodeId() == vesselId);
+    if (!ready || !F22FleetStorageRuntimeGate::routineAllowed(d,vesselId)) return false;
+#else
     if (!ready || vesselId != 3U) return false;
+#endif
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
     // Match macro weather: experimental micro records also require consent
     // or authoritative distress/tail; forecast processing itself continues.
@@ -875,7 +912,10 @@ inline void historyStop(const char* reason) {
 }
 
 inline void listHistory() {
-#if THESIS_V003_F19_DUAL_DISPLAY == 1
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(vesselId, VesselIdentity::ready() && VesselIdentity::nodeId() == vesselId);
+    if (!ready || !F22FleetStorageRuntimeGate::ownHistoryAllowed(d,vesselId) || historyActive || exportActive) {
+#elif THESIS_V003_F19_DUAL_DISPLAY == 1
     if (!ready || (vesselId != 2 && vesselId != 3) || historyActive || exportActive) {
 #else
     if (!ready || vesselId != 2 || historyActive || exportActive) {
@@ -925,7 +965,10 @@ inline void listHistory() {
 }
 
 inline void requestHistory(const char* selector) {
-#if THESIS_V003_F19_DUAL_DISPLAY == 1
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(vesselId, VesselIdentity::ready() && VesselIdentity::nodeId() == vesselId);
+    if (!ready || !F22FleetStorageRuntimeGate::ownHistoryAllowed(d,vesselId)) {
+#elif THESIS_V003_F19_DUAL_DISPLAY == 1
     if (!ready || (vesselId != 2 && vesselId != 3)) {
 #else
     if (!ready || vesselId != 2) {
@@ -936,7 +979,11 @@ inline void requestHistory(const char* selector) {
         Serial.println("[SDH] ERROR EXPORT_BUSY"); return;
     }
     if (strcmp(selector, "LEGACY") == 0) {
-#if THESIS_V003_F19_DUAL_DISPLAY == 1
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+        if (!F22FleetStorageRuntimeGate::legacyV002Allowed(d,vesselId)) {
+            Serial.println("[SDH] ERROR LEGACY_REVIEW_REQUIRED"); return;
+        }
+#elif THESIS_V003_F19_DUAL_DISPLAY == 1
         // V003 may read only its F06 isolated sessions, never legacy paths.
         if (vesselId == 3) {
             Serial.println("[SDH] ERROR LEGACY_V003_DISABLED"); return;
@@ -987,7 +1034,10 @@ inline void requestHistory(const char* selector) {
 
 inline void pollHistory() {
     if (!historyActive) return;
-#if THESIS_V003_F19_DUAL_DISPLAY == 1
+#if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
+    const auto d = F22FleetStorageRuntimeGate::unreviewed(vesselId, VesselIdentity::ready() && VesselIdentity::nodeId() == vesselId);
+    if (!ready || !F22FleetStorageRuntimeGate::ownHistoryAllowed(d,vesselId)) {
+#elif THESIS_V003_F19_DUAL_DISPLAY == 1
     if (!ready || (vesselId != 2 && vesselId != 3)) {
 #else
     if (!ready || vesselId != 2) {

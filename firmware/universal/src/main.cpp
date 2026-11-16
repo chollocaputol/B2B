@@ -209,6 +209,24 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #if THESIS_V003_F15_SD_PILOT_ARMED == 1 && THESIS_V003_F15_MACRO_SD_SANDBOX != 1
 #error "F15 supervised SD pilot requires the complete F15 sandbox profile"
 #endif
+
+// F22R2: strictly opt-in, passive readout of existing firmware state.
+// No new GPIO, I2C probe, NVS, SD, LoRa, SOS or weather decision is permitted.
+#ifndef THESIS_F22R2_PASSIVE_CAPABILITY_OBSERVER
+#define THESIS_F22R2_PASSIVE_CAPABILITY_OBSERVER 0
+#endif
+#if THESIS_F22R2_PASSIVE_CAPABILITY_OBSERVER != 0 && THESIS_F22R2_PASSIVE_CAPABILITY_OBSERVER != 1
+#error "F22R2 passive observer flag must be 0 or 1"
+#endif
+#if THESIS_F22R2_PASSIVE_CAPABILITY_OBSERVER == 1
+#if THESIS_V003_F19_DUAL_DISPLAY != 1 || THESIS_V003_F15_SD_PILOT_ARMED != 0 || \
+    THESIS_V003_F13_LIVE_OUTPUTS != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_V003_F14_INDICATOR_PROBE != 0 || THESIS_V003_F08_INDICATOR_BENCH != 0
+#error "F22R2 observer requires F19 build-only, SD pilot OFF, output OFF, relay OFF"
+#endif
+#include "../../shared/hardware/f22_universal_capability_policy.h"
+#endif
+#line 212
 #if THESIS_V003_F15_MACRO_SD_SANDBOX == 1 && \
     (THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || \
      THESIS_V003_F10_MICRO_NOWCAST != 1 || \
@@ -910,6 +928,35 @@ void setup() {
 #if THESIS_V003_F09_SHARED_SENSOR_BUS != 1
   VesselIdentity::load();
 #endif
+#if THESIS_F22R2_PASSIVE_CAPABILITY_OBSERVER == 1
+  // Observe the existing sensor-init flags ONLY. No additional I2C transaction.
+  // The active build's wiring is a compile-time claim, NOT reviewed hardware evidence.
+  F22UniversalCapability::Evidence f22Observed{};
+  f22Observed.vesselId=VesselIdentity::nodeId();
+  f22Observed.provisionedIdentity=VesselIdentity::ready();
+#if THESIS_V003_F09_SHARED_SENSOR_BUS == 1
+  f22Observed.sensorWiring=F22UniversalCapability::SensorWiring::Shared2148;
+#else
+  f22Observed.sensorWiring=F22UniversalCapability::SensorWiring::LegacySplit;
+#endif
+  f22Observed.bme680Responded=bmeAvailable;
+  f22Observed.dht20Responded=dhtAvailable;
+  // Do not manufacture proof of board/pin approval or SD-card readiness.
+  // Their Evidence defaults deliberately keep sensors, SD and GPIO unauthorized.
+  const auto f22Decision=F22UniversalCapability::evaluate(f22Observed);
+  Serial.printf("[F22R2-PASSIVE] id=%lu provisioned=%u bme_seen=%u dht_seen=%u "
+                "board_review=UNKNOWN sensor_eligible=%u weather_complete=%u "
+                "sd_eligible=%u gpio=%u auto_enroll=%u NO_NEW_IO\n",
+                (unsigned long)f22Observed.vesselId,
+                unsigned(f22Decision.identityAccepted),
+                unsigned(f22Observed.bme680Responded),unsigned(f22Observed.dht20Responded),
+                unsigned(f22Decision.sensorBusEligible),
+                unsigned(f22Decision.weatherInputSetComplete),
+                unsigned(f22Decision.sdMountEligible),
+                unsigned(f22Decision.physicalOutputsEnabled),
+                unsigned(f22Decision.autoEnrolled));
+#endif
+#line 913
 #if THESIS_V003_F08_LED_BENCH == 1
   const bool isVessel003 = VesselIdentity::nodeId() == 3U;
   // Runtime gate: even a misflashed live test cannot drive LED GPIOs on 001/002.

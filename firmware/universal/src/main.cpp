@@ -246,6 +246,22 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #error "F22R3A requires standardized V003 shared I2C and SD/output/relay OFF"
 #endif
 #endif
+// F22R3B: separate STORAGE POLICY preview ONLY. Never mounts media.
+#ifndef THESIS_F22R3B_STORAGE_POLICY_PREVIEW
+#define THESIS_F22R3B_STORAGE_POLICY_PREVIEW 0
+#endif
+#if THESIS_F22R3B_STORAGE_POLICY_PREVIEW != 0 && THESIS_F22R3B_STORAGE_POLICY_PREVIEW != 1
+#error "Invalid F22R3B policy preview flag"
+#endif
+#if THESIS_F22R3B_STORAGE_POLICY_PREVIEW == 1
+#if THESIS_F22R3A_STANDARD_FLEET_PREVIEW != 1 || \
+    THESIS_F22R3A_V003_WIRING_EXPLICIT_OPT_IN != 1 || \
+    THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F08_INDICATOR_BENCH != 0
+#error "F22R3B requires standard V003 multi-ID, SD pilot OFF, outputs/relay OFF"
+#endif
+#include "../../shared/storage/f22_fleet_storage_policy.h"
+#endif
 #line 212
 #if THESIS_V003_F15_MACRO_SD_SANDBOX == 1 && \
     (THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || \
@@ -986,6 +1002,26 @@ void setup() {
                 unsigned(f22Decision.sdMountEligible),
                 unsigned(f22Decision.physicalOutputsEnabled),
                 unsigned(f22Decision.autoEnrolled));
+#endif
+#if THESIS_F22R3B_STORAGE_POLICY_PREVIEW == 1
+  // Deliberately supply ONLY validated identity. Every SD/media/review/consent
+  // field is false, even if a physical card is inserted. This preview never
+  // powers, mounts, reads or writes the card; it does not call ThesisSDLogger.
+  F22FleetStoragePolicy::Evidence f22r3bEvidence{};
+  f22r3bEvidence.vesselId = VesselIdentity::nodeId();
+  f22r3bEvidence.provisionedIdentity = VesselIdentity::ready();
+  const auto f22r3bDecision = F22FleetStoragePolicy::evaluate(f22r3bEvidence);
+  Serial.printf("[F22R3B-STORAGE-PREVIEW] id=%lu identity=%u mount=%u "
+                "sandbox_write=%u research=%u legacy_V002_read=%u "
+                "format=%u auto_enroll=%u NO_SD_IO\n",
+                (unsigned long)f22r3bEvidence.vesselId,
+                unsigned(f22r3bDecision.identityAccepted),
+                unsigned(f22r3bDecision.mountEligible),
+                unsigned(f22r3bDecision.newSessionWriteEligible),
+                unsigned(f22r3bDecision.researchJournalEligible),
+                unsigned(f22r3bDecision.legacyV002HistoryReadEligible),
+                unsigned(f22r3bDecision.formatOrEraseAllowed),
+                unsigned(f22r3bDecision.autoEnroll));
 #endif
 #line 913
 #if THESIS_V003_F08_LED_BENCH == 1

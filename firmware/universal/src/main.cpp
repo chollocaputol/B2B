@@ -311,6 +311,8 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #include <U8g2lib.h>
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
 #include "v003_f19_display_modes.h"
+#include "v003_f21r3_weather_display.h"
+#include "v003_f21r4_ui_policy.h"
 #endif
 #include "weather_manager.h"
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
@@ -479,7 +481,14 @@ static bool f18WeatherMicroView = false;
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
 // Volatile operational menu / OLED sleep. Navigation does not own radio or SOS.
 static V003F19Display::State f19Display;
+static V003F19Display::SOSBrowse f21r42SOSBrowse;
 static bool f19PhysicalScreenAsleep = false;
+static bool f21PhysicalPortrait = false; // OLED-only cached rotation
+// F21R4: PMU power bus is separate; renderers only read a cached estimate.
+static bool f21r4PmuReady=false;
+static int f21r4BatteryPercent=-1;
+static uint32_t f21r4LastBatteryPoll=0;
+void f21r4PollBattery();
 #endif
 // OLED-only alert demonstrations: 0 = LIVE, 1 = NORMAL, 2 = FRONT, 3 = SQUALL.
 // These NEVER modify real weatherState, radio telemetry, or sensor history.
@@ -1052,6 +1061,9 @@ void loop() {
   ThesisSDLogger::pollHistory();
 #endif
   updateGPS();
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  f21r4PollBattery(); // 15-second cached PMU reading, no OLED I2C reads
+#endif
 #if THESIS_V003_F19_DUAL_DISPLAY == 1 && THESIS_V003_F15_SD_PILOT_ARMED == 1
   f19r3CaptureResearch30s();
 #endif
@@ -1077,6 +1089,11 @@ void loop() {
   pollLoRaReceive();
   if (consumeNewReceivedSOS()) {
     oledPage = 6;  // New SOS overrides any page/selection.
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+    f21r42SOSBrowse.preempt(); // display attention only; radio record unchanged
+    f19Display.dismissHomeMenuForSOS(); // a new alert replaces any old menu
+    oledPeerMenuOpen=false;
+#endif
     sosMenuOpen = false;
 #if THESIS_F06_SD_HYBRID == 1
     sdStorageMenuOpen = false;
@@ -1418,8 +1435,23 @@ void loop() {
 // ============================================================
 // HARDWARE INITIALIZATION
 // ============================================================
+// No NVS, radio, SD, sensor, or GPIO interaction: PMU read only.
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+void f21r4PollBattery() {
+  if(!f21r4PmuReady)return;
+  const uint32_t now=millis();
+  if(f21r4LastBatteryPoll!=0U && uint32_t(now-f21r4LastBatteryPoll)<15000U)return;
+  f21r4LastBatteryPoll=now;
+  if(!pmu.isBatteryConnect()){f21r4BatteryPercent=-1;return;}
+  const int pct=pmu.getBatteryPercent();
+  f21r4BatteryPercent=V003F21R4UI::validBatteryPercent(pct)?pct:-1;
+}
+#endif
 void setupPMU() {
   if (!TBeamHardware::beginPower(PMUWire, pmu)) return;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  f21r4PmuReady=true;
+#endif
   // External BME680 and DHT20 power: independent of microSD logging.
   const bool bldo2Configured = pmu.setBLDO2Voltage(3300);
   if (!bldo2Configured) {
@@ -1474,6 +1506,25 @@ void printGPSStatus() {
 // GPIO0 user button is active LOW. Debouncing prevents one physical
 // press from skipping multiple pages. Page changes only on a new press.
 void handleOLEDButton() {
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  // Observe transitions and restore SOS after 20 seconds without a GPIO0 tap.
+  // Neither this check nor the OLED button can initiate/cancel real distress.
+  if(f21r42SOSBrowse.observe(V003F19Display::emergencyActive(
+       hasActiveLocalSOS(),getActiveSOSCount()),millis())) {
+    if(!f21r42SOSBrowse.emergency() || f21r42SOSBrowse.forceSOS()) sosMenuOpen=false;
+    if(f21r42SOSBrowse.forceSOS()) {
+      f19Display.dismissHomeMenuForSOS();
+      oledPeerMenuOpen=false;
+    }
+    lastOLEDUpdate=0;
+  }
+  // Selection must not obscure an SOS indefinitely when left unattended.
+  if(sosMenuOpen && f21r42SOSBrowse.idleForReturn(millis())) {
+    sosMenuOpen=false;
+    f21r42SOSBrowse.returnToSOS(millis());
+    lastOLEDUpdate=0;
+  }
+#endif
   const int reading = digitalRead(USER_BUTTON_PIN);
   if (OLEDButton::stableEdge(reading, buttonLastReading, buttonStableState,
                              buttonLastDebounceTime, millis(), BUTTON_DEBOUNCE_MS)) {
@@ -1482,10 +1533,53 @@ void handleOLEDButton() {
     } else {
       unsigned long duration = millis() - buttonPressStartedAt;
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
-      // Hardware-authoritative distress means the screen cannot be dismissed.
-      const bool f19ActiveSOS=V003F19Display::emergencyActive(
-          hasActiveLocalSOS(),getActiveSOSCount());
-      if (f19ActiveSOS) { lastOLEDUpdate=0; return; }
+      // SOS still preempts the display initially and after idle. GPIO0 can
+      // VIEW other pages or choose a received SOS without altering distress.
+      // GPIO2 remains the only physical SOS start/cancel input.
+      const bool f19ActiveSOS=f21r42SOSBrowse.emergency();
+      if (f19ActiveSOS) {
+        // F21R4.3: SOS is always visible first, but during deliberate
+        // browsing GPIO0 retains each operational page's own hold menu.
+        // Menus are view-only; GPIO2 and the LoRa SOS state are untouched.
+        if(sosMenuOpen) {
+          if(duration>=BUTTON_LONG_PRESS_MS) confirmSOSMenu();
+          else advanceSOSMenu();
+          f21r42SOSBrowse.noteInput(millis());
+        } else if(f19Display.homeMenuOpen()) {
+          if(duration<BUTTON_LONG_PRESS_MS)
+            f19Display.moveHomeCursorForSOS(duration);
+          else {
+            const auto choice=f19Display.confirmHomeMenuForSOS(duration);
+            if(choice==V003F19Display::HomeChoice::Portrait ||
+               choice==V003F19Display::HomeChoice::Landscape)
+              Serial.printf("[F21R43-SOS-UI] ORIENTATION=%s DISPLAY_ONLY\n",
+                  f19Display.portrait()?"PORTRAIT":"LANDSCAPE");
+            else if(choice==V003F19Display::HomeChoice::None)
+              Serial.println("[F21R43-SOS-UI] HOME_CHOICE_LOCKED_WHILE_SOS");
+          }
+          f21r42SOSBrowse.noteInput(millis());
+        } else if(oledPeerMenuOpen) {
+          if(duration>=BUTTON_LONG_PRESS_MS) confirmOLEDPeerMenu();
+          else advanceOLEDPeerMenu();
+          f21r42SOSBrowse.noteInput(millis());
+        } else if(duration>=BUTTON_LONG_PRESS_MS) {
+          if(f21r42SOSBrowse.forceSOS() || f21r42SOSBrowse.page()==3U) {
+            openSOSMenu();
+            f21r42SOSBrowse.noteInput(millis());
+          } else if(f21r42SOSBrowse.page()==0U) {
+            f19Display.openHomeMenuForSOS(duration);
+            f21r42SOSBrowse.noteInput(millis());
+          } else if(f21r42SOSBrowse.page()==2U) {
+            openOLEDPeerMenu();
+            f21r42SOSBrowse.noteInput(millis());
+          } else {
+            f21r42SOSBrowse.returnToSOS(millis()); // WX: hold = SOS shortcut
+          }
+        } else {
+          f21r42SOSBrowse.tap(millis()); // forced SOS -> Home -> WX -> Peers -> SOS
+        }
+        lastOLEDUpdate=0;return;
+      }
       if (f19Display.wake()) {
         Serial.println("[F19-UI] OLED_WAKE DISPLAY_ONLY");
         lastOLEDUpdate=0; return;
@@ -1511,6 +1605,10 @@ void handleOLEDButton() {
               Serial.println("[F19-UI] MODE=DEVELOPMENT DISPLAY_ONLY OUTPUTS=OFF");
             } else if (choice==V003F19Display::HomeChoice::Back)
               Serial.println("[F19-UI] HOME_MENU_BACK");
+            else if (choice==V003F19Display::HomeChoice::Portrait ||
+                     choice==V003F19Display::HomeChoice::Landscape)
+              Serial.printf("[F21-UI] ORIENTATION_SELECTED=%s VOLATILE=1 DISPLAY_ONLY\n",
+                  f19Display.portrait()?"PORTRAIT":"LANDSCAPE");
           }
         } else if (f19Display.operationalPage()==2U && oledPeerMenuOpen) {
           if (duration>=BUTTON_LONG_PRESS_MS) confirmOLEDPeerMenu();
@@ -1650,12 +1748,17 @@ void handleOLEDButton() {
 void oledF19HomeMenu() {
   u8g2.clearBuffer(); u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.drawStr(0,9,"HOME MENU OP 1/4");
-  const char *choices[]={"SCREEN OFF","DEVELOPMENT","BACK"};
-  for (uint8_t i=0;i<3;++i) {
+  const char *choices[]={"SCREEN OFF","DEVELOPMENT","PORTRAIT","LANDSCAPE","BACK"};
+  const uint8_t selected=f19Display.homeMenuCursor();
+  const uint8_t first=selected>=3U?uint8_t(selected-2U):0U;
+  for (uint8_t row=0;row<3U && first+row<V003F19Display::kHomeChoiceCount;++row) {
+    const uint8_t idx=uint8_t(first+row);
+    const bool active=(idx==2U && f19Display.portrait()) ||
+                      (idx==3U && !f19Display.portrait());
     char line[24];
-    snprintf(line,sizeof(line),"%c %s",
-             f19Display.homeMenuCursor()==i?'>':' ',choices[i]);
-    u8g2.drawStr(0,21+12*i,line);
+    snprintf(line,sizeof(line),"%c%c%s",idx==selected?'>':' ',
+             active?'*':' ',choices[idx]);
+    u8g2.drawStr(0,21+12*row,line);
   }
   u8g2.drawStr(0,62,"TAP:MOVE HOLD:SET");
   u8g2.sendBuffer();
@@ -1816,7 +1919,7 @@ void oledF19SOSPage() {
   snprintf(line,sizeof(line),"INCOMING:%u",incoming);
   u8g2.drawStr(0,29,line);
   if (local) {
-    u8g2.drawStr(0,39,"TX: NOT CONFIRMED");
+    u8g2.drawStr(0,39,"BOAT REPLY: UNKNOWN");
     u8g2.drawStr(0,49,gpsHasFix?"GPS: FIX":"GPS: NO FIX");
     u8g2.drawStr(0,59,"GPIO2: SOS CONTROL");
     u8g2.sendBuffer(); return;
@@ -1864,6 +1967,522 @@ void oledF19SOSPage() {
 }
 #endif // F19 renderer
 
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+// F21R3: OLED-only icon/phone-style OP presentation. Do not draw page numbers.
+// Physical OLED 128x64 (R0), logical 64x128 portrait (R1).
+// NO weather, SOS, GPIO, LoRa, or SD processing is performed here.
+namespace F21Icon {enum Kind : uint8_t { Boat, Battery, Pin, Clock, Home, Peers, Cloud, Radio, Alert, Compass };}
+// Minimal vector icons; monochrome, 8-10px, readable on SH1106.
+void oledF21Icon(F21Icon::Kind kind, int x, int y) {
+  switch(kind) {
+    case F21Icon::Boat:
+      u8g2.drawHLine(x+1,y+6,8);u8g2.drawLine(x+2,y+4,x+8,y+4);
+      u8g2.drawLine(x+1,y+5,x+3,y+8);u8g2.drawLine(x+3,y+8,x+7,y+8);
+      u8g2.drawLine(x+7,y+8,x+9,y+5);u8g2.drawBox(x+4,y+1,3,3);break;
+    case F21Icon::Battery:
+      u8g2.drawFrame(x,y+1,9,6);u8g2.drawBox(x+9,y+3,1,2);break;
+    case F21Icon::Pin:
+      u8g2.drawCircle(x+5,y+3,3);u8g2.drawDisc(x+5,y+3,1);
+      u8g2.drawLine(x+3,y+6,x+5,y+9);u8g2.drawLine(x+7,y+6,x+5,y+9);break;
+    case F21Icon::Clock:
+      u8g2.drawCircle(x+5,y+5,4);u8g2.drawLine(x+5,y+5,x+5,y+2);
+      u8g2.drawLine(x+5,y+5,x+7,y+6);break;
+    case F21Icon::Home:
+      u8g2.drawLine(x,y+4,x+5,y);u8g2.drawLine(x+5,y,x+10,y+4);
+      u8g2.drawFrame(x+2,y+4,7,5);break;
+    case F21Icon::Peers:
+      u8g2.drawCircle(x+3,y+3,2);u8g2.drawCircle(x+8,y+3,2);
+      u8g2.drawHLine(x,y+8,5);u8g2.drawHLine(x+6,y+8,5);break;
+    case F21Icon::Cloud:
+      u8g2.drawCircle(x+4,y+4,3);u8g2.drawCircle(x+7,y+3,2);
+      u8g2.drawHLine(x+1,y+7,10);break;
+    case F21Icon::Radio:
+      u8g2.drawLine(x+5,y+9,x+5,y+2);u8g2.drawLine(x+2,y+9,x+8,y+9);
+      u8g2.drawCircle(x+5,y+2,1);u8g2.drawLine(x+2,y+1,x,y+3);
+      u8g2.drawLine(x+8,y+1,x+10,y+3);break;
+    case F21Icon::Alert:
+      u8g2.drawLine(x+5,y,x,y+9);u8g2.drawLine(x,y+9,x+10,y+9);
+      u8g2.drawLine(x+10,y+9,x+5,y);u8g2.drawLine(x+5,y+3,x+5,y+6);
+      u8g2.drawDisc(x+5,y+8,1);break;
+    case F21Icon::Compass:
+      u8g2.drawCircle(x+5,y+5,4);u8g2.drawLine(x+5,y+1,x+5,y+8);
+      u8g2.drawLine(x+5,y+1,x+3,y+4);u8g2.drawLine(x+5,y+1,x+7,y+4);break;
+  }
+}
+void oledF21P(int x,int baseline,const char* msg) {
+  if(!msg||x<0||x>=64) return;
+  char b[13];const int cap=(64-x)/5;
+  snprintf(b,sizeof(b),"%.*s",cap<12?cap:12,msg);u8g2.drawStr(x,baseline,b);
+}
+void oledF21L(int x,int baseline,const char* msg) {
+  if(!msg||x<0||x>=128) return;
+  char b[22];const int cap=(128-x)/6;
+  snprintf(b,sizeof(b),"%.*s",cap<21?cap:21,msg);u8g2.drawStr(x,baseline,b);
+}
+F21Icon::Kind oledF21HeaderIcon(const char* title) {
+  if(strncmp(title,"SOS",3)==0||strstr(title,"SOS"))return F21Icon::Alert;
+  if(strstr(title,"WEATHER"))return F21Icon::Cloud;
+  if(strstr(title,"PEER")||strstr(title,"NEARBY"))return F21Icon::Radio;
+  return F21Icon::Boat;
+}
+void oledF21PortraitTop(const char* title,bool alert=false) {
+  u8g2.clearBuffer();u8g2.setFont(u8g2_font_5x8_tf);
+  u8g2.drawBox(0,0,64,13);u8g2.setDrawColor(0);
+  // F21R4.1: give portrait HOME its entire 64px status header. Other
+  // portrait pages retain their pictograms and original title offset.
+  if(strcmp(title,"V003")==0)oledF21P(3,10,title);
+  else{oledF21Icon(oledF21HeaderIcon(title),2,1);oledF21P(13,10,title);}
+  u8g2.setDrawColor(1);
+  if(alert)u8g2.drawFrame(0,14,64,102);
+}
+void oledF21LandscapeTop(const char* title,bool alert=false) {
+  u8g2.clearBuffer();u8g2.setFont(u8g2_font_5x8_tf);
+  u8g2.drawBox(0,0,128,13);u8g2.setDrawColor(0);
+  oledF21Icon(oledF21HeaderIcon(title),3,1);oledF21L(17,10,title);
+  u8g2.setDrawColor(1);
+  if(alert)u8g2.drawFrame(0,14,128,40);
+}
+void oledF21Dots(bool portrait,uint8_t page) {
+  const int y=portrait?124:60;const int center=portrait?32:107;
+  // Persistent distress cue whenever the operator browses another OP page.
+  // Page 3 already has the unmistakable SOS header and SELECT hint.
+  if(page!=3U && V003F19Display::emergencyActive(
+       hasActiveLocalSOS(),getActiveSOSCount())) {
+    u8g2.setFont(u8g2_font_5x8_tf);
+    if(portrait)u8g2.drawStr(0,126,"SOS"); // x0..14; dots start at x17
+    else u8g2.drawStr(3,62,"SOS ACTIVE"); // ends before dots at x92
+  }
+  for(uint8_t i=0;i<4U;++i){const int x=center-15+10*i;
+    if(i==page)u8g2.drawDisc(x,y,2);else u8g2.drawCircle(x,y,2);
+  }
+  u8g2.sendBuffer();
+}
+void oledF21MenuFooter(bool portrait) {
+  u8g2.setFont(u8g2_font_5x8_tf);
+  if(portrait){u8g2.drawHLine(0,113,64);oledF21P(2,124,"TAP/HOLD:SET");}
+  else{u8g2.drawHLine(0,54,128);oledF21P(3,63,"TAP MOVE");oledF21L(68,63,"HOLD SET");}
+  u8g2.sendBuffer();
+}
+void oledF21PortraitHomeMenu(){
+  const bool distress=V003F19Display::emergencyActive(hasActiveLocalSOS(),getActiveSOSCount());
+  oledF21PortraitTop(distress?"SOS MENU":"DISPLAY");
+  const char*const names[]={"SCREEN OFF","DEV MODE","PORTRAIT","LANDSCAPE","BACK"};
+  for(uint8_t i=0;i<V003F19Display::kHomeChoiceCount;++i){
+    const bool active=(i==2U&&f19Display.portrait())||(i==3U&&!f19Display.portrait());
+    const bool locked=distress && i<2U;
+    char b[22];snprintf(b,sizeof(b),"%c%c%s",i==f19Display.homeMenuCursor()?'>':' ',
+      locked?'X':active?'*':' ',names[i]);oledF21P(2,26+17*i,b);
+  }
+  oledF21MenuFooter(true);
+}
+void oledF21LandscapeHomeMenu(){
+  const bool distress=V003F19Display::emergencyActive(hasActiveLocalSOS(),getActiveSOSCount());
+  oledF21LandscapeTop(distress?"SOS HOME MENU":"DISPLAY MENU");
+  const char*const names[]={"SCREEN OFF","DEVELOPMENT","PORTRAIT","LANDSCAPE","BACK"};
+  const uint8_t chosen=f19Display.homeMenuCursor();
+  const uint8_t first=chosen>=3U?uint8_t(chosen-2U):0U;
+  for(uint8_t row=0;row<3U&&first+row<V003F19Display::kHomeChoiceCount;++row){
+    const uint8_t i=uint8_t(first+row);
+    const bool active=(i==2U&&f19Display.portrait())||(i==3U&&!f19Display.portrait());
+    const bool locked=distress && i<2U;
+    char b[26];snprintf(b,sizeof(b),"%c%c %s",i==chosen?'>':' ',locked?'X':active?'*':' ',names[i]);
+    oledF21L(5,25+12*row,b);
+  }
+  oledF21MenuFooter(false);
+}
+// F21R4: cached PMU gauge estimate, never read I2C from a renderer.
+void oledF21BatteryLabel(int x,int y,bool portrait) {
+  char label[8];V003F21R4UI::batteryText(f21r4BatteryPercent,label,sizeof(label));
+  // Battery percentage: 6x10 in portrait, 5x8 in landscape (unchanged).
+  const uint8_t *font=portrait?u8g2_font_6x10_tf:u8g2_font_5x8_tf;
+  u8g2.setFont(font);u8g2.drawStr(x,y,label);u8g2.setFont(u8g2_font_5x8_tf);
+}
+void oledF21HomeLabel(char* dst,size_t n) {
+  const bool good=V003F21R4UI::freshPosition(gpsHasFix,gps.location.isValid(),
+                   gps.location.age(),latitude,longitude);
+  if(!good){V003F21R4UI::distanceText(NAN,dst,n);return;}
+  const double km=TinyGPSPlus::distanceBetween(latitude,longitude,
+      V003F21R4UI::kHomeLatitude,V003F21R4UI::kHomeLongitude)/1000.0;
+  V003F21R4UI::distanceText(km,dst,n);
+}
+void oledF21PortraitGPSPage(){
+  if(f19Display.homeMenuOpen()){oledF21PortraitHomeMenu();return;}
+  char b[42];oledF21PortraitTop("V003");
+  // V003 text replaces the boat icon; preserve a 2px battery-label gap.
+  // Pixel fit: V003 x3..23, battery x26..36, 100% x38..62 (64px width).
+  u8g2.setDrawColor(0);oledF21Icon(F21Icon::Battery,26,2);
+  oledF21BatteryLabel(38,11,true);u8g2.setDrawColor(1);
+  u8g2.drawFrame(1,16,62,35);
+  u8g2.setFont(u8g2_font_5x8_tf);oledF21P(5,26,"TIME / PHT");
+  const bool utcFresh=gps.date.isValid()&&gps.time.isValid()&&
+    gps.date.age()<=10000UL&&gps.time.age()<=10000UL;
+  if(utcFresh)snprintf(b,sizeof(b),"%02u:%02u",unsigned((gps.time.hour()+8U)%24U),
+                       unsigned(gps.time.minute()));
+  else strcpy(b,"--:--");
+  u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(10,45,b);
+  u8g2.setFont(u8g2_font_5x8_tf);
+  u8g2.drawHLine(2,55,60);
+  oledF21P(3,67,gpsHasFix?"GPS FIX":"GPS NO FIX");
+  u8g2.drawHLine(2,71,60);
+  V003F21R4UI::uptimeText(millis(),b,sizeof(b));oledF21P(3,82,b);
+  u8g2.drawHLine(2,86,60);
+  oledF21HomeLabel(b,sizeof(b));oledF21P(3,97,b);
+  u8g2.drawHLine(2,101,60);
+  unsigned peers=0;uint32_t prev=0,nxt=0;
+  while(peers<32U&&nextActivePeerId(prev,nxt)&&nxt>prev){++peers;prev=nxt;}
+  snprintf(b,sizeof(b),"PEERS %u",peers);oledF21P(3,112,b);
+  // No portrait footer instructions; the navigation dots are sufficient.
+  oledF21Dots(true,0);
+}
+void oledF21LandscapeGPSPage(){
+  if(f19Display.homeMenuOpen()){oledF21LandscapeHomeMenu();return;}
+  char b[42];oledF21LandscapeTop("V003 HOME");
+  u8g2.setDrawColor(0);oledF21Icon(F21Icon::Battery,91,2);
+  oledF21BatteryLabel(104,10,false);u8g2.setDrawColor(1);
+  u8g2.drawFrame(1,15,62,39);u8g2.drawFrame(66,15,61,39);
+  u8g2.setFont(u8g2_font_5x8_tf);oledF21P(6,23,"TIME PHT");
+  const bool utcFresh=gps.date.isValid()&&gps.time.isValid()&&
+    gps.date.age()<=10000UL&&gps.time.age()<=10000UL;
+  if(utcFresh)snprintf(b,sizeof(b),"%02u:%02u",unsigned((gps.time.hour()+8U)%24U),
+                       unsigned(gps.time.minute()));
+  else strcpy(b,"--:--");
+  u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(6,41,b);
+  u8g2.setFont(u8g2_font_5x8_tf);
+  oledF21HomeLabel(b,sizeof(b));
+  if(strlen(b)>11U)strcpy(b,"HOME >99km");
+  oledF21P(6,50,b);
+  oledF21Icon(F21Icon::Pin,68,18);oledF21L(81,25,gpsHasFix?"GPS FIX":"GPS --");
+  unsigned peers=0;uint32_t prev=0,nxt=0;
+  while(peers<32U&&nextActivePeerId(prev,nxt)&&nxt>prev){++peers;prev=nxt;}
+  oledF21Icon(F21Icon::Peers,68,30);
+  snprintf(b,sizeof(b),"PEERS %u",peers);oledF21L(81,38,b);
+  oledF21Icon(F21Icon::Clock,68,42);
+  V003F21R4UI::shortUptime(millis(),b,sizeof(b));oledF21L(81,50,b);
+  // Keep the landscape help text, as requested.
+  if(!V003F19Display::emergencyActive(hasActiveLocalSOS(),getActiveSOSCount()))
+    u8g2.drawStr(3,62,"HOLD MENU");
+  oledF21Dots(false,0);
+}
+V003F21WeatherDisplay::View oledF21WeatherView(){
+  V003F21WeatherDisplay::Input x{};
+  x.nowMs=millis();x.macroAttempted=weatherSampleAttempted;
+  x.macroInputsValid=weatherInputsValid;x.macroLastStartMs=lastWeatherTime;
+  x.macroHistoryCount=weatherMeasurement.historyCount;x.macroState=weatherState;
+  x.macroPressureFinite=isfinite(pressureDelta);
+  x.microLastMs=lastF10MicroTime;x.microHistoryCount=f10Forecaster.count();
+  x.microState=static_cast<uint8_t>(f10Forecaster.state());
+  return V003F21WeatherDisplay::select(x);
+}
+void oledF21PortraitWeatherPage(){
+  oledF21PortraitTop("WEATHER");
+  const auto v=oledF21WeatherView();
+  u8g2.drawFrame(1,16,62,38);
+  u8g2.setFont(u8g2_font_5x8_tf);oledF21P(5,26,"CURRENT");
+  const char*label=V003F21WeatherDisplay::currentText(v.current);
+  const int w=int(strlen(label))*7;
+  u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(w<=60?(64-w)/2:2,46,label);
+  u8g2.drawFrame(1,56,62,49);
+  u8g2.setFont(u8g2_font_5x8_tf);oledF21P(5,66,"OUTLOOK");
+  const char*state=V003F21WeatherDisplay::outlookText(v.outlook);
+  if(v.outlook==V003F21WeatherDisplay::Outlook::FrontSignal||
+     v.outlook==V003F21WeatherDisplay::Outlook::SquallSignal){
+    oledF21P(5,81,v.outlook==V003F21WeatherDisplay::Outlook::FrontSignal?"FRONT":"SQUALL");
+    oledF21P(5,90,"SIGNAL");
+  }else oledF21P(5,84,state);
+  oledF21P(5,100,V003F21WeatherDisplay::horizonText(v.horizon));
+  // F21R4: remove cosmetic GAP/GUIDE footer; status labels remain authoritative.
+  oledF21Dots(true,1);
+}
+void oledF21LandscapeWeatherPage(){
+  oledF21LandscapeTop("WEATHER");
+  const auto v=oledF21WeatherView();
+  u8g2.drawFrame(1,15,61,39);u8g2.drawFrame(65,15,62,39);
+  u8g2.setFont(u8g2_font_5x8_tf);u8g2.drawStr(4,24,"CURRENT");
+  const char*label=V003F21WeatherDisplay::currentText(v.current);
+  u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(4,43,label);
+  u8g2.setFont(u8g2_font_5x8_tf);u8g2.drawStr(68,24,"OUTLOOK");
+  const char*state=V003F21WeatherDisplay::outlookText(v.outlook);
+  if(v.outlook==V003F21WeatherDisplay::Outlook::FrontSignal||
+     v.outlook==V003F21WeatherDisplay::Outlook::SquallSignal){
+    u8g2.drawStr(68,34,v.outlook==V003F21WeatherDisplay::Outlook::FrontSignal?"FRONT":"SQUALL");
+    u8g2.drawStr(68,42,"SIGNAL");
+  }else{
+    // Bound the 62px card rather than silently run into the right edge.
+    char shortState[12];snprintf(shortState,sizeof(shortState),"%.11s",state);
+    u8g2.drawStr(68,38,shortState);
+  }
+  u8g2.drawStr(68,51,V003F21WeatherDisplay::horizonText(v.horizon));
+  // F21R4: no cosmetic weather guidance footer.
+  oledF21Dots(false,1);
+}
+void oledF21PortraitPeerMenu(){
+  oledF21PortraitTop(V003F19Display::emergencyActive(hasActiveLocalSOS(),getActiveSOSCount())?
+                     "SOS PEERS":"PEER MENU");
+  const uint8_t total=uint8_t(oledMenuPeerCount+2U);
+  const uint8_t first=oledMenuCursor>=7U?uint8_t(oledMenuCursor-6U):0U;
+  for(uint8_t row=0;row<8U && uint8_t(first+row)<total;++row){
+    const uint8_t idx=uint8_t(first+row);
+    char label[24],b[28];
+    if(idx==0U)strcpy(label,"AUTO");
+    else if(idx==oledMenuPeerCount+1U)strcpy(label,"BACK");
+    else snprintf(label,sizeof(label),"V%03lu",(unsigned long)oledMenuPeerIds[idx-1U]);
+    snprintf(b,sizeof(b),"%c %s",idx==oledMenuCursor?'>':' ',label);
+    oledF21P(3,23+11*row,b);
+  }
+  oledF21MenuFooter(true);
+}
+void oledF21LandscapePeerMenu(){
+  oledF21LandscapeTop(V003F19Display::emergencyActive(hasActiveLocalSOS(),getActiveSOSCount())?
+                      "SOS SELECT PEER":"SELECT PEER");
+  const uint8_t total=uint8_t(oledMenuPeerCount+2U);
+  const uint8_t first=oledMenuCursor>=3U?uint8_t(oledMenuCursor-2U):0U;
+  for(uint8_t row=0;row<3U && uint8_t(first+row)<total;++row){
+    const uint8_t idx=uint8_t(first+row);
+    char label[24],b[28];
+    if(idx==0U)strcpy(label,"AUTO");
+    else if(idx==oledMenuPeerCount+1U)strcpy(label,"BACK");
+    else snprintf(label,sizeof(label),"V%03lu",(unsigned long)oledMenuPeerIds[idx-1U]);
+    snprintf(b,sizeof(b),"%c %s",idx==oledMenuCursor?'>':' ',label);
+    oledF21L(5,24+12*row,b);
+  }
+  oledF21MenuFooter(false);
+}
+void oledF21PortraitNearbyPage(){
+  if(oledPeerMenuOpen){oledF21PortraitPeerMenu();return;}
+  oledF21PortraitTop("PEERS");
+  unsigned active=0;uint32_t prev=0,nxt=0;
+  while(active<32U && nextActivePeerId(prev,nxt) && nxt>prev){++active;prev=nxt;}
+  u8g2.drawFrame(1,16,62,23);
+  char b[40];snprintf(b,sizeof(b),"LIVE %u",active);oledF21P(5,25,b);
+  oledF21P(5,35,"HOLD SELECT");
+  if(selectedOLEDPeerId){
+    PeerDisplaySnapshot peer{};
+    if(!getPeerSnapshotById(selectedOLEDPeerId,peer)||!peer.active){
+      oledF21P(5,58,"PEER LOST");oledF21P(5,80,"DIST --");oledF21P(5,99,"DIR --");
+    }else{
+      oledF21Icon(F21Icon::Boat,3,47);
+      snprintf(b,sizeof(b),"V%03lu",(unsigned long)peer.id);oledF21P(17,57,b);
+      if(gpsHasFix && peer.gpsValid && isfinite(latitude) && isfinite(longitude) &&
+         isfinite(peer.latitude) && isfinite(peer.longitude)){
+        const double km=TinyGPSPlus::distanceBetween(latitude,longitude,peer.latitude,peer.longitude)/1000.0;
+        const double brg=TinyGPSPlus::courseTo(latitude,longitude,peer.latitude,peer.longitude);
+        if(isfinite(km))snprintf(b,sizeof(b),"%.1f km",km);
+        else strcpy(b,"DIST --");
+        oledF21P(5,79,b);
+        snprintf(b,sizeof(b),"DIR %s TRUE",V003F19Display::cardinal8(brg));oledF21P(5,97,b);
+      }else{oledF21P(5,79,"DIST --");oledF21P(5,97,"DIR --");}
+      snprintf(b,sizeof(b),"AGE %lus",(unsigned long)peer.ageSeconds);oledF21P(5,113,b);
+    }
+  }else if(!active){
+    oledF21P(5,65,"NO PEERS");
+  }else{
+    prev=0;nxt=0;
+    for(uint8_t row=0;row<3U && nextActivePeerId(prev,nxt) && nxt>prev;++row){
+      prev=nxt;PeerDisplaySnapshot peer{};
+      if(!getPeerSnapshotById(nxt,peer)||!peer.active)continue;
+      const int y=49+22*row;
+      oledF21Icon(F21Icon::Boat,2,y);
+      if(gpsHasFix&&peer.gpsValid&&isfinite(latitude)&&isfinite(longitude)&&
+         isfinite(peer.latitude)&&isfinite(peer.longitude)){
+        const double km=TinyGPSPlus::distanceBetween(latitude,longitude,peer.latitude,peer.longitude)/1000.0;
+        const double brg=TinyGPSPlus::courseTo(latitude,longitude,peer.latitude,peer.longitude);
+        if(isfinite(km)&&km<100.0)snprintf(b,sizeof(b),"%03lu %.1fkm",(unsigned long)peer.id,km);
+        else snprintf(b,sizeof(b),"%03lu DIST --",(unsigned long)peer.id);
+        oledF21P(15,y+7,b);
+        snprintf(b,sizeof(b),"DIR %s",V003F19Display::cardinal8(brg));
+        oledF21P(15,y+16,b);
+      }else{
+        snprintf(b,sizeof(b),"%03lu DIST--",(unsigned long)peer.id);oledF21P(15,y+7,b);
+        oledF21P(15,y+16,"DIR --");
+      }
+      if(row<2U)u8g2.drawHLine(2,y+19,60);
+    }
+  }
+  oledF21Dots(true,2);
+}
+void oledF21LandscapeNearbyPage(){
+  if(oledPeerMenuOpen){oledF21LandscapePeerMenu();return;}
+  oledF21LandscapeTop("PEERS");
+  unsigned active=0;uint32_t prev=0,nxt=0;
+  while(active<32U && nextActivePeerId(prev,nxt)&&nxt>prev){++active;prev=nxt;}
+  u8g2.drawFrame(1,15,40,39);u8g2.drawFrame(44,15,83,39);
+  char b[40];snprintf(b,sizeof(b),"LIVE %u",active);oledF21L(4,27,b);
+  oledF21L(4,41,"HOLD");oledF21L(4,51,"SELECT");
+  if(selectedOLEDPeerId){
+    PeerDisplaySnapshot peer{};
+    if(!getPeerSnapshotById(selectedOLEDPeerId,peer)||!peer.active){
+      oledF21L(48,29,"PEER LOST");oledF21L(48,42,"DIST --");
+      oledF21L(48,51,"AGE --");
+    }else{
+      oledF21Icon(F21Icon::Boat,47,18);
+      snprintf(b,sizeof(b),"V%03lu",(unsigned long)peer.id);oledF21L(62,27,b);
+      if(gpsHasFix&&peer.gpsValid&&isfinite(latitude)&&isfinite(longitude)&&
+         isfinite(peer.latitude)&&isfinite(peer.longitude)){
+        const double km=TinyGPSPlus::distanceBetween(latitude,longitude,peer.latitude,peer.longitude)/1000.0;
+        const double brg=TinyGPSPlus::courseTo(latitude,longitude,peer.latitude,peer.longitude);
+        if(isfinite(km))snprintf(b,sizeof(b),"%.1fkm %s",km,V003F19Display::cardinal8(brg));
+        else strcpy(b,"DIST --");
+        oledF21L(48,42,b);
+      }else oledF21L(48,42,"DIST -- DIR --");
+      snprintf(b,sizeof(b),"AGE %lus",(unsigned long)peer.ageSeconds);
+      oledF21L(48,51,b);
+    }
+  }else if(!active)oledF21L(48,34,"NO LIVE PEERS");
+  else{
+    prev=0;nxt=0;
+    for(uint8_t row=0;row<3U&&nextActivePeerId(prev,nxt)&&nxt>prev;++row){
+      prev=nxt;PeerDisplaySnapshot peer{};
+      if(!getPeerSnapshotById(nxt,peer)||!peer.active)continue;
+      const int y=17+12*row;
+      oledF21Icon(F21Icon::Boat,46,y);
+      if(gpsHasFix&&peer.gpsValid&&isfinite(latitude)&&isfinite(longitude)&&
+         isfinite(peer.latitude)&&isfinite(peer.longitude)){
+        const double km=TinyGPSPlus::distanceBetween(latitude,longitude,peer.latitude,peer.longitude)/1000.0;
+        const double brg=TinyGPSPlus::courseTo(latitude,longitude,peer.latitude,peer.longitude);
+        if(isfinite(km)&&km<100.0)snprintf(b,sizeof(b),"%03lu %.1f %s",(unsigned long)peer.id,km,V003F19Display::cardinal8(brg));
+        else snprintf(b,sizeof(b),"%03lu DIST --",(unsigned long)peer.id);
+      }else snprintf(b,sizeof(b),"%03lu DIST --",(unsigned long)peer.id);
+      u8g2.setFont(u8g2_font_5x8_tf);oledF21L(61,y+8,b);
+    }
+  }
+  if(!V003F19Display::emergencyActive(hasActiveLocalSOS(),getActiveSOSCount())) {
+    u8g2.setFont(u8g2_font_5x8_tf);u8g2.drawStr(3,62,"HOLD SELECT");
+  }
+  oledF21Dots(false,2);
+}
+// F21R4: one read-only event selector for both OP orientations.
+// AUTO shows most recent ACTIVE received SOS; manual selection is origin+event.
+// Restore AUTO if a formerly selected incoming event was cancelled/evicted.
+// A still-active MY SOS must never incorrectly show "NO ACTIVE SOS".
+void f21r42ValidateSOSSelection(){
+  if(selectedSOSOrigin==0U)return;
+  SOSRecordSnapshot selected{};
+  if(!findSOSRecord(selectedSOSOrigin,selectedSOSEvent,selected) ||
+     !selected.known || selected.cancelled){
+    selectedSOSOrigin=0;selectedSOSEvent=0;
+  }
+}
+bool f21r4ChooseSOS(SOSRecordSnapshot &chosen){
+  if(selectedSOSOrigin!=0U){
+    if(findSOSRecord(selectedSOSOrigin,selectedSOSEvent,chosen) &&
+       chosen.known && !chosen.cancelled)return true;
+    // A cancelled/evicted selected event must never remain an active SOS screen.
+    selectedSOSOrigin=0;selectedSOSEvent=0;
+  }
+  return displaySOSRecord(chosen);
+}
+void oledF21PortraitSOSMenu(){
+  oledF21PortraitTop("SOS SELECT",true);
+  const uint8_t total=uint8_t(sosMenuCount+2U);
+  const uint8_t first=sosMenuCursor>=8U?uint8_t(sosMenuCursor-7U):0U;
+  for(uint8_t row=0;row<8U && uint8_t(first+row)<total;++row){
+    const uint8_t idx=uint8_t(first+row);
+    char b[32];
+    if(idx==0U)strcpy(b,hasActiveLocalSOS()?"MY SOS":"AUTO");
+    else if(idx==sosMenuCount+1U)strcpy(b,"BACK");
+    else snprintf(b,sizeof(b),"V%03lu #%lu",
+        (unsigned long)sosMenuOrigins[idx-1U],(unsigned long)sosMenuEvents[idx-1U]);
+    char line[36];snprintf(line,sizeof(line),"%c%s",idx==sosMenuCursor?'>':' ',b);
+    oledF21P(3,25+11*row,line);
+  }
+  oledF21MenuFooter(true);
+}
+void oledF21LandscapeSOSMenu(){
+  oledF21LandscapeTop("SOS SELECT",true);
+  const uint8_t total=uint8_t(sosMenuCount+2U);
+  const uint8_t first=sosMenuCursor>=3U?uint8_t(sosMenuCursor-2U):0U;
+  for(uint8_t row=0;row<3U && uint8_t(first+row)<total;++row){
+    const uint8_t idx=uint8_t(first+row);
+    char b[32];
+    if(idx==0U)strcpy(b,hasActiveLocalSOS()?"MY SOS (AUTO)":"AUTO LATEST");
+    else if(idx==sosMenuCount+1U)strcpy(b,"BACK");
+    else snprintf(b,sizeof(b),"V%03lu EVENT%lu",
+        (unsigned long)sosMenuOrigins[idx-1U],(unsigned long)sosMenuEvents[idx-1U]);
+    char line[36];snprintf(line,sizeof(line),"%c %s",idx==sosMenuCursor?'>':' ',b);
+    oledF21L(5,24+12*row,line);
+  }
+  oledF21MenuFooter(false);
+}
+void oledF21PortraitSOSPage(){
+  const bool local=hasActiveLocalSOS();const unsigned incoming=getActiveSOSCount();
+  const bool distress=local || incoming>0U;
+  if(sosMenuOpen){oledF21PortraitSOSMenu();return;}
+  f21r42ValidateSOSSelection();
+  oledF21PortraitTop(distress?"SOS ACTIVE":"SOS STATUS",distress);
+  u8g2.drawFrame(2,17,60,34);
+  char b[40];
+  const bool showLocal=local && selectedSOSOrigin==0U;
+  oledF21P(6,29,showLocal?"MY SOS":distress?"INCOMING":"NO DISTRESS");
+  snprintf(b,sizeof(b),"ACTIVE %u",incoming+(local?1U:0U));oledF21P(6,43,b);
+  if(showLocal){
+    oledF21P(5,65,"BOAT REPLY");
+    oledF21P(5,79,"UNKNOWN");
+    oledF21P(5,94,gpsHasFix?"GPS FIX":"GPS --");
+    oledF21P(5,108,"HOLD SELECT");oledF21Dots(true,3);return;
+  }
+  if(!incoming){oledF21P(5,77,"NO ACTIVE SOS");oledF21Dots(true,3);return;}
+  SOSRecordSnapshot chosen{};
+  if(!f21r4ChooseSOS(chosen)){
+    oledF21P(5,65,"SOS DATA WAIT");oledF21P(5,82,"DIST --");
+    oledF21P(5,99,"DIR --");u8g2.sendBuffer();return;
+  }
+  snprintf(b,sizeof(b),"FROM V%03lu",(unsigned long)chosen.originId);oledF21P(5,61,b);
+  snprintf(b,sizeof(b),"EVENT %lu",(unsigned long)chosen.eventId);oledF21P(5,73,b);
+  if(gpsHasFix && chosen.positionValid && isfinite(latitude) && isfinite(longitude) &&
+     isfinite(chosen.latitude) && isfinite(chosen.longitude)){
+    const double km=TinyGPSPlus::distanceBetween(latitude,longitude,
+                                  chosen.latitude,chosen.longitude)/1000.0;
+    if(isfinite(km))snprintf(b,sizeof(b),"DIST %.1fkm",km);
+    else strcpy(b,"DIST --");
+    oledF21P(5,85,b);
+    const double brg=TinyGPSPlus::courseTo(latitude,longitude,
+                                  chosen.latitude,chosen.longitude);
+    snprintf(b,sizeof(b),"DIR %s",V003F19Display::cardinal8(brg));
+    oledF21P(5,97,b);
+  }else{oledF21P(5,85,"DIST --");oledF21P(5,97,"DIR --");}
+  snprintf(b,sizeof(b),"AGE %lus",(unsigned long)(uint32_t(millis()-chosen.receivedAtMs)/1000UL));
+  oledF21P(5,111,b);
+  oledF21Dots(true,3);
+}
+void oledF21LandscapeSOSPage(){
+  const bool local=hasActiveLocalSOS();const unsigned incoming=getActiveSOSCount();
+  const bool distress=local || incoming>0U;
+  if(sosMenuOpen){oledF21LandscapeSOSMenu();return;}
+  f21r42ValidateSOSSelection();
+  oledF21LandscapeTop(distress?"SOS ACTIVE":"SOS STATUS",distress);
+  char b[48];u8g2.drawFrame(1,15,126,39);
+  if(local && selectedSOSOrigin==0U){
+    oledF21L(5,26,"MY SOS ACTIVE");
+    oledF21L(5,39,"BOAT REPLY: UNKNOWN");
+    oledF21L(5,49,gpsHasFix?"GPS FIX":"GPS --");
+    u8g2.drawStr(3,62,"HOLD SELECT");oledF21Dots(false,3);return;
+  }
+  if(!incoming){oledF21L(5,35,"NO ACTIVE DISTRESS");oledF21Dots(false,3);return;}
+  SOSRecordSnapshot chosen{};
+  if(!f21r4ChooseSOS(chosen)){
+    oledF21L(5,34,"SOS DATA WAIT");u8g2.sendBuffer();return;
+  }
+  snprintf(b,sizeof(b),"FROM V%03lu EVENT %lu",
+      (unsigned long)chosen.originId,(unsigned long)chosen.eventId);
+  oledF21L(5,25,b);
+  if(gpsHasFix && chosen.positionValid && isfinite(latitude) && isfinite(longitude) &&
+     isfinite(chosen.latitude) && isfinite(chosen.longitude)){
+    const double km=TinyGPSPlus::distanceBetween(latitude,longitude,
+                            chosen.latitude,chosen.longitude)/1000.0;
+    if(isfinite(km))snprintf(b,sizeof(b),"DIST %.1fkm",km);
+    else strcpy(b,"DIST --");
+    oledF21L(5,37,b);
+    const double brg=TinyGPSPlus::courseTo(latitude,longitude,
+                            chosen.latitude,chosen.longitude);
+    snprintf(b,sizeof(b),"DIR %s TRUE",V003F19Display::cardinal8(brg));
+    oledF21L(75,37,b);
+  }else{oledF21L(5,37,"DIST --");oledF21L(75,37,"DIR --");}
+  snprintf(b,sizeof(b),"AGE %lus",(unsigned long)(uint32_t(millis()-chosen.receivedAtMs)/1000UL));
+  oledF21L(5,49,b);
+  u8g2.drawStr(3,62,"HOLD SELECT");oledF21Dots(false,3);
+}
+#endif // F21R3 icon renderers
+
 void updateOLED() {
   if (!oledAvailable) return;
   // Ensure OLED is targeted before drawing
@@ -1878,14 +2497,35 @@ void updateOLED() {
     f19PhysicalScreenAsleep=f19WantOff;
   }
   if (f19WantOff) return;
-  if (f19SOS) { oledF19SOSPage(); return; }
-  if (f19Display.operational()) {
-    switch (f19Display.operationalPage()) {
-      case 0: oledF19GPSPage(); break;
-      case 1: oledF19WeatherPage(); break;
-      case 2: oledF19NearbyPage(); break;
-      case 3: oledF19SOSPage(); break;
-      default: oledF19GPSPage(); break;
+  // F21 rotation is display-only and never runs on development pages.
+  const bool f21WantPortrait=(f19Display.operational() || f19SOS) && f19Display.portrait();
+  if (f21WantPortrait!=f21PhysicalPortrait) {
+    u8g2.setDisplayRotation(f21WantPortrait?U8G2_R1:U8G2_R0);
+    f21PhysicalPortrait=f21WantPortrait;
+  }
+  if (f19SOS && f21r42SOSBrowse.forceSOS()) {
+    if(f21WantPortrait)oledF21PortraitSOSPage();
+    else oledF21LandscapeSOSPage();
+    return;
+  }
+  if (f19Display.operational() || f19SOS) {
+    const uint8_t opPage=f19SOS ? f21r42SOSBrowse.page() : f19Display.operationalPage();
+    if(f21WantPortrait) {
+      switch(opPage) {
+        case 0: oledF21PortraitGPSPage(); break;
+        case 1: oledF21PortraitWeatherPage(); break;
+        case 2: oledF21PortraitNearbyPage(); break;
+        case 3: oledF21PortraitSOSPage(); break;
+        default: oledF21PortraitGPSPage(); break;
+      }
+      return;
+    }
+    switch (opPage) {
+      case 0: oledF21LandscapeGPSPage(); break;
+      case 1: oledF21LandscapeWeatherPage(); break;
+      case 2: oledF21LandscapeNearbyPage(); break;
+      case 3: oledF21LandscapeSOSPage(); break;
+      default: oledF21LandscapeGPSPage(); break;
     }
     return;
   }

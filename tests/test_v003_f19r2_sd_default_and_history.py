@@ -17,7 +17,12 @@ assert 'sosMenuCount+2' in m and 'sosMenuCount+4' not in m
 assert 'SD: SOS ARMED' not in m and 'SD: CONTINUOUS' not in m
 assert 'MODE_MENU_OPEN' in m and 'MODE_CONFIRMED=' in m
 assert 'SOSControls::pollAction(hasActiveLocalSOS())' in m
-assert 'if (f19ActiveSOS)' in m and 'if (f19SOS)' in m
+# F21R4.2: the old unconditional SOS lock has become a display-only
+# distress-priority override with an explicitly time-bounded page browser.
+assert 'if (f19ActiveSOS)' in m
+assert 'if (f19SOS && f21r42SOSBrowse.forceSOS())' in m
+assert 'if (f19Display.operational() || f19SOS)' in m
+assert 'const uint8_t opPage=f19SOS ? f21r42SOSBrowse.page() : f19Display.operationalPage();' in m
 assert 'GPIO_OUTPUTS=DISABLED' not in m or 'THESIS_V003_F13_LIVE_OUTPUTS != 0' in m
 # Both dedicated weather journal writers gate on the true hybrid state.
 weather=s.split('inline bool queueWeatherSample(',1)[1].split('inline bool queueMicroOutlook(',1)[0]

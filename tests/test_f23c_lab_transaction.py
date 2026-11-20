@@ -1,4 +1,5 @@
 """F23C actual-header host matrix and source isolation checks. No device access."""
+from f23d_physical_support import remove_physical
 from pathlib import Path
 import configparser
 import os
@@ -26,6 +27,7 @@ def execute(command):
     return result.stdout
 
 def remove_readiness(text):
+    text=remove_physical(text)
     result=[];inside=False
     for line in text.splitlines(keepends=True):
         if line.strip()=="// F23D readiness begin":

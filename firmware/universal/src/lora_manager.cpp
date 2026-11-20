@@ -1,12 +1,21 @@
+// F23D physical begin
+#include "../../shared/relay/f23d_physical_contract.h"
+// F23D physical end
 // F23D readiness begin
 #include "../../shared/relay/f23d_readiness_contract.h"
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 #include "../../shared/relay/f23d_lab_diagnostics.h"
 #include "../../shared/relay/f23d_evidence_queue.h"
 static F23DReadiness::EvidenceQueue f23dEvidenceQueue;
 static uint32_t f23dMaxWriteUs=0,f23dMaxEnqueueUs=0,f23dReportedLost=0;
 #endif
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 #include "../../shared/relay/f23d_run_evidence.h"
 static F23DReadiness::RunEvidence f23dRunEvidence;
 static int f23dLastRxRestoreRc=-999;
@@ -288,12 +297,22 @@ TelemetryCadResult pollTelemetryCad() {
 
 
 // Never transmit under an absent/invalid identity, including automatic ACKs.
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+static bool f23dFinalRadioGate(const uint8_t*,size_t);
+#endif
+// F23D physical end
 static int transmitWithIdentity(const uint8_t* data, size_t length) {
   if (!VesselIdentity::ready()) {
     Serial.println("[IDENTITY] TX BLOCKED: provisioned identity required");
     return -999;
   }
   interruptMacCadForControlTx();
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+  if(!f23dFinalRadioGate(data,length))return -997;
+#endif
+// F23D physical end
   return radio.transmit(const_cast<uint8_t*>(data), length);
 }
 
@@ -576,9 +595,21 @@ static const F23CLab::DisabledRadio f23cRadio;
 #endif
 // F23C Phase 1 end
 // F23D begin
-#if THESIS_F23D_CANDIDATE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_CANDIDATE == 1
+#if THESIS_F23D_CANDIDATE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 #include "../../shared/relay/f23d_run_control.h"
 static F23DBench::RunControl f23dControl;
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+#include "../../shared/relay/f23d_physical_permission.h"
+// Actual firmware provider. Missing platform evidence always denies; no GPIO,
+// MAC, credential, serial command or NVS value can manufacture a grant.
+static F23DPhysical::Permission f23dPermission;
+static const VesselPacket* f23dPhysicalLease=nullptr;
+#endif
+// F23D physical end
 static F23DBench::Context f23dContext() {
   F23DBench::Context c;
   c.identityReady=VesselIdentity::ready();
@@ -588,14 +619,39 @@ static F23DBench::Context f23dContext() {
                  !F05Recovery::recoveredCancelNeedsHold;
   c.localControlBusy=activeEmergency || sosPending || cancelPending ||
                     macCadScanActive || digitalRead(LORA_DIO1)==HIGH;
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+  c.physicalPermission=f23dPermission.evaluate(c,millis());
+#endif
+// F23D physical end
   return c;
 }
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D final gate begin
+static bool f23dFinalRadioGate(const uint8_t* bytes,size_t length) {
+  if(!f23dPhysicalLease)return true;
+  const auto c=f23dContext();
+  const bool allowed=length==sizeof(VesselPacket) &&
+      bytes==reinterpret_cast<const uint8_t*>(f23dPhysicalLease) &&
+      f23dControl.maySubmit(*f23dPhysicalLease,c) &&
+      f23dPermission.beforeRadio(c,millis(),f23dEvidenceQueue.lost());
+  // No diagnostic formatting or serial I/O between this check and radio call.
+  if(!allowed){f23dPermission.revoke();f23dControl.revoke();}
+  return allowed;
+}
+// F23D final gate end
+#endif
+// F23D physical end
 // F23D adapter body begin
 struct F23DBenchRadio {
   int submit(const VesselPacket& packet) {
     const auto context=f23dContext();
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
     f23dRunEvidence.reserved(packet.packetType);
     f23dQueueRunEvidence("RESERVED",int(f23dControl.attempts()),&packet);
     if(!f23dControl.maySubmit(packet,context))
@@ -604,21 +660,55 @@ struct F23DBenchRadio {
 // F23D readiness end
     if (!f23dControl.maySubmit(packet, context)) return -998;
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
     f23dQueueRunEvidence("RADIO_INVOKE",0,&packet);
 #endif
 // F23D readiness end
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+    f23dPhysicalLease=&packet;
+#endif
+// F23D physical end
     const int rc=transmitWithIdentity(
         reinterpret_cast<const uint8_t*>(&packet),sizeof(packet));
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+    f23dPhysicalLease=nullptr;
+    if(rc!=RADIOLIB_ERR_NONE){f23dPermission.revoke();f23dControl.revoke();}
+#endif
+// F23D physical end
     startReceive();
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+    f23dQueueRunEvidence(rc==-997?"AUTH_FINAL_REJECTED":"AUTH_RADIO_RETURN",rc,&packet);
+#endif
+// F23D physical end
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
     if(f23dLastRxRestoreRc!=RADIOLIB_ERR_NONE)f23dControl.revoke();
     f23dQueueRunEvidence("RADIO_RESULT",rc,&packet);
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+    if(f23dLastRxRestoreRc!=RADIOLIB_ERR_NONE ||
+       !f23dPermission.evaluate(f23dContext(),millis())){
+      f23dPermission.revoke();f23dControl.revoke();
+      f23dQueueRunEvidence("AUTH_REVOKED",int(f23dPermission.reason()),&packet);
+    }
+#endif
+// F23D physical end
 #endif
 // F23D readiness end
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE != 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE != 1
+#if THESIS_F23D_RELAY_EVIDENCE != 1 && THESIS_F23D_PHYSICAL_CANDIDATE != 1
+// F23D physical end
 // F23D readiness end
     Serial.printf("[F23D-TX] ms=%lu origin=%lu event=%lu kind=%u hop=%u attempt=%u rc=%d AUTH=UNVERIFIED FAR_END=UNVERIFIED\n",
         (unsigned long)millis(),(unsigned long)packet.originNodeId,
@@ -633,16 +723,41 @@ struct F23DBenchRadio {
 // F23D adapter body end
 static F23DBenchRadio f23dRadio;
 bool f23dHandleRunCommand(const char* line) {
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+  const uint32_t commandAt=millis();
+  const auto result=f23dControl.command(line,f23dContext(),commandAt,esp_random() | 1U);
+  if(result==F23DBench::Control::Selected){
+    uint32_t run=0;const char* p=line+12;
+    while(*p>='0' && *p<='9'){run=run*10U+uint32_t(*p-'0');++p;}
+    f23dPermission.selected(run,f23dControl.event(),commandAt);
+  }
+  if(result==F23DBench::Control::Armed)f23dPermission.armed(commandAt);
+  if(result==F23DBench::Control::Disarmed || result==F23DBench::Control::Denied)
+    f23dPermission.revoke();
+  if(result!=F23DBench::Control::NotCommand)
+    f23dQueueRunEvidence("AUTH_COMMAND",int(f23dPermission.reason()),nullptr);
+#else
+// F23D physical end
   const auto result=f23dControl.command(line,f23dContext(),millis(),esp_random() | 1U);
+// F23D physical begin
+#endif
+// F23D physical end
   if (result==F23DBench::Control::NotCommand) return false;
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   f23dRunEvidence.command(line,result,millis());
   f23dQueueRunEvidence(F23DReadiness::RunEvidence::controlName(result),int(result),nullptr);
 #endif
 // F23D readiness end
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE != 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE != 1
+#if THESIS_F23D_RELAY_EVIDENCE != 1 && THESIS_F23D_PHYSICAL_CANDIDATE != 1
+// F23D physical end
 // F23D readiness end
   Serial.printf("[F23D-RUN] result=%u event=%lu challenge=%lu armed=%u attempts=%u PHYSICAL_PERMISSION=UNAVAILABLE AUTH=UNVERIFIED\n",
       unsigned(result),(unsigned long)f23dControl.event(),
@@ -693,7 +808,10 @@ static uint32_t traceRxTelemetry = 0;
 static void printPeerReceiveDiagnostics();
 
 // F23D readiness begin
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 void f23dPollEvidence() {
   struct Writer {
     int availableForWrite(){return Serial.availableForWrite();}
@@ -726,7 +844,10 @@ static F23DReadiness::EventSnapshot f23dCollectEventSnapshot() {
 }
 // F23D query collector end
 #endif
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 // F23D query command begin
 bool f23dHandleDiagnosticCommand(const char* line) {
 #if THESIS_F23D_EVENT_QUERY == 1
@@ -762,7 +883,10 @@ static void f23dQueueRxEvidence(const uint8_t* bytes,size_t length,int16_t rssi,
   if(elapsed>f23dMaxEnqueueUs)f23dMaxEnqueueUs=elapsed;
 }
 #endif
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 // F23D run row begin
 static void f23dQueueRunEvidence(const char* stage,int code,const VesselPacket* packet) {
   const uint32_t began=micros();
@@ -806,17 +930,26 @@ static void prepareRelayAfterSOSState(const VesselPacket& p,
 #endif
 // F23C Phase 1 end
 // F23D begin
-#if THESIS_F23D_CANDIDATE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_CANDIDATE == 1
+#if THESIS_F23D_CANDIDATE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   const auto f23dAdmission=f23dControl.observe(p,f23dContext(),stateAccepted,millis());
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   if(f23dAdmission==F23CLab::Admission::Accepted && p.packetType==PACKET_SOS_CANCEL)
     f23dRunEvidence.cancellationAccepted();
   f23dQueueRunEvidence(F23DReadiness::RunEvidence::admissionName(f23dAdmission),int(f23dAdmission),&p);
 #endif
 // F23D readiness end
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE != 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE != 1
+#if THESIS_F23D_RELAY_EVIDENCE != 1 && THESIS_F23D_PHYSICAL_CANDIDATE != 1
+// F23D physical end
 // F23D readiness end
   Serial.printf("[F23D-RX] ms=%lu origin=%lu event=%lu kind=%u hop=%u admission=%u PHYSICAL_TX=OFF\n",
       (unsigned long)millis(),(unsigned long)p.originNodeId,
@@ -925,18 +1058,40 @@ void pollLoRaReceive() {
 #endif
 // F23C Phase 1 end
 // F23D begin
-#if THESIS_F23D_CANDIDATE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_CANDIDATE == 1
+#if THESIS_F23D_CANDIDATE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   int f23dResult=0;
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   const bool f23dWasArmed=f23dControl.armed();
   if(f23dWasArmed && f23dContext().localControlBusy && f23dRunEvidence.deferralDue(millis()))
     f23dQueueRunEvidence("LOCAL_CONTROL_DEFERRED",0,nullptr);
 #endif
 // F23D readiness end
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+  if(f23dEvidenceQueue.lost()){
+    f23dPermission.revoke(F23DPhysical::Reason::EvidenceLost);f23dControl.revoke();
+  }
+#endif
+// F23D physical end
   (void)f23dControl.dispatch(f23dContext(),millis(),f23dRadio,f23dResult);
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE == 1
+  if(f23dWasArmed && !f23dControl.armed())
+    f23dQueueRunEvidence("AUTH_REVOKED",int(f23dPermission.reason()),nullptr);
+#endif
+// F23D physical end
   if(f23dWasArmed && !f23dControl.armed())
     f23dQueueRunEvidence(f23dRunEvidence.remaining(millis())?"REVOKED":"EXPIRED",0,nullptr);
 #endif
@@ -1003,7 +1158,10 @@ void setupLoRa() {
 void startReceive() {
   int state = radio.startReceive();
 // F23D readiness begin
-#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
+#if THESIS_F23D_RELAY_EVIDENCE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   f23dLastRxRestoreRc=state;f23dLastRxReadyAt=millis();
 #endif
 // F23D readiness end

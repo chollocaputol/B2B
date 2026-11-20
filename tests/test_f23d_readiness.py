@@ -1,4 +1,5 @@
 """Physical-readiness diagnostics and permission requirements; offline only."""
+from f23d_physical_support import remove_physical
 from pathlib import Path
 import configparser
 import json
@@ -15,6 +16,7 @@ def run_cmd(args):
     assert r.returncode==0,r.stdout+r.stderr
     return r.stdout
 def strip(text):
+    text=remove_physical(text)
     result=[];inside=False
     for line in text.splitlines(keepends=True):
         if line.strip()==BEGIN:
@@ -40,7 +42,7 @@ def run():
                  "f23d_run_control.h","relay_authorization_contract.h","relay_tx_readiness.h"):
         path="firmware/shared/relay/"+name
         assert (ROOT/path).read_text()==run_cmd(["git","show",BASE+":"+path]),path
-    ini=(ROOT/"firmware/universal/platformio.ini").read_text()
+    ini=remove_physical((ROOT/"firmware/universal/platformio.ini").read_text())
     assert ini.split("; F23D readiness profiles",1)[0]==run_cmd(["git","show",BASE+":firmware/universal/platformio.ini"])
     cfg=configparser.ConfigParser(interpolation=None);cfg.read_string(ini)
     for role,flag,parent in (

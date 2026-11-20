@@ -1,6 +1,12 @@
+// F23D physical begin
+#include "../../shared/relay/f23d_physical_contract.h"
+// F23D physical end
 // F23D readiness begin
 #include "../../shared/relay/f23d_readiness_contract.h"
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 extern void f23dPollEvidence();
 #endif
 // F23D readiness end
@@ -1225,12 +1231,23 @@ void setup() {
 #endif
 // F23D end
 // F23D readiness begin
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
+// F23D physical begin
+#if THESIS_F23D_PHYSICAL_CANDIDATE != 1
+// F23D physical end
   const uint32_t f23dExpectedRole=THESIS_F23D_EVENT_QUERY?1U:(THESIS_F23D_RX_OBSERVER?3U:2U);
   Serial.printf("[F23D-READINESS] local=%lu expected=%lu role_ok=%u permission=%u OFFLINE_ONLY=1\n",
       (unsigned long)VesselIdentity::nodeId(),(unsigned long)f23dExpectedRole,
       unsigned(VesselIdentity::ready() && VesselIdentity::nodeId()==f23dExpectedRole),
       unsigned(F23DBench::kPhysicalPermissionInstalled));
+// F23D physical begin
+#else
+  Serial.println("[F23D-PHYSICAL] CANDIDATE_ONLY=1 PLATFORM_EVIDENCE=UNAVAILABLE STARTUP=DISARMED LEGACY_RELAY=OFF");
+#endif
+// F23D physical end
 #endif
 // F23D readiness end
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
@@ -1310,7 +1327,10 @@ void loop() {
   processSOSRetries();
   processCancelRetries();
 // F23D readiness begin
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
   f23dPollEvidence(); // bounded nonblocking drain after operational controls
 #endif
 // F23D readiness end

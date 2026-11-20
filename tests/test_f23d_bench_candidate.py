@@ -1,4 +1,5 @@
 """F23D offline controller, actual adapter body, source isolation and compile gates."""
+from f23d_physical_support import remove_physical
 from pathlib import Path
 import configparser
 import os
@@ -16,6 +17,7 @@ def run_cmd(args):
     return r.stdout
 
 def remove_readiness(text):
+    text=remove_physical(text)
     result=[];inside=False
     for line in text.splitlines(keepends=True):
         if line.strip()=="// F23D readiness begin":
@@ -58,7 +60,7 @@ def run():
                  "relay_tx_readiness.h","relay_authorization_contract.h","lab_relay_gate.h"):
         full="firmware/shared/relay/"+path
         assert (ROOT/full).read_text(encoding="utf-8")==run_cmd(["git","show",BASE+":"+full]),path
-    ini=(ROOT/"firmware/universal/platformio.ini").read_text()
+    ini=remove_physical((ROOT/"firmware/universal/platformio.ini").read_text())
     assert ini.split("; F23D appended profile",1)[0]==run_cmd(["git","show",BASE+":firmware/universal/platformio.ini"])
     cfg=configparser.ConfigParser(interpolation=None);cfg.read_string(ini)
     env=cfg["env:tbeam-supreme-f23d-v002-bench-candidate-build-only"]

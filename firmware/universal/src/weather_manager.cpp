@@ -1,11 +1,20 @@
+// F23D physical begin
+#include "../../shared/relay/f23d_physical_contract.h"
+// F23D physical end
 // F23D readiness begin
 #include "../../shared/relay/f23d_readiness_contract.h"
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 extern bool f23dHandleDiagnosticCommand(const char* line);
 #endif
 // F23D readiness end
 // F23D begin
-#if THESIS_F23D_CANDIDATE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_CANDIDATE == 1
+#if THESIS_F23D_CANDIDATE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
 extern bool f23dHandleRunCommand(const char* line);
 #endif
 // F23D end
@@ -602,12 +611,18 @@ void processSerialTestCommands() {
       for (uint8_t i = 0; i < testLineLength; ++i)
         if (testLine[i] >= 'a' && testLine[i] <= 'z') testLine[i] -= ('a' - 'A');
 // F23D readiness begin
-#if THESIS_F23D_READINESS_ACTIVE
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
+#if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
       if(f23dHandleDiagnosticCommand(testLine)){testLineLength=0;continue;}
 #endif
 // F23D readiness end
 // F23D begin
-#if THESIS_F23D_CANDIDATE == 1
+// F23D physical begin
+// F23D physical restore: #if THESIS_F23D_CANDIDATE == 1
+#if THESIS_F23D_CANDIDATE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+// F23D physical end
       if (f23dHandleRunCommand(testLine)) { testLineLength=0; continue; }
 #endif
 // F23D end

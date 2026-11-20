@@ -1,3 +1,19 @@
+// F23D readiness begin
+#include "../../shared/relay/f23d_readiness_contract.h"
+#if THESIS_F23D_READINESS_ACTIVE
+#include "../../shared/relay/f23d_lab_diagnostics.h"
+#include "../../shared/relay/f23d_evidence_queue.h"
+static F23DReadiness::EvidenceQueue f23dEvidenceQueue;
+static uint32_t f23dMaxWriteUs=0,f23dMaxEnqueueUs=0,f23dReportedLost=0;
+#endif
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+#include "../../shared/relay/f23d_run_evidence.h"
+static F23DReadiness::RunEvidence f23dRunEvidence;
+static int f23dLastRxRestoreRc=-999;
+static uint32_t f23dLastRxReadyAt=0;
+static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
+#endif
+// F23D readiness end
 // F23D begin
 #include "../../shared/relay/f23d_bench_contract.h"
 // F23D end
@@ -578,14 +594,39 @@ static F23DBench::Context f23dContext() {
 struct F23DBenchRadio {
   int submit(const VesselPacket& packet) {
     const auto context=f23dContext();
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+    f23dRunEvidence.reserved(packet.packetType);
+    f23dQueueRunEvidence("RESERVED",int(f23dControl.attempts()),&packet);
+    if(!f23dControl.maySubmit(packet,context))
+      f23dQueueRunEvidence("ADAPTER_REJECTED",-998,&packet);
+#endif
+// F23D readiness end
     if (!f23dControl.maySubmit(packet, context)) return -998;
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+    f23dQueueRunEvidence("RADIO_INVOKE",0,&packet);
+#endif
+// F23D readiness end
     const int rc=transmitWithIdentity(
         reinterpret_cast<const uint8_t*>(&packet),sizeof(packet));
     startReceive();
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+    if(f23dLastRxRestoreRc!=RADIOLIB_ERR_NONE)f23dControl.revoke();
+    f23dQueueRunEvidence("RADIO_RESULT",rc,&packet);
+#endif
+// F23D readiness end
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE != 1
+// F23D readiness end
     Serial.printf("[F23D-TX] ms=%lu origin=%lu event=%lu kind=%u hop=%u attempt=%u rc=%d AUTH=UNVERIFIED FAR_END=UNVERIFIED\n",
         (unsigned long)millis(),(unsigned long)packet.originNodeId,
         (unsigned long)packet.sequenceNumber,unsigned(packet.packetType),
         unsigned(packet.hopCount),unsigned(f23dControl.attempts()),rc);
+// F23D readiness begin
+#endif
+// F23D readiness end
     return rc;
   }
 };
@@ -594,10 +635,22 @@ static F23DBenchRadio f23dRadio;
 bool f23dHandleRunCommand(const char* line) {
   const auto result=f23dControl.command(line,f23dContext(),millis(),esp_random() | 1U);
   if (result==F23DBench::Control::NotCommand) return false;
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+  f23dRunEvidence.command(line,result,millis());
+  f23dQueueRunEvidence(F23DReadiness::RunEvidence::controlName(result),int(result),nullptr);
+#endif
+// F23D readiness end
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE != 1
+// F23D readiness end
   Serial.printf("[F23D-RUN] result=%u event=%lu challenge=%lu armed=%u attempts=%u PHYSICAL_PERMISSION=UNAVAILABLE AUTH=UNVERIFIED\n",
       unsigned(result),(unsigned long)f23dControl.event(),
       (unsigned long)f23dControl.challenge(),unsigned(f23dControl.armed()),
       unsigned(f23dControl.attempts()));
+// F23D readiness begin
+#endif
+// F23D readiness end
   return true;
 }
 #endif
@@ -639,6 +692,106 @@ static uint32_t traceTxTotalDurationMs = 0;
 static uint32_t traceRxTelemetry = 0;
 static void printPeerReceiveDiagnostics();
 
+// F23D readiness begin
+#if THESIS_F23D_READINESS_ACTIVE
+void f23dPollEvidence() {
+  struct Writer {
+    int availableForWrite(){return Serial.availableForWrite();}
+    size_t write(const uint8_t* data,size_t length){return Serial.write(data,length);}
+  } writer;
+  const uint32_t began=micros();
+  (void)f23dEvidenceQueue.drain(writer);
+  const uint32_t elapsed=micros()-began;
+  if(elapsed>f23dMaxWriteUs)f23dMaxWriteUs=elapsed;
+  if(f23dEvidenceQueue.lost()!=f23dReportedLost &&
+      f23dEvidenceQueue.size()<F23DReadiness::EvidenceQueue::kDepth) {
+    char row[128];
+    snprintf(row,sizeof(row),"[F23D-EVIDENCE-LOSS] lost=%lu peak=%u write_max_us=%lu RUN_EVIDENCE_INVALID=1",
+        (unsigned long)f23dEvidenceQueue.lost(),unsigned(f23dEvidenceQueue.peak()),
+        (unsigned long)f23dMaxWriteUs);
+    if(f23dEvidenceQueue.push(row))f23dReportedLost=f23dEvidenceQueue.lost();
+  }
+}
+#endif
+#if THESIS_F23D_EVENT_QUERY == 1
+// F23D query collector begin
+static F23DReadiness::EventSnapshot f23dCollectEventSnapshot() {
+  F23DReadiness::EventSnapshot s;
+  s.self=VesselIdentity::nodeId();s.provisioned=VesselIdentity::ready();
+  s.next=nextEmergencyId;s.counterAvailable=nvsReady;
+  s.active=activeEmergency;s.pending=sosPending;s.cancelPending=cancelPending;
+  s.storageSafe=nvsReady && !F05Recovery::storageBlocked;
+  s.recoveryHold=F05Recovery::recoveredCancelNeedsHold;
+  return s;
+}
+// F23D query collector end
+#endif
+#if THESIS_F23D_READINESS_ACTIVE
+// F23D query command begin
+bool f23dHandleDiagnosticCommand(const char* line) {
+#if THESIS_F23D_EVENT_QUERY == 1
+  if(!strcmp(line,"R23D NEXT")) {
+    const auto s=f23dCollectEventSnapshot();
+    char row[F23DReadiness::EvidenceQueue::kRow];
+    if(F23DReadiness::eventRow(row,sizeof(row),s,millis()))f23dEvidenceQueue.push(row);
+    return true;
+  }
+#endif
+  if(!strcmp(line,"R23D EVIDENCE")) {
+    char row[160];
+    snprintf(row,sizeof(row),"[F23D-EVIDENCE-STATS] queued=%u peak=%u lost=%lu write_max_us=%lu enqueue_max_us=%lu PHYSICAL_MEASUREMENT_REQUIRED=1",
+        unsigned(f23dEvidenceQueue.size()),unsigned(f23dEvidenceQueue.peak()),
+        (unsigned long)f23dEvidenceQueue.lost(),(unsigned long)f23dMaxWriteUs,
+        (unsigned long)f23dMaxEnqueueUs);
+    f23dEvidenceQueue.push(row);return true;
+  }
+  return false;
+}
+// F23D query command end
+#endif
+#if THESIS_F23D_RX_OBSERVER == 1
+static void f23dQueueRxEvidence(const uint8_t* bytes,size_t length,int16_t rssi,
+                               float snr,const char* validation,const char* outcome) {
+  if(!VesselIdentity::ready() || NODE_ID!=3U)return;
+  const uint32_t began=micros();
+  const int snrX10=snr>=-100.0f && snr<=100.0f?int(snr*10.0f):32767;
+  char row[F23DReadiness::EvidenceQueue::kRow];
+  if(F23DReadiness::rxRow(row,sizeof(row),NODE_ID,millis(),bytes,length,
+                         rssi,snrX10,validation,outcome))f23dEvidenceQueue.push(row);
+  const uint32_t elapsed=micros()-began;
+  if(elapsed>f23dMaxEnqueueUs)f23dMaxEnqueueUs=elapsed;
+}
+#endif
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+// F23D run row begin
+static void f23dQueueRunEvidence(const char* stage,int code,const VesselPacket* packet) {
+  const uint32_t began=micros();
+  const auto c=f23dContext();
+  const uint32_t now=millis();
+  char row[F23DReadiness::EvidenceQueue::kRow];
+  const int n=snprintf(row,sizeof(row),
+      "[F23D-RUNOBS] local=%lu ms=%lu run=%lu event=%lu stage=%s code=%d armed=%u permit=%u select_due=%lu run_due=%lu left_ms=%lu used=%u sos_left=%u cancel_left=%u kind=%u hop=%u origin=%lu packet_event=%lu canonical_fnv=%08lX rx_rc=%d rx_ready_ms=%lu challenge=%lu FAR_END=UNVERIFIED",
+      (unsigned long)c.self,(unsigned long)now,(unsigned long)f23dRunEvidence.run(),
+      (unsigned long)f23dControl.event(),stage,code,unsigned(f23dControl.armed()),
+      unsigned(c.physicalPermission),(unsigned long)f23dRunEvidence.selectDeadline(),
+      (unsigned long)f23dRunEvidence.deadline(),
+      (unsigned long)(f23dControl.armed()?f23dRunEvidence.remaining(now):0),
+      unsigned(f23dControl.attempts()),f23dRunEvidence.sosRemaining(),
+      f23dRunEvidence.cancelRemaining(),packet?unsigned(packet->packetType):0U,
+      packet?unsigned(packet->hopCount):0U,
+      packet?(unsigned long)packet->originNodeId:0UL,
+      packet?(unsigned long)packet->sequenceNumber:0UL,
+      packet?(unsigned long)F23DReadiness::fingerprint(reinterpret_cast<const uint8_t*>(packet),sizeof(*packet),true):0UL,
+      f23dLastRxRestoreRc,
+      (unsigned long)f23dLastRxReadyAt,(unsigned long)f23dControl.challenge());
+  if(n>=0 && size_t(n)<sizeof(row))f23dEvidenceQueue.push(row);
+  else f23dEvidenceQueue.push("[F23D-EVIDENCE-LOSS] FORMAT_OVERFLOW RUN_EVIDENCE_INVALID=1");
+  const uint32_t elapsed=micros()-began;
+  if(elapsed>f23dMaxEnqueueUs)f23dMaxEnqueueUs=elapsed;
+}
+// F23D run row end
+#endif
+// F23D readiness end
 // R2-B1: only authoritative NEW SOS or CANCELLED events may enter the
 // preparation queue. Invalid, stale, duplicate and unknown events cannot
 // consume the relay duplicate cache. No radio transmission happens here.
@@ -655,10 +808,23 @@ static void prepareRelayAfterSOSState(const VesselPacket& p,
 // F23D begin
 #if THESIS_F23D_CANDIDATE == 1
   const auto f23dAdmission=f23dControl.observe(p,f23dContext(),stateAccepted,millis());
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+  if(f23dAdmission==F23CLab::Admission::Accepted && p.packetType==PACKET_SOS_CANCEL)
+    f23dRunEvidence.cancellationAccepted();
+  f23dQueueRunEvidence(F23DReadiness::RunEvidence::admissionName(f23dAdmission),int(f23dAdmission),&p);
+#endif
+// F23D readiness end
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE != 1
+// F23D readiness end
   Serial.printf("[F23D-RX] ms=%lu origin=%lu event=%lu kind=%u hop=%u admission=%u PHYSICAL_TX=OFF\n",
       (unsigned long)millis(),(unsigned long)p.originNodeId,
       (unsigned long)p.sequenceNumber,unsigned(p.packetType),
       unsigned(p.hopCount),unsigned(f23dAdmission));
+// F23D readiness begin
+#endif
+// F23D readiness end
 #endif
 // F23D end
   if (!stateAccepted) {
@@ -761,7 +927,20 @@ void pollLoRaReceive() {
 // F23D begin
 #if THESIS_F23D_CANDIDATE == 1
   int f23dResult=0;
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+  const bool f23dWasArmed=f23dControl.armed();
+  if(f23dWasArmed && f23dContext().localControlBusy && f23dRunEvidence.deferralDue(millis()))
+    f23dQueueRunEvidence("LOCAL_CONTROL_DEFERRED",0,nullptr);
+#endif
+// F23D readiness end
   (void)f23dControl.dispatch(f23dContext(),millis(),f23dRadio,f23dResult);
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+  if(f23dWasArmed && !f23dControl.armed())
+    f23dQueueRunEvidence(f23dRunEvidence.remaining(millis())?"REVOKED":"EXPIRED",0,nullptr);
+#endif
+// F23D readiness end
 #endif
 // F23D end
   printPeerReceiveDiagnostics();
@@ -823,6 +1002,11 @@ void setupLoRa() {
 
 void startReceive() {
   int state = radio.startReceive();
+// F23D readiness begin
+#if THESIS_F23D_RELAY_EVIDENCE == 1
+  f23dLastRxRestoreRc=state;f23dLastRxReadyAt=millis();
+#endif
+// F23D readiness end
   if (state != RADIOLIB_ERR_NONE) {
     ++diagStartReceiveErr;
     Serial.print("[RX-A] startReceive error: ");
@@ -1174,6 +1358,11 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   const Phase516::Decision gate = Phase516::decide(buffer, length);
   if (gate == Phase516::Decision::Reject) {
     ++invalidPackets;
+// F23D readiness begin
+#if THESIS_F23D_RX_OBSERVER == 1
+    f23dQueueRxEvidence(buffer,length,rssi,snr,"BAD_FORMAT","REJECTED");
+#endif
+// F23D readiness end
     Serial.println("[RX-GATE] REJECT invalid wire format");
     return;
   }
@@ -1228,6 +1417,14 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     Serial.println("[RX-A] Invalid packet header");
     return;
   }
+// F23D readiness begin
+#if THESIS_F23D_RX_OBSERVER == 1
+  if(p.originNodeId==NODE_ID)
+    f23dQueueRxEvidence(buffer,length,rssi,snr,"SELF_ORIGIN","REJECTED");
+  else if(p.originNodeId<1 || p.originNodeId>9999)
+    f23dQueueRxEvidence(buffer,length,rssi,snr,"BAD_ORIGIN","REJECTED");
+#endif
+// F23D readiness end
   if (p.originNodeId == NODE_ID) return;
 
   if (p.originNodeId < 1 || p.originNodeId > 9999) {
@@ -1242,9 +1439,19 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     memcpy(&cancelId,p.message,4);
     memcpy(&cancelOrigin,p.message+4,4);
     if (cancelOrigin!=p.originNodeId || cancelId!=p.sequenceNumber) {
+// F23D readiness begin
+#if THESIS_F23D_RX_OBSERVER == 1
+      f23dQueueRxEvidence(buffer,length,rssi,snr,"BAD_CANCEL","REJECTED");
+#endif
+// F23D readiness end
       Serial.println("[PEER-SOS] CANCEL_MISMATCH payload; NO ACK"); prepareRelayAfterSOSState(p, false, "CANCEL_PAYLOAD"); return;
     }
     const auto result=peerSOSTable.cancel(p.originNodeId,cancelId,millis());
+// F23D readiness begin
+#if THESIS_F23D_RX_OBSERVER == 1
+    f23dQueueRxEvidence(buffer,length,rssi,snr,"LEGACY_UNAUTHENTICATED",MultiPeerSOS::name(result));
+#endif
+// F23D readiness end
     SD_EVENT(true, "cancel_rx", p.originNodeId, cancelId, (int32_t)result,
              rssi, (int16_t)(snr * 10.0f), p.latitude_e7,
              p.longitude_e7, p.flags, p.hopCount);
@@ -1268,6 +1475,11 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   }
   if (p.packetType == PACKET_SOS) {
     const auto result=peerSOSTable.receiveSOS(p.originNodeId,p.sequenceNumber,millis());
+// F23D readiness begin
+#if THESIS_F23D_RX_OBSERVER == 1
+    f23dQueueRxEvidence(buffer,length,rssi,snr,"LEGACY_UNAUTHENTICATED",MultiPeerSOS::name(result));
+#endif
+// F23D readiness end
     SD_EVENT(true, "sos_rx", p.originNodeId, p.sequenceNumber,
              (int32_t)result, rssi, (int16_t)(snr * 10.0f),
              p.latitude_e7, p.longitude_e7, p.flags, p.hopCount);

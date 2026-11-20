@@ -1,3 +1,9 @@
+// F23D readiness begin
+#include "../../shared/relay/f23d_readiness_contract.h"
+#if THESIS_F23D_READINESS_ACTIVE
+extern void f23dPollEvidence();
+#endif
+// F23D readiness end
 // F23D begin
 #include "../../shared/relay/f23d_bench_contract.h"
 // F23D end
@@ -1218,6 +1224,15 @@ void setup() {
   Serial.println("[F23D] CANDIDATE=OFFLINE RUN=DISARMED PHYSICAL_PERMISSION=UNAVAILABLE LEGACY_RELAY=OFF AUTH=UNVERIFIED FAR_END=UNVERIFIED");
 #endif
 // F23D end
+// F23D readiness begin
+#if THESIS_F23D_READINESS_ACTIVE
+  const uint32_t f23dExpectedRole=THESIS_F23D_EVENT_QUERY?1U:(THESIS_F23D_RX_OBSERVER?3U:2U);
+  Serial.printf("[F23D-READINESS] local=%lu expected=%lu role_ok=%u permission=%u OFFLINE_ONLY=1\n",
+      (unsigned long)VesselIdentity::nodeId(),(unsigned long)f23dExpectedRole,
+      unsigned(VesselIdentity::ready() && VesselIdentity::nodeId()==f23dExpectedRole),
+      unsigned(F23DBench::kPhysicalPermissionInstalled));
+#endif
+// F23D readiness end
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 
@@ -1294,6 +1309,11 @@ void loop() {
   }
   processSOSRetries();
   processCancelRetries();
+// F23D readiness begin
+#if THESIS_F23D_READINESS_ACTIVE
+  f23dPollEvidence(); // bounded nonblocking drain after operational controls
+#endif
+// F23D readiness end
 
 #if THESIS_V003_F08_INDICATOR_BENCH == 0
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1

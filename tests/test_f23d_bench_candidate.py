@@ -15,6 +15,19 @@ def run_cmd(args):
     assert r.returncode==0,r.stdout+r.stderr
     return r.stdout
 
+def remove_readiness(text):
+    result=[];inside=False
+    for line in text.splitlines(keepends=True):
+        if line.strip()=="// F23D readiness begin":
+            assert not inside
+            inside=True
+        elif line.strip()=="// F23D readiness end":
+            assert inside
+            inside=False
+        elif not inside: result.append(line)
+    assert not inside
+    return "".join(result)
+
 def strip(text):
     out=[];inside=False
     for line in text.splitlines(keepends=True):
@@ -34,6 +47,9 @@ def run():
                  "firmware/universal/src/weather_manager.cpp"):
         before=run_cmd(["git","show",BASE+":"+path])
         after=(ROOT/path).read_text(encoding="utf-8")
+        accepted=run_cmd(["git","show","1fc20613ffb8457c2b1552fdcc62379c9176b638:"+path])
+        assert remove_readiness(after)==accepted,path+": unguarded readiness edits"
+        after=remove_readiness(after)
         assert strip(after)==before,path
     for folder in ("firmware/shared/communication","firmware/shared/storage","firmware/shared/hardware"):
         assert not run_cmd(["git","diff",BASE,"--",folder]).strip(),folder

@@ -25,6 +25,19 @@ def execute(command):
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
 
+def remove_readiness(text):
+    result=[];inside=False
+    for line in text.splitlines(keepends=True):
+        if line.strip()=="// F23D readiness begin":
+            assert not inside
+            inside=True
+        elif line.strip()=="// F23D readiness end":
+            assert inside
+            inside=False
+        elif not inside: result.append(line)
+    assert not inside
+    return "".join(result)
+
 def remove_f23d(text):
     result=[];inside=False
     for line in text.splitlines(keepends=True):
@@ -62,6 +75,9 @@ def run():
         path = "firmware/universal/src/" + name
         before = execute(["git", "show", BASELINE + ":" + path])
         after = (ROOT / path).read_text(encoding="utf-8")
+        accepted = execute(["git","show","1fc20613ffb8457c2b1552fdcc62379c9176b638:"+path])
+        assert remove_readiness(after)==accepted, path+": unguarded readiness edits"
+        after=remove_readiness(after)
         f23c = execute(["git", "show", "0463ebc158938909c84d2991e6e3435dbb6dfbf6:" + path])
         assert remove_f23d(after) == f23c, path + ": unguarded F23D edits"
         assert remove_additions(remove_f23d(after)) == before, path + ": existing source changed"

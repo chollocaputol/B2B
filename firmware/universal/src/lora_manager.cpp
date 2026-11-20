@@ -1,3 +1,6 @@
+// F23C Phase 1 begin
+#include "../../shared/relay/f23c_lab_contract.h"
+// F23C Phase 1 end
 #include "../../shared/hardware/tbeam_pins.h"
 #include "../../shared/hardware/vessel_identity.h"
 #include "../../shared/relay/relay_policy.h"
@@ -546,6 +549,13 @@ static Relay52::DryRunScheduler<VesselPacket> relayDryRun;
 static RelayPolicy::Cache relaySeen;
 // R2-B3: local, unauthenticated neighbor-ACK evidence only.
 static RelayReceipt::Tracker relayReceipt;
+// F23C Phase 1 begin
+#if THESIS_F23C_BUILD_ONLY == 1
+#include "../../shared/relay/f23c_lab_transaction.h"
+static F23CLab::Transaction f23cTransaction; // never armed by firmware
+static const F23CLab::DisabledRadio f23cRadio;
+#endif
+// F23C Phase 1 end
 static ReceivedSOSView incomingBSOS = {};
 size_t getSOSRecordCount() {return peerSOSTable.count();}
 size_t getActiveSOSCount() {return peerSOSTable.activeCount();}
@@ -588,6 +598,14 @@ static void printPeerReceiveDiagnostics();
 // consume the relay duplicate cache. No radio transmission happens here.
 static void prepareRelayAfterSOSState(const VesselPacket& p,
                                       bool stateAccepted, const char* stateLabel) {
+// F23C Phase 1 begin
+#if THESIS_F23C_BUILD_ONLY == 1
+  const auto modelAdmission = f23cTransaction.offer(
+      p, VesselIdentity::ready(), NODE_ID, stateAccepted, millis());
+  Serial.printf("[F23C-MODEL] admission=%u REAL_RELAY_TX=OFF ARMED=0\n",
+                unsigned(modelAdmission));
+#endif
+// F23C Phase 1 end
   if (!stateAccepted) {
     Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u state=%s result=STATE_REJECTED TX=OFF\n",
       (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
@@ -674,6 +692,17 @@ void pollLoRaReceive() {
 #endif
     }
   }
+// F23C Phase 1 begin
+#if THESIS_F23C_BUILD_ONLY == 1
+  VesselPacket modelPrepared{};
+  if (f23cTransaction.poll(millis(), VesselIdentity::ready(), NODE_ID,
+                          activeEmergency || sosPending || cancelPending,
+                          modelPrepared) == F23CLab::Output::Prepared) {
+    // DisabledRadio cannot transmit, even if a future caller arms the model.
+    (void)f23cRadio.submit(modelPrepared);
+  }
+#endif
+// F23C Phase 1 end
   printPeerReceiveDiagnostics();
 }
 

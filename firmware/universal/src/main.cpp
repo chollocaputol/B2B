@@ -1,3 +1,6 @@
+// F23C Phase 1 begin
+#include "../../shared/relay/f23c_lab_contract.h"
+// F23C Phase 1 end
 #ifndef THESIS_LAB_RELAY_TX
 #define THESIS_LAB_RELAY_TX 0
 #endif
@@ -1202,6 +1205,11 @@ void setup() {
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
   Serial.println("[F19R3] DEFAULT=SOS_ARMED DEV7=SOS_ONLY DEV8=SD_RECORDING RESEARCH=CONTINUOUS_ONLY HISTORY=READ_ONLY");
 #endif
+// F23C Phase 1 begin
+#if THESIS_F23C_BUILD_ONLY == 1
+  Serial.println("[F23C] BUILD_ONLY REAL_RELAY_TX=OFF MODEL=DISARMED AUTH=UNVERIFIED FAR_END=UNVERIFIED");
+#endif
+// F23C Phase 1 end
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 

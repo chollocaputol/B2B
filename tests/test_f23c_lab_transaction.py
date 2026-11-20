@@ -25,6 +25,19 @@ def execute(command):
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
 
+def remove_f23d(text):
+    result=[];inside=False
+    for line in text.splitlines(keepends=True):
+        if line.strip()=="// F23D begin":
+            assert not inside
+            inside=True
+        elif line.strip()=="// F23D end":
+            assert inside
+            inside=False
+        elif not inside: result.append(line)
+    assert not inside
+    return "".join(result)
+
 def remove_additions(text):
     lines = text.splitlines(keepends=True)
     result = []
@@ -49,7 +62,9 @@ def run():
         path = "firmware/universal/src/" + name
         before = execute(["git", "show", BASELINE + ":" + path])
         after = (ROOT / path).read_text(encoding="utf-8")
-        assert remove_additions(after) == before, path + ": existing source changed"
+        f23c = execute(["git", "show", "0463ebc158938909c84d2991e6e3435dbb6dfbf6:" + path])
+        assert remove_f23d(after) == f23c, path + ": unguarded F23D edits"
+        assert remove_additions(remove_f23d(after)) == before, path + ": existing source changed"
     ini_path = "firmware/universal/platformio.ini"
     before = execute(["git", "show", BASELINE + ":" + ini_path])
     ini = (ROOT / ini_path).read_text(encoding="utf-8")

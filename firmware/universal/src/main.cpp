@@ -1,3 +1,6 @@
+// F23D begin
+#include "../../shared/relay/f23d_bench_contract.h"
+// F23D end
 // F23C Phase 1 begin
 #include "../../shared/relay/f23c_lab_contract.h"
 // F23C Phase 1 end
@@ -1210,6 +1213,11 @@ void setup() {
   Serial.println("[F23C] BUILD_ONLY REAL_RELAY_TX=OFF MODEL=DISARMED AUTH=UNVERIFIED FAR_END=UNVERIFIED");
 #endif
 // F23C Phase 1 end
+// F23D begin
+#if THESIS_F23D_CANDIDATE == 1
+  Serial.println("[F23D] CANDIDATE=OFFLINE RUN=DISARMED PHYSICAL_PERMISSION=UNAVAILABLE LEGACY_RELAY=OFF AUTH=UNVERIFIED FAR_END=UNVERIFIED");
+#endif
+// F23D end
   Serial.println("[TEST] Type TEST ALL, TEST NORMAL, TEST FRONT, TEST SQUALL, TEST BOTH, TEST CALIB, TEST Z, or TEST HELP");
 }
 

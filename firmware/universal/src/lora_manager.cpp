@@ -1,3 +1,6 @@
+// F23D begin
+#include "../../shared/relay/f23d_bench_contract.h"
+// F23D end
 // F23C Phase 1 begin
 #include "../../shared/relay/f23c_lab_contract.h"
 // F23C Phase 1 end
@@ -556,6 +559,49 @@ static F23CLab::Transaction f23cTransaction; // never armed by firmware
 static const F23CLab::DisabledRadio f23cRadio;
 #endif
 // F23C Phase 1 end
+// F23D begin
+#if THESIS_F23D_CANDIDATE == 1
+#include "../../shared/relay/f23d_run_control.h"
+static F23DBench::RunControl f23dControl;
+static F23DBench::Context f23dContext() {
+  F23DBench::Context c;
+  c.identityReady=VesselIdentity::ready();
+  c.self=NODE_ID;
+  c.physicalPermission=F23DBench::kPhysicalPermissionInstalled;
+  c.recoverySafe=nvsReady && !F05Recovery::storageBlocked &&
+                 !F05Recovery::recoveredCancelNeedsHold;
+  c.localControlBusy=activeEmergency || sosPending || cancelPending ||
+                    macCadScanActive || digitalRead(LORA_DIO1)==HIGH;
+  return c;
+}
+// F23D adapter body begin
+struct F23DBenchRadio {
+  int submit(const VesselPacket& packet) {
+    const auto context=f23dContext();
+    if (!f23dControl.maySubmit(packet, context)) return -998;
+    const int rc=transmitWithIdentity(
+        reinterpret_cast<const uint8_t*>(&packet),sizeof(packet));
+    startReceive();
+    Serial.printf("[F23D-TX] ms=%lu origin=%lu event=%lu kind=%u hop=%u attempt=%u rc=%d AUTH=UNVERIFIED FAR_END=UNVERIFIED\n",
+        (unsigned long)millis(),(unsigned long)packet.originNodeId,
+        (unsigned long)packet.sequenceNumber,unsigned(packet.packetType),
+        unsigned(packet.hopCount),unsigned(f23dControl.attempts()),rc);
+    return rc;
+  }
+};
+// F23D adapter body end
+static F23DBenchRadio f23dRadio;
+bool f23dHandleRunCommand(const char* line) {
+  const auto result=f23dControl.command(line,f23dContext(),millis(),esp_random() | 1U);
+  if (result==F23DBench::Control::NotCommand) return false;
+  Serial.printf("[F23D-RUN] result=%u event=%lu challenge=%lu armed=%u attempts=%u PHYSICAL_PERMISSION=UNAVAILABLE AUTH=UNVERIFIED\n",
+      unsigned(result),(unsigned long)f23dControl.event(),
+      (unsigned long)f23dControl.challenge(),unsigned(f23dControl.armed()),
+      unsigned(f23dControl.attempts()));
+  return true;
+}
+#endif
+// F23D end
 static ReceivedSOSView incomingBSOS = {};
 size_t getSOSRecordCount() {return peerSOSTable.count();}
 size_t getActiveSOSCount() {return peerSOSTable.activeCount();}
@@ -606,6 +652,15 @@ static void prepareRelayAfterSOSState(const VesselPacket& p,
                 unsigned(modelAdmission));
 #endif
 // F23C Phase 1 end
+// F23D begin
+#if THESIS_F23D_CANDIDATE == 1
+  const auto f23dAdmission=f23dControl.observe(p,f23dContext(),stateAccepted,millis());
+  Serial.printf("[F23D-RX] ms=%lu origin=%lu event=%lu kind=%u hop=%u admission=%u PHYSICAL_TX=OFF\n",
+      (unsigned long)millis(),(unsigned long)p.originNodeId,
+      (unsigned long)p.sequenceNumber,unsigned(p.packetType),
+      unsigned(p.hopCount),unsigned(f23dAdmission));
+#endif
+// F23D end
   if (!stateAccepted) {
     Serial.printf("[RELAY52] origin=0x%lX event=%lu type=%u state=%s result=STATE_REJECTED TX=OFF\n",
       (unsigned long)p.originNodeId, (unsigned long)p.sequenceNumber,
@@ -703,6 +758,12 @@ void pollLoRaReceive() {
   }
 #endif
 // F23C Phase 1 end
+// F23D begin
+#if THESIS_F23D_CANDIDATE == 1
+  int f23dResult=0;
+  (void)f23dControl.dispatch(f23dContext(),millis(),f23dRadio,f23dResult);
+#endif
+// F23D end
   printPeerReceiveDiagnostics();
 }
 

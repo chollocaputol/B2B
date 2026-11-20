@@ -1,3 +1,8 @@
+// F23D begin
+#if THESIS_F23D_CANDIDATE == 1
+extern bool f23dHandleRunCommand(const char* line);
+#endif
+// F23D end
 #include "weather_manager.h"
 #include "lora_manager.h"
 #include <Wire.h>
@@ -590,6 +595,11 @@ void processSerialTestCommands() {
       testLine[testLineLength] = '\0';
       for (uint8_t i = 0; i < testLineLength; ++i)
         if (testLine[i] >= 'a' && testLine[i] <= 'z') testLine[i] -= ('a' - 'A');
+// F23D begin
+#if THESIS_F23D_CANDIDATE == 1
+      if (f23dHandleRunCommand(testLine)) { testLineLength=0; continue; }
+#endif
+// F23D end
       if (strcmp(testLine, "CANCEL SOS") == 0) {
         cancelActiveSOS();
 #if THESIS_V003_F08_INDICATOR_BENCH == 1

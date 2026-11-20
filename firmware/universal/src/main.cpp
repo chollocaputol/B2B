@@ -9,6 +9,28 @@
 #include <Arduino.h>
 #include "sos_controls.h"
 #include "physical_indicators.h"
+// USB-only fleet enrollment; excluded from every accepted V003 profile.
+#ifndef THESIS_FLEET_USB_ENROLLMENT
+#define THESIS_FLEET_USB_ENROLLMENT 0
+#endif
+#if THESIS_FLEET_USB_ENROLLMENT != 0 && THESIS_FLEET_USB_ENROLLMENT != 1
+#error "Invalid fleet USB enrollment flag"
+#endif
+#ifndef THESIS_F22_FLEET_OPERATIONAL
+#define THESIS_F22_FLEET_OPERATIONAL 0
+#endif
+#if THESIS_F22_FLEET_OPERATIONAL != 0 && THESIS_F22_FLEET_OPERATIONAL != 1
+#error "Invalid F22 fleet operational flag"
+#endif
+#if THESIS_F22_FLEET_OPERATIONAL == 1 && (THESIS_V003_F09_SHARED_SENSOR_BUS != 1 ||     THESIS_V003_F15_SD_PILOT_ARMED != 1 || THESIS_SD_LOGGER != 1 ||     THESIS_V003_F13_LIVE_OUTPUTS != 0 || THESIS_LAB_RELAY_TX != 0)
+#error "Fleet operational build needs V003 sensors, sandbox SD, radio relay OFF and GPIO outputs OFF"
+#endif
+#if THESIS_FLEET_USB_ENROLLMENT == 1
+#if THESIS_LAB_RELAY_TX != 0 ||     (THESIS_F22_FLEET_OPERATIONAL != 1 && THESIS_F22R3A_STANDARD_FLEET_PREVIEW != 1)
+#error "Fleet enrollment needs the standardized V003 firmware and relay OFF"
+#endif
+#include "../../shared/hardware/fleet_usb_enrollment.h"
+#endif
 // Isolated Vessel-003 preflight. Never changes normal firmware behavior.
 #ifndef THESIS_V003_F08_INDICATOR_BENCH
 #define THESIS_V003_F08_INDICATOR_BENCH 0
@@ -948,6 +970,11 @@ void setup() {
   VesselIdentity::load();
   f09SensorAuthorized = V003F09SharedSensorBus::authorized(
       VesselIdentity::ready(), VesselIdentity::nodeId());
+#if THESIS_F22_FLEET_OPERATIONAL == 1
+  // Override the legacy ID-3 gate only in the new common-fleet profile.
+  f09SensorAuthorized = F22UniversalCapability::validIdentity(
+      VesselIdentity::ready(), VesselIdentity::nodeId());
+#endif
 #if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
   // Override the legacy ID3-only rule in the separate BUILD-ONLY preview.
   // Operator MUST confirm physical SDA21/SCL48 standard wiring before flashing.
@@ -1068,7 +1095,16 @@ void setup() {
     const bool f15SdReady = ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
     Serial.printf("[F15-SD] V003_AUTHORIZED; sandbox_mount_ok=%u\n",
                   unsigned(f15SdReady));
-  } else {
+  }
+#if THESIS_F22_FLEET_OPERATIONAL == 1
+  else if (f09SensorAuthorized && VesselIdentity::ready() &&
+           F22UniversalCapability::validIdentity(true,VesselIdentity::nodeId())) {
+    const bool f15SdReady = ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
+    Serial.printf("[F15-SD] FLEET_AUTHORIZED; sandbox_mount_ok=%u\n",
+                  unsigned(f15SdReady));
+  }
+#endif
+  else {
     Serial.println("[F15-SD] BLOCKED: Vessel-003 sensor/identity authorization required");
   }
 #else
@@ -1098,8 +1134,13 @@ void setup() {
 
   lastWeatherTime = millis();
 #if THESIS_V003_F12_INDICATOR_PREVIEW == 1
+#if THESIS_F22_FLEET_OPERATIONAL == 1
+  f12IndicatorPreview.begin(f09SensorAuthorized &&
+      F22UniversalCapability::validIdentity(VesselIdentity::ready(),VesselIdentity::nodeId()));
+#else
   f12IndicatorPreview.begin(f09SensorAuthorized &&
                             VesselIdentity::ready() && VesselIdentity::nodeId() == 3U);
+#endif
   Serial.printf("[F12-PREVIEW] id=%lu authorized=%u GPIO_WRITES=0 "
                 "micro=EXPERIMENTAL; weather/SOS routing VIRTUAL_ONLY\n",
                 (unsigned long)VesselIdentity::nodeId(),
@@ -1110,8 +1151,14 @@ void setup() {
   // software-only; physical outputs need a dedicated explicit LIVE profile.
   f13RailEnableBitCached = pmu.isEnableBLDO2();
   f13LastRailPollMs = millis();
+#if THESIS_F22_FLEET_OPERATIONAL == 1
+  f13Indicators.begin(f09SensorAuthorized &&
+      F22UniversalCapability::validIdentity(VesselIdentity::ready(),VesselIdentity::nodeId()),
+      f13RailEnableBitCached);
+#else
   f13Indicators.begin(f09SensorAuthorized && VesselIdentity::ready() &&
                       VesselIdentity::nodeId() == 3U, f13RailEnableBitCached);
+#endif
   Serial.printf("[F13-DRIVER] id=%lu authorized=%u BLDO2_ENABLE_BIT=%u "
                 "GPIO_OUTPUTS=%s micro=VIRTUAL_ONLY; BENCH_ONLY\n",
                 (unsigned long)VesselIdentity::nodeId(),
@@ -1181,12 +1228,24 @@ void loop() {
 #if THESIS_V003_F19_DUAL_DISPLAY == 1 && THESIS_V003_F15_SD_PILOT_ARMED == 1
   f19r3CaptureResearch30s();
 #endif
+#if THESIS_FLEET_USB_ENROLLMENT == 1
+  // USB-only: consumes FLEET lines without taking TEST/CANCEL SOS/SD commands.
+  const bool fleetSerialConsumed = FleetUSBEnrollment::poll();
+#endif
 #if THESIS_SD_LOGGER == 1
   const bool sdCommandInProgress = pollSDExportCommand();
   ThesisSDLogger::pollExport();
+#if THESIS_FLEET_USB_ENROLLMENT == 1
+  if (!sdCommandInProgress && !fleetSerialConsumed) processSerialTestCommands();
+#else
   if (!sdCommandInProgress) processSerialTestCommands();
+#endif
+#else
+#if THESIS_FLEET_USB_ENROLLMENT == 1
+  if (!fleetSerialConsumed) processSerialTestCommands();
 #else
   processSerialTestCommands();
+#endif
 #endif
   const auto action = SOSControls::pollAction(hasActiveLocalSOS());
   if (action == SOSControls::ButtonAction::StartSOS) {

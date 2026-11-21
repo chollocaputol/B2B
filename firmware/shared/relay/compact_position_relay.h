@@ -61,12 +61,21 @@ public:
   }
   // Caller must separately verify identity, authorization, channel/timing
   // safety and SOS/CANCEL priority before invoking any radio adapter.
-  bool take(Frame& frame, bool emergencyPending) {
+  bool peek(Frame& frame, bool emergencyPending) const {
     if (emergencyPending || !count_) return false;
     frame = queue_[head_];
+    return true;
+  }
+  // Reserve denial is not an acknowledgment: keep the packet queued.
+  bool acknowledge() {
+    if (!count_) return false;
     head_ = (head_+1)%kQueueSize;
     --count_;
     return true;
+  }
+  bool take(Frame& frame, bool emergencyPending) {
+    if (!peek(frame, emergencyPending)) return false;
+    return acknowledge();
   }
   size_t pending() const { return count_; }
 private:

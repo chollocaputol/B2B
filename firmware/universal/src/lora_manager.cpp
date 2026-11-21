@@ -906,18 +906,35 @@ void multihopDevPollPrepared(){
       cancelPending,relayDryRun.size()>0,macCadScanActive,
       digitalRead(LORA_DIO1)==HIGH))return;
   CompactPositionRelay::Frame f{};
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  // In the physical V002 bench, a busy radio must not consume a packet.
+  if(multihopBenchSession.live(millis()) && multihopRadioBusy())return;
+  if(!multihopDevQueue.peek(f,false))return;
+#else
   if(!multihopDevQueue.take(f,false))return;
+#endif
   VesselPacket p{};
   if(!CompactPositionRelay::toHopOneTelemetry(f,NODE_ID,p)){
+#if THESIS_MULTIHOP_BENCH_RF == 1
+    (void)multihopDevQueue.acknowledge(); // terminal invalid conversion
+#endif
     Serial.println("[MULTIHOP-DEV] DROP=INVALID_CONVERSION TX=OFF");return;
   }
 #if THESIS_MULTIHOP_BENCH_RF == 1
   if(multihopBenchSession.live(millis())) {
     const int rc=multihopBenchTransmit(p);
+    if(rc==-996){
+      // Transmitter reserve declined: retain the item and retry on next poll.
+      Serial.printf("[MULTIHOP-BENCH] POSITION_DEFERRED seq=%lu rc=%d\n",
+                    (unsigned long)p.sequenceNumber,rc);
+      return;
+    }
+    (void)multihopDevQueue.acknowledge();
     if(rc<0)Serial.printf("[MULTIHOP-BENCH] POSITION_UNSENT seq=%lu rc=%d\n",
                           (unsigned long)p.sequenceNumber,rc);
     return;
   }
+  (void)multihopDevQueue.acknowledge(); // PREP preview still consumes
 #endif
   Serial.printf("[MULTIHOP-DEV] PREPARED origin=%lu relay=2 seq=%lu hop=%u bytes=%u TX=OFF\n",
     (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,
@@ -1212,9 +1229,12 @@ void pollLoRaReceive() {
   VesselPacket prepared;
 #if THESIS_MULTIHOP_BENCH_RF == 1
   if(!activeEmergency && !sosPending && !cancelPending &&
-     relayDryRun.poll(millis(),prepared)) {
+     relayDryRun.peekReady(millis(),prepared)) {
 #else
   if (relayDryRun.poll(millis(), prepared)) {
+#endif
+#if THESIS_MULTIHOP_BENCH_RF == 1
+    bool benchDeferred = false;
 #endif
     const Relay52::Preflight gate = Relay52::preflightPrepared(prepared, peerSOSTable);
     if (gate != Relay52::Preflight::Ready) {
@@ -1247,8 +1267,12 @@ void pollLoRaReceive() {
       if(multihopBenchSession.live(millis()) &&
          ThesisLabRelay::permits(prepared,NODE_ID)) {
         const int rc=multihopBenchTransmit(prepared);
-        if(rc<0)Serial.printf("[MULTIHOP-BENCH] SOS_CANCEL_UNSENT event=%lu rc=%d\n",
-                                (unsigned long)prepared.sequenceNumber,rc);
+        if(rc==-996){
+          benchDeferred=true; // no RF attempt: retain staged urgent event
+          Serial.printf("[MULTIHOP-BENCH] SOS_CANCEL_DEFERRED event=%lu rc=%d\n",
+                        (unsigned long)prepared.sequenceNumber,rc);
+        }else if(rc<0)Serial.printf("[MULTIHOP-BENCH] SOS_CANCEL_UNSENT event=%lu rc=%d\n",
+                                   (unsigned long)prepared.sequenceNumber,rc);
       } else {
         Serial.printf("[MULTIHOP-BENCH] SOS_CANCEL_PREVIEW event=%lu type=%u TX=OFF\n",
             (unsigned long)prepared.sequenceNumber,unsigned(prepared.packetType));
@@ -1262,6 +1286,9 @@ void pollLoRaReceive() {
           RelayContract::evidenceUnavailable(NODE_ID, prepared.originNodeId))));
 #endif
     }
+#if THESIS_MULTIHOP_BENCH_RF == 1
+    if(!benchDeferred)(void)relayDryRun.acknowledgePrepared();
+#endif
   }
 // F23C Phase 1 begin
 #if THESIS_F23C_BUILD_ONLY == 1

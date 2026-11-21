@@ -21,6 +21,8 @@ int main() {
   assert(q.pending()==1);
   assert(!q.take(f,true)); // emergency first
   assert(q.pending()==1);
+  assert(q.peek(f,false)); // queue head is not consumed by a radio-busy defer
+  assert(q.pending()==1);
   assert(q.take(f,false));
   assert(q.pending()==0);
   assert(!memcmp(f.bytes,b,25)); // immutable on-air bytes

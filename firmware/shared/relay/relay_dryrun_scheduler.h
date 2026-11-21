@@ -19,8 +19,9 @@ public:
     return queue_.receive(p, self);
   }
 
-  // Single-slot time gate, rollover safe. Nothing is transmitted here.
-  bool poll(uint32_t nowMs, Packet& prepared) {
+  // A prepared event is retained until an explicit consume decision.
+  // peekReady does not grant RF; the operator/identity/radio gates still apply.
+  bool peekReady(uint32_t nowMs, Packet& prepared) {
     if (!staged_) {
       if (!queue_.pop(stagedPacket_)) return false;
       readyAtMs_ = nowMs + kDryRunDelayMs;
@@ -28,8 +29,17 @@ public:
     }
     if (static_cast<int32_t>(nowMs - readyAtMs_) < 0) return false;
     prepared = stagedPacket_;
+    return true;
+  }
+  bool acknowledgePrepared() {
+    if (!staged_) return false;
     staged_ = false;
     return true;
+  }
+  // Existing non-bench profiles keep their original one-shot semantics.
+  bool poll(uint32_t nowMs, Packet& prepared) {
+    if (!peekReady(nowMs, prepared)) return false;
+    return acknowledgePrepared();
   }
 
   size_t size() const { return queue_.size() + (staged_ ? 1U : 0U); }

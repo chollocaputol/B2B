@@ -18,7 +18,11 @@ assert 'V003F21R4UI::kHomeLatitude' in render and 'V003F21R4UI::kHomeLongitude' 
 assert 'gps.location.age()' in render
 # F21R4.1 portrait HOME: remove boat glyph, enlarge battery to 6x10,
 # preserve 2px battery-label gap, and leave other pictogram headers intact.
-assert 'if(strcmp(title,"V003")==0)oledF21P(3,10,title);' in render
+assert 'if(vesselHome)oledF21P(3,10,title);' in render
+assert 'FleetHomeTitle::shortTitle(vesselId,vesselReady' in render
+assert 'FleetHomeTitle::landscapeTitle(' in render
+assert render.count('f21PhtClock.phtText(millis(),b,sizeof(b))') == 2
+assert 'GnssPhtClock::Tracker f21PhtClock' in m
 assert 'else{oledF21Icon(oledF21HeaderIcon(title),2,1);oledF21P(13,10,title);}' in render
 assert 'portrait?u8g2_font_6x10_tf:u8g2_font_5x8_tf' in render
 assert 'oledF21Icon(F21Icon::Battery,26,2)' in render

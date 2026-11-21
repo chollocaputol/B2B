@@ -28,6 +28,7 @@ extern void f23dPollEvidence();
 #include "../../shared/hardware/oled_button_debounce.h"
 #include "../../shared/hardware/tbeam_hardware_service.h"
 #include "../../shared/hardware/gps_service.h"
+#include "../../shared/hardware/gnss_pht_clock.h"
 #include <Arduino.h>
 #include "sos_controls.h"
 #ifndef THESIS_MULTIHOP_DEV_TEST
@@ -1791,6 +1792,9 @@ bool detectOLED() {
 // ============================================================
 // GPS
 // ============================================================
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+static GnssPhtClock::Tracker f21PhtClock;
+#endif
 void setupGPS() {
   GPSService::begin(GPSSerial, "A");
 }
@@ -1798,6 +1802,20 @@ void setupGPS() {
 void updateGPS() {
   gpsHasFix = GPSService::poll(GPSSerial, gps, latitude, longitude);
   if (gpsHasFix) haveLastKnownPosition = true;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  // A stationary startup UTC 00:00 is not reliable synchronized GNSS time.
+  GnssPhtClock::Utc observed{};
+  observed.year=static_cast<uint16_t>(gps.date.year());
+  observed.month=static_cast<uint8_t>(gps.date.month());
+  observed.day=static_cast<uint8_t>(gps.date.day());
+  observed.hour=static_cast<uint8_t>(gps.time.hour());
+  observed.minute=static_cast<uint8_t>(gps.time.minute());
+  observed.second=static_cast<uint8_t>(gps.time.second());
+  observed.fresh=gps.date.isValid() && gps.time.isValid() &&
+    gps.date.age()<=GnssPhtClock::kMaxFreshMs &&
+    gps.time.age()<=GnssPhtClock::kMaxFreshMs;
+  f21PhtClock.observe(observed,millis());
+#endif
 }
 
 void printGPSStatus() {
@@ -2103,12 +2121,10 @@ void oledF19GPSPage() {
              (unsigned long)VesselIdentity::nodeId());
   else strcpy(line,"V--- BAT:-- OP1/4");
   u8g2.drawStr(0,9,line);
-  // GNSS UTC date/time must be fresh; only time-of-day converted to PHT (+8).
-  if (gps.date.isValid() && gps.time.isValid() &&
-      gps.date.age() <= 10000UL && gps.time.age() <= 10000UL)
-    snprintf(line,sizeof(line),"TIME:%02u:%02u PHT",
-        unsigned((gps.time.hour()+8U)%24U),unsigned(gps.time.minute()));
-  else strcpy(line,"TIME: --:-- NO SYNC");
+  // Apply the same GNSS trust gate to the F19 fallback screen.
+  char pht[8];f21PhtClock.phtText(millis(),pht,sizeof(pht));
+  if(strcmp(pht,"--:--")==0)strcpy(line,"TIME: --:-- NO SYNC");
+  else snprintf(line,sizeof(line),"TIME:%s PHT",pht);
   u8g2.drawStr(0,19,line);
   char uptime[40]; formatUptime(uptime,sizeof(uptime));
   snprintf(line,sizeof(line),"UP:%.17s",uptime);
@@ -2451,11 +2467,8 @@ void oledF21PortraitGPSPage(){
   oledF21BatteryLabel(38,11,true);u8g2.setDrawColor(1);
   u8g2.drawFrame(1,16,62,35);
   u8g2.setFont(u8g2_font_5x8_tf);oledF21P(5,26,"TIME / PHT");
-  const bool utcFresh=gps.date.isValid()&&gps.time.isValid()&&
-    gps.date.age()<=10000UL&&gps.time.age()<=10000UL;
-  if(utcFresh)snprintf(b,sizeof(b),"%02u:%02u",unsigned((gps.time.hour()+8U)%24U),
-                       unsigned(gps.time.minute()));
-  else strcpy(b,"--:--");
+  // Display valid advancing GNSS time only; never invent a startup clock.
+  f21PhtClock.phtText(millis(),b,sizeof(b));
   u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(10,45,b);
   u8g2.setFont(u8g2_font_5x8_tf);
   u8g2.drawHLine(2,55,60);
@@ -2481,11 +2494,8 @@ void oledF21LandscapeGPSPage(){
   oledF21BatteryLabel(104,10,false);u8g2.setDrawColor(1);
   u8g2.drawFrame(1,15,62,39);u8g2.drawFrame(66,15,61,39);
   u8g2.setFont(u8g2_font_5x8_tf);oledF21P(6,23,"TIME PHT");
-  const bool utcFresh=gps.date.isValid()&&gps.time.isValid()&&
-    gps.date.age()<=10000UL&&gps.time.age()<=10000UL;
-  if(utcFresh)snprintf(b,sizeof(b),"%02u:%02u",unsigned((gps.time.hour()+8U)%24U),
-                       unsigned(gps.time.minute()));
-  else strcpy(b,"--:--");
+  // Display valid advancing GNSS time only; never invent a startup clock.
+  f21PhtClock.phtText(millis(),b,sizeof(b));
   u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(6,41,b);
   u8g2.setFont(u8g2_font_5x8_tf);
   oledF21HomeLabel(b,sizeof(b));

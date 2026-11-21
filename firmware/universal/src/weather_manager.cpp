@@ -1,3 +1,6 @@
+// F23D SD begin
+#include "../../shared/relay/f23d_sd_capture.h"
+// F23D SD end
 // F23D physical begin
 #include "../../shared/relay/f23d_physical_contract.h"
 // F23D physical end
@@ -615,6 +618,11 @@ void processSerialTestCommands() {
 // F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
 #if THESIS_F23D_READINESS_ACTIVE || THESIS_F23D_PHYSICAL_CANDIDATE == 1
 // F23D physical end
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+      if(thesisF23dSDCommand(testLine)){testLineLength=0;continue;}
+#endif
+// F23D SD end
       if(f23dHandleDiagnosticCommand(testLine)){testLineLength=0;continue;}
 #endif
 // F23D readiness end

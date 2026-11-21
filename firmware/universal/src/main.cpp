@@ -1,3 +1,6 @@
+// F23D SD begin
+#include "../../shared/relay/f23d_sd_capture.h"
+// F23D SD end
 // F23D physical begin
 #include "../../shared/relay/f23d_physical_contract.h"
 // F23D physical end
@@ -820,12 +823,45 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
                     uint32_t seq, int32_t result, int16_t rssi,
                     int16_t snrX10, int32_t latE7, int32_t lonE7,
                     uint8_t flags, uint8_t hops, uint8_t attempt) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(!strcmp(kind,"sos_ack_tx") || !strcmp(kind,"cancel_ack_tx") ||
+       !strcmp(kind,"sos_ack_rx") || !strcmp(kind,"cancel_ack_rx")){
+      F23DSD::Record row{};F23DSD::describe(row,strstr(kind,"_tx")?"ACK_TX":"ACK_RX");
+      row.ms=millis();row.origin=origin;row.event=seq;row.rc=result;
+      row.rssi=rssi;row.snr_x10=snrX10;row.type=strstr(kind,"cancel")?PACKET_SOS_CANCEL_ACK:PACKET_SOS_ACK;
+      (void)ThesisSDLogger::f23dJournal.capture(row);
+    }
+#endif
+// F23D SD end
     return ThesisSDLogger::queueEvent(urgent, kind, origin, seq, result,
                                      rssi, snrX10, latE7, lonE7,
                                      flags, hops, attempt);
 }
 #endif
 
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+extern bool f23dSDRadioBusy();
+bool thesisF23dSDCapture(const F23DSD::Record& row){return ThesisSDLogger::f23dJournal.capture(row);}
+void thesisF23dSDFormatLoss(){ThesisSDLogger::f23dJournal.formatLost();}
+bool thesisF23dSDHealthy(){return ThesisSDLogger::f23dJournal.permissionHealthy() && ThesisSDLogger::ready &&
+  ThesisSDLogger::isAuthorizedVessel(THESIS_F23D_SD_ROLE) && !ThesisSDLogger::lostUrgent;}
+bool thesisF23dSDCommand(const char* line) {
+  if(!strcmp(line,"R23D SD START")){if(!f23dSDRadioBusy())(void)ThesisSDLogger::f23dJournal.start(millis());return true;}
+  if(!strcmp(line,"R23D SD SEAL")){(void)ThesisSDLogger::f23dJournal.requestSeal();return true;}
+  if(!strcmp(line,"R23D SD STATUS")){
+    Serial.printf("[F23D-SD] local=%lu path=%s session=%s ready=%u active=%u sealed=%u pending=%u written=%lu lost=%lu health=%lu\n",
+      (unsigned long)VesselIdentity::nodeId(),ThesisSDLogger::f23dWriter.path(),ThesisSDLogger::f23dJournal.session(),unsigned(ThesisSDLogger::f23dJournal.readyToStart()),
+      unsigned(ThesisSDLogger::f23dJournal.captureActive()),unsigned(ThesisSDLogger::f23dJournal.sealed()),
+      unsigned(ThesisSDLogger::f23dJournal.pending()),(unsigned long)ThesisSDLogger::f23dJournal.written(),
+      (unsigned long)ThesisSDLogger::f23dJournal.lost(),(unsigned long)ThesisSDLogger::f23dJournal.health());
+    return true;
+  }
+  return false;
+}
+#endif
+// F23D SD end
 #if THESIS_SD_LOGGER == 1
 // Existing TEST commands remain handled by processSerialTestCommands().
 bool pollSDExportCommand() {
@@ -1264,10 +1300,22 @@ void loop() {
   ThesisSDLogger::hybridObserveSOSPresence(
       hasActiveLocalSOS() || getActiveSOSCount() > 0);
 #endif
+// F23D SD begin
+#if !THESIS_F23D_SD_EVIDENCE
+// F23D SD end
   ThesisSDLogger::poll();
+// F23D SD begin
+#endif
+// F23D SD end
 #endif
 #if THESIS_F06_SD_SANDBOX == 1
+// F23D SD begin
+#if !THESIS_F23D_SD_EVIDENCE
+// F23D SD end
   ThesisSDLogger::pollHistory();
+// F23D SD begin
+#endif
+// F23D SD end
 #endif
   updateGPS();
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
@@ -1282,7 +1330,13 @@ void loop() {
 #endif
 #if THESIS_SD_LOGGER == 1
   const bool sdCommandInProgress = pollSDExportCommand();
+// F23D SD begin
+#if !THESIS_F23D_SD_EVIDENCE
+// F23D SD end
   ThesisSDLogger::pollExport();
+// F23D SD begin
+#endif
+// F23D SD end
 #if THESIS_FLEET_USB_ENROLLMENT == 1
   if (!sdCommandInProgress && !fleetSerialConsumed) processSerialTestCommands();
 #else
@@ -1334,6 +1388,11 @@ void loop() {
   f23dPollEvidence(); // bounded nonblocking drain after operational controls
 #endif
 // F23D readiness end
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  ThesisSDLogger::pollF23DEvidence(f23dSDRadioBusy());
+#endif
+// F23D SD end
 
 #if THESIS_V003_F08_INDICATOR_BENCH == 0
 #if THESIS_V003_F11_MACRO_FIVE_MEDIAN == 1

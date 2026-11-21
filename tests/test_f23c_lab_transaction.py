@@ -1,3 +1,4 @@
+from f23d_sd_support import remove_sd, assert_protected_folder
 """F23C actual-header host matrix and source isolation checks. No device access."""
 from f23d_physical_support import remove_physical
 from pathlib import Path
@@ -106,7 +107,7 @@ def run():
         "firmware/shared/hardware/fleet_usb_enrollment.h",
     ]
     for path in protected:
-        assert (ROOT / path).read_text(encoding="utf-8") == execute(
+        assert remove_sd((ROOT / path).read_text(encoding="utf-8")) == execute(
             ["git", "show", BASELINE + ":" + path]), path
     parser = configparser.ConfigParser(interpolation=None)
     parser.read_string(ini)

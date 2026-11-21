@@ -1,3 +1,17 @@
+// F23D SD begin
+#include "../../shared/relay/f23d_sd_capture.h"
+#if THESIS_F23D_SD_EVIDENCE
+#include <Arduino.h>
+static bool f23dSDRadioCalled=false;
+static int f23dSDLastRxRc=-999;
+static void f23dSDPacket(const char* stage,const VesselPacket& p,int rc=0,uint8_t attempt=0) {
+ F23DSD::Record row{};if(!F23DSD::describe(row,stage)){thesisF23dSDFormatLoss();return;}
+ F23DSD::packet(row,p);row.ms=millis();row.rc=rc;row.rx_rc=f23dSDLastRxRc;
+ row.used=attempt;row.called=!strcmp(stage,"TX_RESULT") && f23dSDRadioCalled;
+ (void)thesisF23dSDCapture(row);
+}
+#endif
+// F23D SD end
 // F23D physical begin
 #include "../../shared/relay/f23d_physical_contract.h"
 // F23D physical end
@@ -303,6 +317,11 @@ static bool f23dFinalRadioGate(const uint8_t*,size_t);
 #endif
 // F23D physical end
 static int transmitWithIdentity(const uint8_t* data, size_t length) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDRadioCalled=false;
+#endif
+// F23D SD end
   if (!VesselIdentity::ready()) {
     Serial.println("[IDENTITY] TX BLOCKED: provisioned identity required");
     return -999;
@@ -313,6 +332,11 @@ static int transmitWithIdentity(const uint8_t* data, size_t length) {
   if(!f23dFinalRadioGate(data,length))return -997;
 #endif
 // F23D physical end
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDRadioCalled=true;
+#endif
+// F23D SD end
   return radio.transmit(const_cast<uint8_t*>(data), length);
 }
 
@@ -631,6 +655,14 @@ static F23DBench::Context f23dContext() {
 // F23D final gate begin
 static bool f23dFinalRadioGate(const uint8_t* bytes,size_t length) {
   if(!f23dPhysicalLease)return true;
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  // Cached RAM only: missing/unsealed capture, loss or withdrawal vetoes relay.
+  if(!thesisF23dSDHealthy()){
+    f23dPermission.revoke(F23DPhysical::Reason::EvidenceLost);f23dControl.revoke();return false;
+  }
+#endif
+// F23D SD end
   const auto c=f23dContext();
   const bool allowed=length==sizeof(VesselPacket) &&
       bytes==reinterpret_cast<const uint8_t*>(f23dPhysicalLease) &&
@@ -870,9 +902,29 @@ bool f23dHandleDiagnosticCommand(const char* line) {
 }
 // F23D query command end
 #endif
-#if THESIS_F23D_RX_OBSERVER == 1
+// F23D SD begin
+// F23D SD restore: #if THESIS_F23D_RX_OBSERVER == 1
+#if THESIS_F23D_RX_OBSERVER == 1 || THESIS_F23D_SD_ROLE == 2
+// F23D SD end
 static void f23dQueueRxEvidence(const uint8_t* bytes,size_t length,int16_t rssi,
                                float snr,const char* validation,const char* outcome) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  {
+  if(!VesselIdentity::ready() || NODE_ID!=THESIS_F23D_SD_ROLE)return;
+  F23DSD::Record row{};
+  if(!F23DSD::describe(row,"RX",validation,outcome)){thesisF23dSDFormatLoss();return;}
+  row.ms=millis();row.rssi=rssi;row.snr_x10=snr>=-100.0f && snr<=100.0f?int16_t(snr*10.0f):32767;
+  row.bytes=length<=99?uint16_t(length):0;
+  if(length==sizeof(VesselPacket)){VesselPacket p{};memcpy(&p,bytes,sizeof(p));F23DSD::packet(row,p);}
+  else if(length>=4 && length<=99)row.type=bytes[3];
+#if THESIS_F23D_SD_ROLE == 2
+  row.run=f23dRunEvidence.run();
+#endif
+  (void)thesisF23dSDCapture(row);return;
+  }
+#endif
+// F23D SD end
   if(!VesselIdentity::ready() || NODE_ID!=3U)return;
   const uint32_t began=micros();
   const int snrX10=snr>=-100.0f && snr<=100.0f?int(snr*10.0f):32767;
@@ -889,6 +941,32 @@ static void f23dQueueRxEvidence(const uint8_t* bytes,size_t length,int16_t rssi,
 // F23D physical end
 // F23D run row begin
 static void f23dQueueRunEvidence(const char* stage,int code,const VesselPacket* packet) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  {
+  F23DSD::Record row{};
+  if(!F23DSD::describe(row,stage)){thesisF23dSDFormatLoss();return;}
+  const auto context=f23dContext();
+  row.ms=millis();row.run=f23dRunEvidence.run();row.event=f23dControl.event();row.rc=code;
+  row.permit=context.physicalPermission;row.used=f23dControl.attempts();
+  row.sos_left=f23dRunEvidence.sosRemaining();row.cancel_left=f23dRunEvidence.cancelRemaining();
+  row.rx_rc=f23dLastRxRestoreRc;row.called=!strcmp(stage,"RADIO_RESULT") && f23dSDRadioCalled;
+  if(packet)F23DSD::packet(row,*packet);
+  (void)thesisF23dSDCapture(row);
+  if(!packet && (!strcmp(stage,"SELECTED") || !strcmp(stage,"ARMED") ||
+      !strcmp(stage,"STATUS") || !strcmp(stage,"DENIED") || !strcmp(stage,"LOCKED") ||
+      !strcmp(stage,"DISARMED") || !strcmp(stage,"INVALID"))){
+    char reply[192];
+    const int n=snprintf(reply,sizeof(reply),
+      "[F23D-CONTROL] result=%s run=%lu event=%lu challenge=%lu armed=%u permit=%u",
+      stage,(unsigned long)f23dRunEvidence.run(),(unsigned long)f23dControl.event(),
+      (unsigned long)f23dControl.challenge(),unsigned(f23dControl.armed()),unsigned(context.physicalPermission));
+    if(n>0 && size_t(n)<sizeof(reply))f23dEvidenceQueue.push(reply);
+  }
+  return;
+  }
+#endif
+// F23D SD end
   const uint32_t began=micros();
   const auto c=f23dContext();
   const uint32_t now=millis();
@@ -1157,6 +1235,11 @@ void setupLoRa() {
 
 void startReceive() {
   int state = radio.startReceive();
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDLastRxRc=state;
+#endif
+// F23D SD end
 // F23D readiness begin
 // F23D physical begin
 // F23D physical restore: #if THESIS_F23D_RELAY_EVIDENCE == 1
@@ -1302,6 +1385,11 @@ static void sendPendingSOS() {
     sosAttempts, SOS_MAX_ATTEMPTS, (unsigned long)pendingSOS.originNodeId,
     (unsigned long)pendingSOS.sequenceNumber,
     (pendingSOS.flags & FLAG_GPS_FIX) ? "VALID" : "NO_FIX");
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDPacket("TX_BEGIN",pendingSOS,0,sosAttempts);
+#endif
+// F23D SD end
   const int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&pendingSOS), sizeof(pendingSOS));
   if (state == RADIOLIB_ERR_NONE) { ++txCount; lastTXSuccess = true;
     Serial.println("[SOS-A] RADIO TX SUCCESS; AWAITING B ACK");
@@ -1319,6 +1407,11 @@ static void sendPendingSOS() {
     RelayReceipt::farEndName(relayReceipt.snapshot().farEnd),
     (unsigned)(state == RADIOLIB_ERR_NONE));
   startReceive();
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDPacket("TX_RESULT",pendingSOS,state,sosAttempts);
+#endif
+// F23D SD end
   nextSOSTxAt = millis() + SOS_RETRY_MS + ControlRetry::sosSlotDelayMs(NODE_ID, pendingSOS.sequenceNumber, sosAttempts);
 }
 
@@ -1355,6 +1448,13 @@ void transmitSOS() {
     return;
   }
   nextEmergencyId = selectedId + 1;
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  F23DSD::Record row{};F23DSD::describe(row,"ALLOCATED");row.ms=millis();
+  row.origin=NODE_ID;row.event=selectedId;row.type=PACKET_SOS;
+  (void)thesisF23dSDCapture(row);
+#endif
+// F23D SD end
 #if THESIS_F05_RECOVERY == 1
   // SOS identity is reserved first. Persist its active state before any RF TX.
   if (!F05Recovery::save(selectedId, F05Recovery::saved.cancelId,
@@ -1372,6 +1472,11 @@ void transmitSOS() {
   strncpy(pendingSOS.message, "SOS", sizeof(pendingSOS.message) - 1);
   pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
   sosPending = true;
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDPacket("LOCAL_SOS",pendingSOS);
+#endif
+// F23D SD end
   SD_EVENT(true, "sos_local_start", NODE_ID, selectedId, 0, 0, 0,
            pendingSOS.latitude_e7, pendingSOS.longitude_e7, pendingSOS.flags);
   relayReceipt.begin(NODE_ID, selectedId);
@@ -1396,8 +1501,18 @@ static void sendPendingCancel() {
 #endif
   ++cancelAttempts;
   lastCancelAttempt = millis();
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDPacket("TX_BEGIN",pendingCancel,0,cancelAttempts);
+#endif
+// F23D SD end
   const int state = transmitWithIdentity(reinterpret_cast<uint8_t*>(&pendingCancel), sizeof(pendingCancel));
   startReceive();
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDPacket("TX_RESULT",pendingCancel,state,cancelAttempts);
+#endif
+// F23D SD end
   SD_EVENT(true, "cancel_tx_attempt", NODE_ID,
            pendingCancel.sequenceNumber, state, 0, 0, 0, 0, 0, 0, cancelAttempts);
   nextCancelTxAt = millis() + CANCEL_RETRY_MS + ControlRetry::slotDelayMs(NODE_ID, pendingCancel.sequenceNumber, cancelAttempts);
@@ -1454,6 +1569,11 @@ void cancelActiveSOS() {
   const uint32_t origin = NODE_ID;
   memcpy(pendingCancel.message + 4, &origin, 4);
   cancelPending = true;
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+  f23dSDPacket("LOCAL_CANCEL",pendingCancel);
+#endif
+// F23D SD end
   SD_EVENT(true, "sos_local_cancel", NODE_ID, activeEmergencyId, 0);
   cancelAttempts = 0;
   sosPending = false; // Deliberate cancellation stops the prior SOS retries.
@@ -1517,7 +1637,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   if (gate == Phase516::Decision::Reject) {
     ++invalidPackets;
 // F23D readiness begin
-#if THESIS_F23D_RX_OBSERVER == 1
+// F23D SD begin
+// F23D SD restore: #if THESIS_F23D_RX_OBSERVER == 1
+#if THESIS_F23D_RX_OBSERVER == 1 || THESIS_F23D_SD_ROLE == 2
+// F23D SD end
     f23dQueueRxEvidence(buffer,length,rssi,snr,"BAD_FORMAT","REJECTED");
 #endif
 // F23D readiness end
@@ -1576,7 +1699,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     return;
   }
 // F23D readiness begin
-#if THESIS_F23D_RX_OBSERVER == 1
+// F23D SD begin
+// F23D SD restore: #if THESIS_F23D_RX_OBSERVER == 1
+#if THESIS_F23D_RX_OBSERVER == 1 || THESIS_F23D_SD_ROLE == 2
+// F23D SD end
   if(p.originNodeId==NODE_ID)
     f23dQueueRxEvidence(buffer,length,rssi,snr,"SELF_ORIGIN","REJECTED");
   else if(p.originNodeId<1 || p.originNodeId>9999)
@@ -1598,7 +1724,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     memcpy(&cancelOrigin,p.message+4,4);
     if (cancelOrigin!=p.originNodeId || cancelId!=p.sequenceNumber) {
 // F23D readiness begin
-#if THESIS_F23D_RX_OBSERVER == 1
+// F23D SD begin
+// F23D SD restore: #if THESIS_F23D_RX_OBSERVER == 1
+#if THESIS_F23D_RX_OBSERVER == 1 || THESIS_F23D_SD_ROLE == 2
+// F23D SD end
       f23dQueueRxEvidence(buffer,length,rssi,snr,"BAD_CANCEL","REJECTED");
 #endif
 // F23D readiness end
@@ -1606,7 +1735,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     }
     const auto result=peerSOSTable.cancel(p.originNodeId,cancelId,millis());
 // F23D readiness begin
-#if THESIS_F23D_RX_OBSERVER == 1
+// F23D SD begin
+// F23D SD restore: #if THESIS_F23D_RX_OBSERVER == 1
+#if THESIS_F23D_RX_OBSERVER == 1 || THESIS_F23D_SD_ROLE == 2
+// F23D SD end
     f23dQueueRxEvidence(buffer,length,rssi,snr,"LEGACY_UNAUTHENTICATED",MultiPeerSOS::name(result));
 #endif
 // F23D readiness end
@@ -1634,7 +1766,10 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
   if (p.packetType == PACKET_SOS) {
     const auto result=peerSOSTable.receiveSOS(p.originNodeId,p.sequenceNumber,millis());
 // F23D readiness begin
-#if THESIS_F23D_RX_OBSERVER == 1
+// F23D SD begin
+// F23D SD restore: #if THESIS_F23D_RX_OBSERVER == 1
+#if THESIS_F23D_RX_OBSERVER == 1 || THESIS_F23D_SD_ROLE == 2
+// F23D SD end
     f23dQueueRxEvidence(buffer,length,rssi,snr,"LEGACY_UNAUTHENTICATED",MultiPeerSOS::name(result));
 #endif
 // F23D readiness end
@@ -1819,6 +1954,17 @@ static void calculateBSequencePDR() {
   missingFromB = expected > uniqueFromB ? static_cast<uint32_t>(expected - uniqueFromB) : 0;
 }
 
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+bool f23dSDRadioBusy() {
+  return activeEmergency || sosPending || cancelPending || macCadScanActive ||
+#if THESIS_F23D_CANDIDATE == 1 || THESIS_F23D_PHYSICAL_CANDIDATE == 1
+    f23dControl.armed() ||
+#endif
+    digitalRead(LORA_DIO1)==HIGH;
+}
+#endif
+// F23D SD end
 float bSequencePDR() {
   if (!haveBSequence) return 0.0f;
   uint64_t expected = static_cast<uint64_t>(highestBSequence) - firstBSequence + 1ULL;

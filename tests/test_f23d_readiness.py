@@ -1,3 +1,4 @@
+from f23d_sd_support import remove_sd, assert_protected_folder
 """Physical-readiness diagnostics and permission requirements; offline only."""
 from f23d_physical_support import remove_physical
 from pathlib import Path
@@ -37,7 +38,7 @@ def run():
         current=(ROOT/path).read_text(encoding="utf-8")
         assert strip(current)==run_cmd(["git","show",BASE+":"+path]),path
     for folder in ("firmware/shared/hardware","firmware/shared/storage","firmware/shared/communication"):
-        assert not run_cmd(["git","diff",BASE,"--",folder]).strip(),folder
+        assert_protected_folder(BASE,folder)
     for name in ("f23c_lab_contract.h","f23c_lab_transaction.h","f23d_bench_contract.h",
                  "f23d_run_control.h","relay_authorization_contract.h","relay_tx_readiness.h"):
         path="firmware/shared/relay/"+name

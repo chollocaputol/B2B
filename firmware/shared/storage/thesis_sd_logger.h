@@ -1,3 +1,9 @@
+// F23D SD begin
+#include "../relay/f23d_sd_contract.h"
+#if THESIS_F23D_SD_EVIDENCE
+#include "../relay/f23d_sd_journal.h"
+#endif
+// F23D SD end
 #pragma once
 
 #include <Arduino.h>
@@ -84,6 +90,11 @@
 #endif
 
 namespace ThesisSDLogger {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+inline bool f23dStorageFrozen();
+#endif
+// F23D SD end
 
 static SPIClass sdSPI(HSPI);
 static bool ready = false;
@@ -417,6 +428,11 @@ inline bool queueMicroOutlook(uint32_t uptimeMs, bool inputValid, uint8_t histor
 #endif // THESIS_F07_WEATHER_LOG
 
 inline void pollEvents() {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
     if (!ready) return;
     EventQueue &q = urgentQueue.count ? urgentQueue : telemetryQueue;
     if (q.count) {
@@ -441,6 +457,11 @@ inline void pollEvents() {
 
 
 inline bool appendRecord(const char* path, const char* record) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return false;
+#endif
+// F23D SD end
     if (!ready) return false;
 
     File file = SD.open(path, FILE_APPEND);
@@ -465,6 +486,11 @@ inline bool appendRecord(const char* path, const char* record) {
 }
 
 inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return false;
+#endif
+// F23D SD end
     Serial.println("[SD-LOG] START");
 
     vesselId = id;
@@ -718,6 +744,11 @@ static uint32_t exportChecksum = 2166136261UL; // FNV-1a for transfer check
 static File exportFile;
 
 inline void requestExport() {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
     if (!ready || !isAuthorizedVessel(vesselId)) {
         Serial.println("[SDX] ERROR LOGGER_NOT_READY");
         return;
@@ -739,6 +770,11 @@ inline void requestExport() {
 }
 
 inline void pollExport() {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
     if (!exportActive) return;
     if (!ready) {
         if (exportFile) exportFile.close();
@@ -810,6 +846,11 @@ inline void pollExport() {
 }
 
 inline void poll() {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
     if (!ready) return;
     pollEvents();
     if (!ready) return;
@@ -922,12 +963,22 @@ inline bool historyPath(char* output, size_t capacity, uint8_t index) {
 }
 
 inline void historyStop(const char* reason) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
     if (historyFile) historyFile.close();
     historyActive = false;
     Serial.printf("[SDH] ERROR %s\n", reason);
 }
 
 inline void listHistory() {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
 #if THESIS_F22_FLEET_OPERATIONAL == 1
     if (!ready || !isAuthorizedVessel(vesselId) || historyActive || exportActive) {
 #elif THESIS_F22R3D_FLEET_SD_DRYRUN == 1
@@ -983,6 +1034,11 @@ inline void listHistory() {
 }
 
 inline void requestHistory(const char* selector) {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
 #if THESIS_F22_FLEET_OPERATIONAL == 1
     if (!ready || !isAuthorizedVessel(vesselId)) {
 #elif THESIS_F22R3D_FLEET_SD_DRYRUN == 1
@@ -1058,6 +1114,11 @@ inline void requestHistory(const char* selector) {
 }
 
 inline void pollHistory() {
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+    if(f23dStorageFrozen())return;
+#endif
+// F23D SD end
     if (!historyActive) return;
 #if THESIS_F22_FLEET_OPERATIONAL == 1
     if (!ready || !isAuthorizedVessel(vesselId)) {
@@ -1123,4 +1184,39 @@ inline void pollHistory() {
     historyOffset += static_cast<uint32_t>(wanted);
 }
 #endif // THESIS_F06_SD_SANDBOX
+// F23D SD begin
+#if THESIS_F23D_SD_EVIDENCE
+#include "f23d_sd_file_writer.h"
+static F23DSD::Journal f23dJournal;
+static F23DSDFileWriter f23dWriter;
+static bool f23dInitialized=false;
+static bool f23dOwnerIOAllowed=false;
+inline bool f23dStorageFrozen(){return f23dJournal.captureActive() && !f23dOwnerIOAllowed;}
+inline void pollF23DEvidence(bool radioBusy) {
+  if(!f23dInitialized){
+    if(radioBusy)return;
+    f23dInitialized=true;
+    const char* session=strrchr(DIRECTORY,'/');
+    const bool authorized=ready && isAuthorizedVessel(vesselId) && vesselId==THESIS_F23D_SD_ROLE;
+    if(!f23dJournal.initialize(vesselId,session?session+1:"",authorized,millis()))return;
+    if(!f23dWriter.begin(DIRECTORY,vesselId)){f23dJournal.fail(F23DSD::Storage);return;}
+  }
+  if(!ready || !isAuthorizedVessel(vesselId) || vesselId!=THESIS_F23D_SD_ROLE){
+    f23dJournal.fail(F23DSD::Storage|F23DSD::Identity);return;
+  }
+  if(f23dJournal.failed() || f23dJournal.sealed() || radioBusy || f23dJournal.defersStorage())return;
+  f23dJournal.operationalLoss(lostUrgent);
+  struct OwnerLease {
+    OwnerLease(){f23dOwnerIOAllowed=true;}
+    ~OwnerLease(){f23dOwnerIOAllowed=false;}
+  } ownerLease;
+  if(urgentQueue.count){pollEvents();return;}
+  if(f23dJournal.pending() || f23dJournal.captureActive() ||
+     (!f23dJournal.readyToStart() && f23dJournal.written())){
+    f23dJournal.poll(f23dWriter,millis(),false);return;
+  }
+  poll();pollHistory();pollExport();
+}
+#endif
+// F23D SD end
 }

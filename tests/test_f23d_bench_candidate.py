@@ -1,3 +1,4 @@
+from f23d_sd_support import remove_sd, assert_protected_folder
 """F23D offline controller, actual adapter body, source isolation and compile gates."""
 from f23d_physical_support import remove_physical
 from pathlib import Path
@@ -54,7 +55,7 @@ def run():
         after=remove_readiness(after)
         assert strip(after)==before,path
     for folder in ("firmware/shared/communication","firmware/shared/storage","firmware/shared/hardware"):
-        assert not run_cmd(["git","diff",BASE,"--",folder]).strip(),folder
+        assert_protected_folder(BASE,folder)
     for path in ("f23c_lab_contract.h","f23c_lab_transaction.h","relay_policy.h",
                  "relay_queue.h","relay_preflight.h","relay_dryrun_scheduler.h",
                  "relay_tx_readiness.h","relay_authorization_contract.h","lab_relay_gate.h"):

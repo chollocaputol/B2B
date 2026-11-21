@@ -139,3 +139,35 @@ because no firmware translation unit includes the new model.
 source proof, durable SD sidecar, real on-board SD read adapter,
 authenticated shore Wi-Fi/REST ingestion, backend acceptance and reboot
 replay against a real service. Physical multihop remains blocked by V001.
+
+## 2026-11-22 host audit against verified closed F06 exports
+
+Read-only host CLI: `scripts/dtn/audit_verified_f06_exports.py`.
+Offline fixture tests: `tests/test_dtn_verified_export.py` (seven PASS
+in local Python standard-library unittest). The CLI opens only known
+`sos_events.jsonl`, `telemetry.jsonl`, `diagnostics.jsonl` and a matching
+`sha256_manifest.json` from each supplied *closed* F06 Sxxxxxxx session.
+
+It verifies exact manifest filenames, SHA-256 digests and lengths; rejects
+oversized files/lines, incomplete tail, invalid flat JSON, duplicate keys,
+wrong vessel/invalid event identity and duplicate
+`(vessel_id,boot_token,event_index)` keys both within sessions and
+across all supplied isolated exports. Diagnostics are counted only and
+are never authorized as telemetry. It prints summary counts only,
+not GPS, secret payloads, or whole records.
+
+The legacy mixed-boot export is intentionally refused by this tool;
+its separately audited 55 event boot tokens are not proof of one
+immutable session. A SHA-256 manifest checks local copies against their
+saved manifest, not their authorship, source authentication or backend
+acceptance. Original V002 audit showed zero duplicate F06 event tuples
+within each of four local exports (1,534 SOS+telemetry records),
+but **the original bytes have not been audited by this new CLI here**.
+
+This is an **off-device read-only exported-copy adapter**, not a
+microcontroller SD driver. It writes no evidence or sidecar files,
+connects to no COM/Wi-Fi service, and cannot grant upload permission.
+Cross-file ordering, approved backend UUID/idempotency, crash-safe
+checkpoint storage, source authentication, live shore Wi-Fi/TLS/REST
+and actual end-to-end DTN remain outstanding. No runtime firmware
+source or `main` branch is changed.

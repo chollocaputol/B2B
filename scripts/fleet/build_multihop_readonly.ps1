@@ -5,7 +5,8 @@
 #>
 param(
     [Parameter(Mandatory=$true)][string]$RepoRoot,
-    [string]$OutputDirectory = ""
+    [string]$OutputDirectory = "",
+    [string]$PlatformIOExe = ""
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -55,15 +56,39 @@ if ($compiler) {
     Write-Warning 'g++ not on PATH: host tests SKIPPED, not counted as PASS.'
 }
 
-$pio = Get-Command pio -ErrorAction SilentlyContinue
-if ($pio) {
-    $pioExe = $pio.Source
+# Prefer an explicit CLI path. PlatformIO can be installed outside USERPROFILE,
+# and the executable may be named platformio.exe rather than pio.exe.
+$pioExe = $null
+if ($PlatformIOExe) {
+    if (-not (Test-Path -LiteralPath $PlatformIOExe -PathType Leaf)) {
+        throw "STOP: Specified PlatformIO executable not found: $PlatformIOExe"
+    }
+    $pioExe = $PlatformIOExe
 } else {
-    $pioExe = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
-    if (-not (Test-Path -LiteralPath $pioExe -PathType Leaf)) {
-        throw 'STOP: PlatformIO CLI unavailable. Install/enable it in VS Code, then rerun.'
+    $candidates = @()
+    foreach ($name in @('pio.exe','platformio.exe','pio','platformio')) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) { $candidates += $cmd.Source }
+    }
+    $candidates += @(
+        'C:\PlatformIO\penv\Scripts\platformio.exe',
+        'C:\PlatformIO\penv\Scripts\pio.exe',
+        (Join-Path $env:USERPROFILE '.platformio\penv\Scripts\platformio.exe'),
+        (Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe')
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $pioExe = $candidate
+            break
+        }
     }
 }
+if (-not $pioExe) {
+    throw 'STOP: PlatformIO not found. Pass -PlatformIOExe with the full path to platformio.exe.'
+}
+Write-Host "PlatformIO executable: $pioExe"
+& $pioExe --version
+if ($LASTEXITCODE -ne 0) { throw 'STOP: PlatformIO executable failed its version check.' }
 $profiles = @(
     'tbeam-supreme-fleet-universal-operational-build-only',
     'tbeam-supreme-multihop-dev-preview-build-only',

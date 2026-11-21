@@ -55,3 +55,25 @@ outcome, NOT a measured guarantee under SD failure or lost equipment.
 
 Next development unit: pure offline sync-cursor contract + host tests,
 then read-only SD adapter; no live HTTP/Wi-Fi change in this commit.
+
+## 2026-11-22 offline checkpoint model (host-only)
+
+A pure C++17 cursor model now exists at
+`firmware/shared/storage/dtn_sync_checkpoint.h` with matching
+`tests/dtn_sync_checkpoint_host.cpp`. It is **not linked into the device
+firmware** and does not read or write any SD journals.
+
+The model accepts explicit backend per-record `Accepted` or `Duplicate`
+results only, keeps any rejected or uncertain record pending, checkpoints
+only a contiguous prefix, and rejects a wrong session or unauthenticated
+or mismatched batch response. Its two-slot storage interface requires a
+future crash-consistent SD sidecar adapter; no source SD record is modified.
+A local native `g++ -std=c++17 -Wall -Wextra -Werror` test passed for
+partial acceptance, duplicate retry, wrong session, failed write, corrupt
+slot recovery and reboot. **This is a model PASS only.**
+
+Do not infer that `FLEET` enrollment credentials authorize HTTP uploads,
+or that a receiver's LoRa ACK proves shore ingestion. Firmware-side capture
+in CONTINUOUS mode, real journal readback, secure Wi-Fi/REST upload,
+backend idempotent acceptance, and durable sidecar implementation remain
+pending. The current fleet `main` branch is not modified.

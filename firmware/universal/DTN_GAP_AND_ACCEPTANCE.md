@@ -77,3 +77,34 @@ or that a receiver's LoRa ACK proves shore ingestion. Firmware-side capture
 in CONTINUOUS mode, real journal readback, secure Wi-Fi/REST upload,
 backend idempotent acceptance, and durable sidecar implementation remain
 pending. The current fleet `main` branch is not modified.
+
+## 2026-11-22 read-only F06 JSONL snapshot framer (host-only)
+
+The next pure component is `firmware/shared/storage/dtn_jsonl_snapshot.h`
+with `tests/dtn_jsonl_snapshot_host.cpp`. It models *closed F06 sessions*,
+uses a caller-supplied fixed byte snapshot, preserves complete JSONL
+record bytes plus original file offset/ordinal, accepts only the existing
+three file names, and holds the cursor on truncated tail / malformed
+framing / oversize / I/O failure. A trailing partial line is never
+treated as accepted or automatically skipped.
+
+This component checks only the JSONL **framing** (a printable `{...}`
+line ending in LF or CRLF), not complete JSON syntax, source identity,
+field validity, end-to-end uploadable content, or cryptographic proof.
+An invalid object such as `{broken}` can be framed but MUST be rejected
+by the later strict JSON and backend mapping stage. The built-in FNV
+digest is non-cryptographic and diagnostic only.
+
+Existing F06 event journals use `vessel_id`, `boot_token`,
+`event_index`, and `uptime_ms`. They do not provide server-approved
+per-record UUIDs, stable origin-authentication proof, or a final
+session-wide replay manifest. The host framer's per-file ordinal
+and byte offset are not a backend record ID; cross-file ordering and
+stable replay identity still need review. Never upload `diagnostics.jsonl`
+as ordinary telemetry or assume an SD journal automatically means the
+`CONTINUOUS` recording mode was active.
+
+The mock-reader host test passes under native g++ locally; **device SD
+adapter, strict JSON validation, backend ingestion, shore Wi-Fi,
+sidecar storage, and real DTN upload remain NOT IMPLEMENTED**.
+No existing device/runtime source was modified.

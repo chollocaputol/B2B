@@ -171,3 +171,84 @@ Cross-file ordering, approved backend UUID/idempotency, crash-safe
 checkpoint storage, source authentication, live shore Wi-Fi/TLS/REST
 and actual end-to-end DTN remain outstanding. No runtime firmware
 source or `main` branch is changed.
+
+## 2026-11-22 actual V002 closed-export acceptance: verified on Windows
+
+User-run offline audit (script `scripts/dtn/audit_verified_f06_exports.py`,
+commit `7c17cb9`) **PASS** on each of three previously exported, immutable,
+SHA-256-verified V002 F06 session copies:
+
+| Closed session | SOS events | Telemetry journal | Diagnostics | Distinct boot tokens |
+|---|---:|---:|---:|---:|
+| S58BAFE2 | 4 | 24 | 6 | 1 |
+| S41F5724 | 0 | 33 | 7 | 1 |
+| SB1F7223 | 6 | 47 | 11 | 1 |
+| **Total** | **10** | **104** | **24** | **3 session-level counts** |
+
+The tool reported `duplicate_event_keys=0`, `upload_authorization=NONE`.
+The worktree at `7c17cb9` was clean after the run. This acceptance is
+for **exported-file syntax, identity, integrity and compatibility ONLY**.
+It is not on-board SD replay, backend ingestion, proof of RF delivery,
+shore Wi-Fi synchronization, or a hardware acceptance. The separate
+multi-boot `LEGACY` V002 export remains excluded from this strict
+single-session tool and cannot be called verified by this tool.
+
+### Critical ingestion mapping gate: actual record kinds are not API actions
+
+All three closed V002 sessions contain `telemetry_tx` / `telemetry_rx`
+journal entries. Those are **radio transmit/receive observations**, not
+proof that source weather/GPS measurements are populated or valid.
+The proposed backend v1 `kind:"telemetry"` requires separately validated
+measurements, origin identity, boot UUID and stable record UUID. Never
+silently transform these historical radio observations into measured
+weather or GPS readings. A dedicated operational event/audit schema
+would need separate backend approval.
+
+Observed SOS journal kinds include `sos_rx`, `sos_ack_tx`,
+`cancel_rx`, `cancel_ack_tx`, and `sos_local_start`,
+`sos_local_cancel`, `sos_tx_attempt`, `sos_ack_rx`,
+`cancel_ack_rx`, `cancel_tx_attempt` in the historical inventory.
+The exact isolated-session data have the reported SOS kinds, not
+backend-stable `event_id`/`action_id` or source authentication.
+**NONE of these historical journal entries may automatically activate,
+acknowledge, cancel, or confirm a cloud SOS.** Retain as offline audit
+evidence until the team approves correlation, idempotency, authorization
+and source-verification rules. In particular, radio ACK is not cloud
+ingestion ACK and rescue confirmation must remain a privileged human
+operation.
+
+`boot`/`heartbeat` entries in `diagnostics.jsonl` are local diagnostics,
+not automatic telemetry or SOS cloud records. Neither `weather` nor
+`micro_outlook` nor `research_system`/`research_peer` was demonstrated
+in these V002 accepted exports; their exact DTN compatibility still
+requires separate evidence from a suitable device/session.
+
+### Next engineering gates, in dependency order
+
+1. Approve a backend ingest schema and source-trust policy distinguishing
+   radio-event observations, actual sensor telemetry, SOS device actions
+   and diagnostics, without inventing data or treating unverified origin
+   as verified.
+2. Define a durable per-(registered uploader, vessel, immutable session,
+   allowlisted journal, record) replay identity. Existing `boot_token`
+   and `event_index` passed local collision checks, but they are **not**
+   globally unique, cryptographically authenticated, or cloud UUIDs.
+   The proposed production `record_id` and `boot_id` must be assigned and
+   persisted at record creation; historical import needs a separately
+   approved, collision-safe migration mapping.
+3. Extend the pure checkpoint contract from one contiguous cursor into
+   **independent per-journal streams plus a bounded persistent
+   acknowledgment ledger**. A rejected early item must not erase later
+   accepted results. Only compact the acknowledged *contiguous prefix*
+   after storing all explicitly accepted/identical-duplicate outcomes.
+4. Implement crash-safe independent sidecar storage, an **on-device**
+   read-only closed-session adapter, and verified retry semantics.
+   Source JSONL journals must never be truncated, rewritten, or deleted.
+5. Only after backend contract/security approval: device-specific TLS
+   credentials, Wi-Fi/HTTPS shore availability, non-blocking
+   SOS-prioritized upload, backend idempotency and physical DTN test.
+
+The validated native host tests and prior six PlatformIO builds remain
+separate software gates. Nothing here grants firmware flashing or changes
+the deployed V002/V003 images. V001's hardware failure still blocks
+physical three-node multihop acceptance.

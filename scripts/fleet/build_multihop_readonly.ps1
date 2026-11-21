@@ -42,7 +42,7 @@ Write-Host "No upload/flash, COM, NVS or SD operations are performed."
 
 $compiler = Get-Command g++ -ErrorAction SilentlyContinue
 if ($compiler) {
-    foreach ($test in @('compact_position_relay_host', 'compact_position_hop1_host', 'multihop_dev_test_host')) {
+    foreach ($test in @('compact_position_relay_host', 'compact_position_hop1_host', 'multihop_dev_test_host', 'multihop_supervised_bench_host')) {
         $source = Join-Path $testRoot ($test + '.cpp')
         $exe = Join-Path $OutputDirectory ($test + '.exe')
         $log = Join-Path $OutputDirectory ($test + '.txt')
@@ -92,6 +92,7 @@ if ($LASTEXITCODE -ne 0) { throw 'STOP: PlatformIO executable failed its version
 $profiles = @(
     'tbeam-supreme-fleet-universal-operational-build-only',
     'tbeam-supreme-multihop-dev-preview-build-only',
+    'tbeam-supreme-multihop-v002-supervised-bench',
     'tbeam-supreme-f23d-v001-sd-evidence-build-only',
     'tbeam-supreme-f23d-v003-sd-evidence-build-only',
     'tbeam-supreme-f23d-v002-physical-sd-candidate-build-only'
@@ -104,6 +105,6 @@ foreach ($profile in $profiles) {
 }
 $after = (& git -C $RepoRoot rev-parse HEAD).Trim()
 if ($after -ne $actualHead) { throw 'STOP: Git HEAD changed during validation.' }
-Write-Host '=== FIVE FIRMWARE BUILDS COMPLETED (host checks run if g++ available) ==='
+Write-Host '=== SIX FIRMWARE BUILDS COMPLETED (host checks run if g++ available) ==='
 Write-Host "Logs: $OutputDirectory"
-Write-Host 'RF forwarding remains disabled; PASS here is NOT physical multihop validation.'
+Write-Host 'Passing builds are NOT flash approval. The supervised bench profile can transmit only after deliberate V002 arming; no physical multihop acceptance is implied.'

@@ -39,6 +39,7 @@ void pollLoRaReceive();
 #if THESIS_MULTIHOP_DEV_TEST == 1
 // DEV Page 4 experiment only; these functions NEVER authorize forwarding RF.
 bool multihopDevRequested();
+const char* multihopDevStatus();
 bool multihopDevToggle();
 void multihopDevPollPrepared();
 #endif

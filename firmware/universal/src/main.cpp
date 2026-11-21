@@ -2021,8 +2021,14 @@ void handleOLEDButton() {
         // DEV PDR page 4: lab observation toggle only; never grants relay RF.
         // Existing GPIO2 SOS handling and SD recording are unaffected.
         const bool changed=multihopDevToggle();
-        Serial.printf("[MULTIHOP-DEV-UI] toggle=%u preview=%u RADIO_TX=DISABLED\n",
-                      unsigned(changed),unsigned(multihopDevRequested()));
+        Serial.printf("[MULTIHOP-DEV-UI] changed=%u status=%s bench_profile=%u\n",
+                      unsigned(changed),multihopDevStatus(),
+#if THESIS_MULTIHOP_BENCH_RF == 1
+                      1U
+#else
+                      0U
+#endif
+                      );
 #endif
       } else if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
         alertDemoMode = (alertDemoMode + 1) % 4;
@@ -3074,7 +3080,7 @@ void oledPDRPage() {
 #if THESIS_MULTIHOP_DEV_TEST == 1
   if (VesselIdentity::ready() && VesselIdentity::nodeId()==2U)
     snprintf(line,sizeof(line),"TXF:%lu RLY:%s",(unsigned long)txFailures,
-             multihopDevRequested()?"PREP":"OFF");
+             multihopDevStatus());
   else
     snprintf(line,sizeof(line),"TXF:%lu RLY:N/A",(unsigned long)txFailures);
 #else

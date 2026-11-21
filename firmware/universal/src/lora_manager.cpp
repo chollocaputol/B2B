@@ -60,6 +60,18 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #ifndef THESIS_MULTIHOP_DEV_TEST
 #define THESIS_MULTIHOP_DEV_TEST 0
 #endif
+#ifndef THESIS_MULTIHOP_BENCH_RF
+#define THESIS_MULTIHOP_BENCH_RF 0
+#endif
+#if THESIS_MULTIHOP_BENCH_RF != 0 && THESIS_MULTIHOP_BENCH_RF != 1
+#error "Invalid supervised bench RF flag"
+#endif
+#if THESIS_MULTIHOP_BENCH_RF == 1
+#if THESIS_MULTIHOP_DEV_TEST != 1 || THESIS_F22_FLEET_OPERATIONAL != 1 || THESIS_V003_F19_DUAL_DISPLAY != 1 || THESIS_LAB_RELAY_TX != 0 || THESIS_F23D_CANDIDATE != 0 || THESIS_F23D_PHYSICAL_CANDIDATE != 0
+#error "Supervised bench RF requires F22+DEV display; excludes F23D candidates and legacy lab relay"
+#endif
+#include "../../shared/relay/multihop_supervised_bench.h"
+#endif
 #if THESIS_MULTIHOP_DEV_TEST == 1
 #include "../../shared/relay/compact_position_relay.h"
 #include "../../shared/relay/compact_position_hop1.h"
@@ -816,34 +828,99 @@ bool f23dHandleRunCommand(const char* line) {
 // F23D end
 #if THESIS_MULTIHOP_DEV_TEST == 1
 static CompactPositionRelay::Queue multihopDevQueue;
+#if THESIS_MULTIHOP_BENCH_RF == 1
+static MultihopBench::Session multihopBenchSession;
+static int multihopBenchLastRxRc=RADIOLIB_ERR_NONE;
+static int multihopBenchTransmit(const VesselPacket&);
+#else
 static MultihopDevTest::Control multihopDevControl;
-bool multihopDevRequested(){return multihopDevControl.requested();}
+#endif
+bool multihopDevRequested() {
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  return multihopBenchSession.preparing(millis());
+#else
+  return multihopDevControl.requested();
+#endif
+}
+const char* multihopDevStatus() {
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  return multihopBenchSession.label(millis());
+#else
+  return multihopDevControl.requested()?"PREP":"OFF";
+#endif
+}
 bool multihopDevToggle(){
-  const bool changed=multihopDevControl.toggle(
-      VesselIdentity::nodeId(),VesselIdentity::ready(),
-      hasActiveLocalSOS() || getActiveSOSCount()>0);
-  if(changed)multihopDevQueue=CompactPositionRelay::Queue{}; // no stale cross-mode replay
+  const bool busy=hasActiveLocalSOS() || getActiveSOSCount()>0 ||
+                  sosPending || cancelPending;
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  const bool changed=multihopBenchSession.press(NODE_ID,VesselIdentity::ready(),busy,millis());
+#else
+  const bool changed=multihopDevControl.toggle(NODE_ID,VesselIdentity::ready(),busy);
+#endif
+  if(changed)multihopDevQueue=CompactPositionRelay::Queue{};
   return changed;
 }
+#if THESIS_MULTIHOP_BENCH_RF == 1
+static bool multihopRadioBusy() {
+  if(macCadScanActive || digitalRead(LORA_DIO1)==HIGH)return true;
+  const uint16_t irq=radio.getIrqStatus();
+  return (irq & (RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED |
+                 RADIOLIB_SX126X_IRQ_HEADER_VALID))!=0;
+}
+static int multihopBenchTransmit(const VesselPacket& p) {
+  if(p.magic!=PACKET_MAGIC || p.version!=PACKET_VERSION ||
+     p.originNodeId!=1U || p.hopCount!=1U ||
+     (p.packetType!=PACKET_TELEMETRY && !ThesisLabRelay::permits(p,NODE_ID)))
+    return -995;
+  const bool localBusy=activeEmergency || sosPending || cancelPending;
+  const uint32_t started=millis();
+  if(!multihopBenchSession.reserve(started,NODE_ID,VesselIdentity::ready(),
+                                     localBusy,multihopRadioBusy()))
+    return -996;
+  // This is the *only* bench radio submission: no formatting or SD I/O
+  // may come between the final operator/identity/time check and TX.
+  const int rc=transmitWithIdentity(reinterpret_cast<const uint8_t*>(&p),sizeof(p));
+  startReceive();
+  const uint32_t ms=uint32_t(millis()-started);
+  const bool rxOk=multihopBenchLastRxRc==RADIOLIB_ERR_NONE;
+  const bool keep=multihopBenchSession.completed(ms,rc==RADIOLIB_ERR_NONE,rxOk);
+  SD_EVENT(p.packetType!=PACKET_TELEMETRY,"multihop_bench_tx",
+     p.originNodeId,p.sequenceNumber,rc,0,0,
+     p.latitude_e7,p.longitude_e7,p.flags,p.hopCount);
+  SD_EVENT(p.packetType!=PACKET_TELEMETRY,"multihop_bench_tx_to_rx_ms",
+     p.originNodeId,p.sequenceNumber,(int32_t)ms,0,0,
+     p.latitude_e7,p.longitude_e7,p.flags,p.hopCount);
+  Serial.printf("[MULTIHOP-BENCH] ms=%lu origin=%lu seq=%lu type=%u hop=%u tx_rc=%d tx_to_rx_ms=%lu rx_rc=%d still_live=%u far_end=UNVERIFIED\n",
+      (unsigned long)millis(),(unsigned long)p.originNodeId,
+      (unsigned long)p.sequenceNumber,unsigned(p.packetType),
+      unsigned(p.hopCount),rc,(unsigned long)ms,multihopBenchLastRxRc,unsigned(keep));
+  return rc;
+}
+#endif
 void multihopDevPollPrepared(){
-  if (!multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) return;
-  // No routine relay processing can run ahead of outstanding local emergency control.
-  if (activeEmergency || sosPending || cancelPending || getActiveSOSCount()>0 || macCadScanActive ||
-      digitalRead(LORA_DIO1)==HIGH) return;
-  CompactPositionRelay::Frame prepared;
-  if (!multihopDevQueue.take(prepared,false)) return;
-  VesselPacket hopOne{};
-  if (!CompactPositionRelay::toHopOneTelemetry(prepared,NODE_ID,hopOne)) {
-    Serial.println("[MULTIHOP-DEV] DROP=INVALID_CONVERSION RADIO_TX=DISABLED");
+  if(!multihopDevRequested())return;
+  // Prepared SOS and CANCEL always preempt routine position traffic.
+  if(activeEmergency || sosPending || cancelPending || getActiveSOSCount()>0 ||
+     relayDryRun.size()>0 || macCadScanActive || digitalRead(LORA_DIO1)==HIGH)return;
+  CompactPositionRelay::Frame f{};
+  if(!multihopDevQueue.take(f,false))return;
+  VesselPacket p{};
+  if(!CompactPositionRelay::toHopOneTelemetry(f,NODE_ID,p)){
+    Serial.println("[MULTIHOP-DEV] DROP=INVALID_CONVERSION TX=OFF");return;
+  }
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  if(multihopBenchSession.live(millis())) {
+    const int rc=multihopBenchTransmit(p);
+    if(rc<0)Serial.printf("[MULTIHOP-BENCH] POSITION_UNSENT seq=%lu rc=%d\n",
+                          (unsigned long)p.sequenceNumber,rc);
     return;
   }
-  // The 62-byte v1 telemetry schema carries a verifiable hop marker;
-  // the original 25-byte POSITION_V2 schema has no hop field.
-  Serial.printf("[MULTIHOP-DEV] PREPARED origin=%lu relay=2 seq=%lu hop=%u bytes=%u RADIO_TX=DISABLED\n",
-      (unsigned long)hopOne.originNodeId,(unsigned long)hopOne.sequenceNumber,
-      unsigned(hopOne.hopCount),unsigned(sizeof(hopOne)));
-  SD_EVENT(false,"relay_position_preview",hopOne.originNodeId,hopOne.sequenceNumber,
-           0,0,0,hopOne.latitude_e7,hopOne.longitude_e7,hopOne.flags,hopOne.hopCount);
+#endif
+  Serial.printf("[MULTIHOP-DEV] PREPARED origin=%lu relay=2 seq=%lu hop=%u bytes=%u TX=OFF\n",
+    (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,
+    unsigned(p.hopCount),unsigned(sizeof(p)));
+  SD_EVENT(false,"relay_position_preview",p.originNodeId,p.sequenceNumber,
+    0,0,0,p.latitude_e7,p.longitude_e7,p.flags,p.hopCount);
 }
 #endif
 static ReceivedSOSView incomingBSOS = {};
@@ -1130,7 +1207,12 @@ void pollLoRaReceive() {
   // R2-B2: reject queued events superseded/cancelled while they were waiting.
   // This checks only volatile SOS state; it is not authentication or a TX grant.
   VesselPacket prepared;
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  if(!activeEmergency && !sosPending && !cancelPending &&
+     relayDryRun.poll(millis(),prepared)) {
+#else
   if (relayDryRun.poll(millis(), prepared)) {
+#endif
     const Relay52::Preflight gate = Relay52::preflightPrepared(prepared, peerSOSTable);
     if (gate != Relay52::Preflight::Ready) {
       Serial.printf("[RELAY52] DROP origin=0x%lX event=%lu type=%u reason=%s TX=OFF\n",
@@ -1157,6 +1239,16 @@ void pollLoRaReceive() {
           (unsigned long)NODE_ID, (unsigned long)prepared.originNodeId,
           (unsigned long)prepared.sequenceNumber,
           (unsigned)prepared.packetType, (unsigned)prepared.hopCount);
+      }
+#elif THESIS_MULTIHOP_BENCH_RF == 1
+      if(multihopBenchSession.live(millis()) &&
+         ThesisLabRelay::permits(prepared,NODE_ID)) {
+        const int rc=multihopBenchTransmit(prepared);
+        if(rc<0)Serial.printf("[MULTIHOP-BENCH] SOS_CANCEL_UNSENT event=%lu rc=%d\n",
+                                (unsigned long)prepared.sequenceNumber,rc);
+      } else {
+        Serial.printf("[MULTIHOP-BENCH] SOS_CANCEL_PREVIEW event=%lu type=%u TX=OFF\n",
+            (unsigned long)prepared.sequenceNumber,unsigned(prepared.packetType));
       }
 #else
       Serial.printf("[RELAY52] PREPARED origin=0x%lX event=%lu type=%u outgoing_hops=%u state=READY readiness=%s contract=%s TX=OFF\n",
@@ -1279,6 +1371,9 @@ void setupLoRa() {
 
 void startReceive() {
   int state = radio.startReceive();
+#if THESIS_MULTIHOP_BENCH_RF == 1
+  multihopBenchLastRxRc=state;
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
   f23dSDLastRxRc=state;
@@ -1717,7 +1812,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
 #if THESIS_MULTIHOP_DEV_TEST == 1
     // V002-only routine route preparation, after the existing format gate.
     // Must use ORIGINAL 25-byte bytes before conversion to a 62-byte local view.
-    if (multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) {
+    if (multihopDevRequested() && VesselIdentity::ready() && NODE_ID==2U) {
       const auto offered=multihopDevQueue.offer(buffer,length,NODE_ID);
       Serial.printf("[MULTIHOP-DEV] OFFER origin=%lu seq=%lu result=%s queued=%u RADIO_TX=DISABLED\n",
                     (unsigned long)pos.originId,(unsigned long)pos.sequence,

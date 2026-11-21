@@ -41,3 +41,31 @@ This is part of the existing feature/firmware-multihop branch, not a new project
 
 No serial/GPIO operator control is installed for radio permission. This preview
 remains build-only; GPIO0 is display/test-preview control, not an SOS trigger.
+
+## Supervised V002 physical bench integration (NOT YET BUILD VERIFIED)
+The separate opt-in profile `tbeam-supreme-multihop-v002-supervised-bench`
+adds a constrained V002 physical radio path. It is not the accepted F23D
+permission candidate and does not change that candidate's default-deny
+behavior. No sea deployment or acceptance claim is authorized.
+
+- DEV PDR Page 4, GPIO0 HOLD: **OFF -> PREP -> LIVE -> OFF**.
+  V002 (NVS vessel ID 2) alone can proceed. PREP records queues without
+  forwarding. LIVE requires the second deliberate hold. V001 and V003
+  cannot activate forwarding. The operator must visually verify V002's label.
+- LIVE automatically expires after **10 minutes** or **128 attempted
+  relay frames**; loss of radio TX, RX restoration, or a measured synchronous
+  radio-to-RX interval above **5,000 ms** disarms it. These are conservative
+  software stop bounds, not measured hardware assurances yet.
+- Normal operation is not changed by this test profile. While LIVE, V002
+  forwards admitted V001 SOS/CANCEL (62 bytes, hop=1) and accepted V001
+  position telemetry converted to existing 62-byte legacy v1 telemetry,
+  hop=1, original origin/sequence preserved. Routine traffic cannot
+  preempt local SOS/CANCEL or queued relayed SOS/CANCEL.
+- The existing SD writer is asked to record both radio result and measured
+  TX-to-RX interval; research acceptance still requires verifying journal
+  integrity/readback and V003 reception, not just a local radio-success code.
+- Frames remain unauthenticated; only fixed-route supervised laboratory
+  tests are contemplated. This is not safe to deploy at sea.
+- This bench profile is **not yet build- or hardware-validated**.
+  The existing F22 and F23D physical candidate profiles do not define
+  `THESIS_MULTIHOP_BENCH_RF` and remain unchanged.

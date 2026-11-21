@@ -1,4 +1,4 @@
-#include "dtn_f06_record_gate.h"
+#include "../firmware/shared/storage/dtn_f06_record_gate.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>

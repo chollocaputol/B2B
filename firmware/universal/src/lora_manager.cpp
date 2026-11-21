@@ -66,27 +66,7 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #if THESIS_F22_FLEET_OPERATIONAL != 1 || THESIS_LAB_RELAY_TX != 0 || THESIS_F23D_PHYSICAL_CANDIDATE != 0
 #error "DEV relay observation requires F22 and all physical relay transmission OFF"
 #endif
-static CompactPositionRelay::Queue multihopDevQueue;
-static MultihopDevTest::Control multihopDevControl;
-bool multihopDevRequested(){return multihopDevControl.requested();}
-bool multihopDevToggle(){
-  const bool changed=multihopDevControl.toggle(
-      VesselIdentity::nodeId(),VesselIdentity::ready(),
-      hasActiveLocalSOS() || getActiveSOSCount()>0);
-  if(changed)multihopDevQueue=CompactPositionRelay::Queue{}; // no stale cross-mode replay
-  return changed;
-}
-void multihopDevPollPrepared(){
-  if (!multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) return;
-  // No routine relay processing can run ahead of outstanding local emergency control.
-  if (activeEmergency || sosPending || cancelPending || macCadScanActive ||
-      digitalRead(LORA_DIO1)==HIGH) return;
-  CompactPositionRelay::Frame prepared;
-  if (!multihopDevQueue.take(prepared,false)) return;
-  Serial.printf("[MULTIHOP-DEV] PREPARED origin=1 relay=2 seq=%lu uptime=%lu bytes=25 RADIO_TX=DISABLED\n",
-      (unsigned long)prepared.sequence,(unsigned long)prepared.uptimeSeconds);
-  SD_EVENT(false,"relay_position_preview",1U,prepared.sequence,0);
-}
+
 #endif
 #include "../../shared/communication/receive_format_guard.h"
 #include "../../shared/communication/device_verification_contract.h"
@@ -833,6 +813,29 @@ bool f23dHandleRunCommand(const char* line) {
 }
 #endif
 // F23D end
+#if THESIS_MULTIHOP_DEV_TEST == 1
+static CompactPositionRelay::Queue multihopDevQueue;
+static MultihopDevTest::Control multihopDevControl;
+bool multihopDevRequested(){return multihopDevControl.requested();}
+bool multihopDevToggle(){
+  const bool changed=multihopDevControl.toggle(
+      VesselIdentity::nodeId(),VesselIdentity::ready(),
+      hasActiveLocalSOS() || getActiveSOSCount()>0);
+  if(changed)multihopDevQueue=CompactPositionRelay::Queue{}; // no stale cross-mode replay
+  return changed;
+}
+void multihopDevPollPrepared(){
+  if (!multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) return;
+  // No routine relay processing can run ahead of outstanding local emergency control.
+  if (activeEmergency || sosPending || cancelPending || macCadScanActive ||
+      digitalRead(LORA_DIO1)==HIGH) return;
+  CompactPositionRelay::Frame prepared;
+  if (!multihopDevQueue.take(prepared,false)) return;
+  Serial.printf("[MULTIHOP-DEV] PREPARED origin=1 relay=2 seq=%lu uptime=%lu bytes=25 RADIO_TX=DISABLED\n",
+      (unsigned long)prepared.sequence,(unsigned long)prepared.uptimeSeconds);
+  SD_EVENT(false,"relay_position_preview",1U,prepared.sequence,0);
+}
+#endif
 static ReceivedSOSView incomingBSOS = {};
 size_t getSOSRecordCount() {return peerSOSTable.count();}
 size_t getActiveSOSCount() {return peerSOSTable.activeCount();}

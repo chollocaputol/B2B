@@ -108,3 +108,34 @@ The mock-reader host test passes under native g++ locally; **device SD
 adapter, strict JSON validation, backend ingestion, shore Wi-Fi,
 sidecar storage, and real DTN upload remain NOT IMPLEMENTED**.
 No existing device/runtime source was modified.
+
+## 2026-11-22 F06 strict flat-record gate (host-only)
+
+New pure code: `firmware/shared/storage/dtn_f06_record_gate.h`,
+with a native mock/fixture test `tests/dtn_f06_record_gate_host.cpp`.
+It runs after the existing newline framer, with no Arduino, SD, Wi-Fi,
+HTTP, LoRa, NVS or runtime linking. Original journal bytes stay immutable.
+
+The validator requires bounded flat JSON syntax; rejects duplicate keys,
+invalid escapes, malformed numbers, wrong-vessel records, missing `kind`
+and `vessel_id`, and for SOS/telemetry journals requires unsigned 32-bit
+`boot_token`, positive `event_index` and `uptime_ms`. It does NOT verify
+all event-specific/weather value semantics or origin authenticity.
+Diagnostics are classified `DiagnosticsOnly`, not ordinary cloud telemetry.
+Other records can be only `CandidateUnverified`, **never approved uploads**.
+
+The `localLocator()` helper combines vessel, allowlisted F06 session,
+allowlisted journal name, immutable file ordinal/byte-range and nonsecure
+FNV-1a checksum. This is a **local diagnostic reference**, not a UUID,
+MAC, uploader credential, cryptographically unique ID or backend
+idempotency key. Do not use it as a server `record_id` without a
+separate collision-safe identity and backend review.
+
+The exact new header and test pass native g++ C++17 -Wall -Wextra -Werror
+against the exact earlier JSONL header. PlatformIO builds are unaffected
+because no firmware translation unit includes the new model.
+
+**Still blocked:** strict per-kind schema mapping, stable cloud record ID,
+source proof, durable SD sidecar, real on-board SD read adapter,
+authenticated shore Wi-Fi/REST ingestion, backend acceptance and reboot
+replay against a real service. Physical multihop remains blocked by V001.

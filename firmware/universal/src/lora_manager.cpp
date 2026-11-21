@@ -62,6 +62,7 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #endif
 #if THESIS_MULTIHOP_DEV_TEST == 1
 #include "../../shared/relay/compact_position_relay.h"
+#include "../../shared/relay/compact_position_hop1.h"
 #include "../../shared/relay/multihop_dev_test.h"
 #if THESIS_F22_FLEET_OPERATIONAL != 1 || THESIS_LAB_RELAY_TX != 0 || THESIS_F23D_PHYSICAL_CANDIDATE != 0
 #error "DEV relay observation requires F22 and all physical relay transmission OFF"
@@ -827,13 +828,22 @@ bool multihopDevToggle(){
 void multihopDevPollPrepared(){
   if (!multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) return;
   // No routine relay processing can run ahead of outstanding local emergency control.
-  if (activeEmergency || sosPending || cancelPending || macCadScanActive ||
+  if (activeEmergency || sosPending || cancelPending || getActiveSOSCount()>0 || macCadScanActive ||
       digitalRead(LORA_DIO1)==HIGH) return;
   CompactPositionRelay::Frame prepared;
   if (!multihopDevQueue.take(prepared,false)) return;
-  Serial.printf("[MULTIHOP-DEV] PREPARED origin=1 relay=2 seq=%lu uptime=%lu bytes=25 RADIO_TX=DISABLED\n",
-      (unsigned long)prepared.sequence,(unsigned long)prepared.uptimeSeconds);
-  SD_EVENT(false,"relay_position_preview",1U,prepared.sequence,0);
+  VesselPacket hopOne{};
+  if (!CompactPositionRelay::toHopOneTelemetry(prepared,NODE_ID,hopOne)) {
+    Serial.println("[MULTIHOP-DEV] DROP=INVALID_CONVERSION RADIO_TX=DISABLED");
+    return;
+  }
+  // The 62-byte v1 telemetry schema carries a verifiable hop marker;
+  // the original 25-byte POSITION_V2 schema has no hop field.
+  Serial.printf("[MULTIHOP-DEV] PREPARED origin=%lu relay=2 seq=%lu hop=%u bytes=%u RADIO_TX=DISABLED\n",
+      (unsigned long)hopOne.originNodeId,(unsigned long)hopOne.sequenceNumber,
+      unsigned(hopOne.hopCount),unsigned(sizeof(hopOne)));
+  SD_EVENT(false,"relay_position_preview",hopOne.originNodeId,hopOne.sequenceNumber,
+           0,0,0,hopOne.latitude_e7,hopOne.longitude_e7,hopOne.flags,hopOne.hopCount);
 }
 #endif
 static ReceivedSOSView incomingBSOS = {};

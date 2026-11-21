@@ -86,3 +86,19 @@ behavior. No sea deployment or acceptance claim is authorized.
   STOP, not an SOS operation. Normal SOS browsing resumes after stop.
 - The existing F22 and F23D physical candidate profiles do not define
   `THESIS_MULTIHOP_BENCH_RF` and remain unchanged.
+
+## Fleet HOME identity label correction (build verification pending)
+Operational HOME headers now format the existing provisioned
+`VesselIdentity::nodeId()` as `V001`, `V002`, `V003`, etc.,
+rather than displaying a hardcoded V003 label on every common-fleet board.
+Portrait HOME retains the previous V003 x3 title, battery icon x26
+and battery percentage x38 layout for IDs 1–999. For four-digit
+vessel IDs the battery **icon only** is omitted to prevent overlap;
+the battery percentage is always shown. Landscape HOME shows
+`V002 HOME` on Vessel-002 and `V003 HOME` on Vessel-003.
+No identity/NVS writes, radio protocol, relay permission, SD path,
+SOS handling or other OLED page flows are changed.
+A standalone C++ host test passes for IDs 1, 2, 3, 999, 1000,
+9999 and missing identities. The new PlatformIO image and SHA256
+must be built and verified again before flashing V002; do NOT reuse
+the previous `d488a96` firmware hash for the corrected display.

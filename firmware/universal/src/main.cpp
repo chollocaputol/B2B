@@ -24,6 +24,7 @@ extern void f23dPollEvidence();
 #endif
 #include "../../shared/hardware/tbeam_pins.h"
 #include "../../shared/hardware/vessel_identity.h"
+#include "../../shared/hardware/fleet_home_title.h"
 #include "../../shared/hardware/oled_button_debounce.h"
 #include "../../shared/hardware/tbeam_hardware_service.h"
 #include "../../shared/hardware/gps_service.h"
@@ -2354,12 +2355,12 @@ F21Icon::Kind oledF21HeaderIcon(const char* title) {
   if(strstr(title,"PEER")||strstr(title,"NEARBY"))return F21Icon::Radio;
   return F21Icon::Boat;
 }
-void oledF21PortraitTop(const char* title,bool alert=false) {
+void oledF21PortraitTop(const char* title,bool alert=false,bool vesselHome=false) {
   u8g2.clearBuffer();u8g2.setFont(u8g2_font_5x8_tf);
   u8g2.drawBox(0,0,64,13);u8g2.setDrawColor(0);
-  // F21R4.1: give portrait HOME its entire 64px status header. Other
-  // portrait pages retain their pictograms and original title offset.
-  if(strcmp(title,"V003")==0)oledF21P(3,10,title);
+  // Keep the full-width portrait HOME title (no boat icon) for EVERY
+  // provisioned vessel, not just the original hardcoded V003.
+  if(vesselHome)oledF21P(3,10,title);
   else{oledF21Icon(oledF21HeaderIcon(title),2,1);oledF21P(13,10,title);}
   u8g2.setDrawColor(1);
   if(alert)u8g2.drawFrame(0,14,64,102);
@@ -2436,10 +2437,17 @@ void oledF21HomeLabel(char* dst,size_t n) {
 }
 void oledF21PortraitGPSPage(){
   if(f19Display.homeMenuOpen()){oledF21PortraitHomeMenu();return;}
-  char b[42];oledF21PortraitTop("V003");
-  // V003 text replaces the boat icon; preserve a 2px battery-label gap.
-  // Pixel fit: V003 x3..23, battery x26..36, 100% x38..62 (64px width).
-  u8g2.setDrawColor(0);oledF21Icon(F21Icon::Battery,26,2);
+  const uint32_t vesselId=VesselIdentity::nodeId();
+  const bool vesselReady=VesselIdentity::ready();
+  char vesselTitle[8];FleetHomeTitle::shortTitle(vesselId,vesselReady,
+                                                vesselTitle,sizeof(vesselTitle));
+  char b[42];oledF21PortraitTop(vesselTitle,false,true);
+  // For V001..V999, preserve the V003 portrait layout exactly:
+  // title x3, battery icon x26, percentage x38. V1000+ or NO ID gets
+  // the full title and the percentage without an overlapping icon.
+  u8g2.setDrawColor(0);
+  if(FleetHomeTitle::portraitBatteryIconFits(vesselId,vesselReady))
+    oledF21Icon(F21Icon::Battery,26,2);
   oledF21BatteryLabel(38,11,true);u8g2.setDrawColor(1);
   u8g2.drawFrame(1,16,62,35);
   u8g2.setFont(u8g2_font_5x8_tf);oledF21P(5,26,"TIME / PHT");
@@ -2465,7 +2473,10 @@ void oledF21PortraitGPSPage(){
 }
 void oledF21LandscapeGPSPage(){
   if(f19Display.homeMenuOpen()){oledF21LandscapeHomeMenu();return;}
-  char b[42];oledF21LandscapeTop("V003 HOME");
+  char vesselTitle[16];FleetHomeTitle::landscapeTitle(
+      VesselIdentity::nodeId(),VesselIdentity::ready(),
+      vesselTitle,sizeof(vesselTitle));
+  char b[42];oledF21LandscapeTop(vesselTitle);
   u8g2.setDrawColor(0);oledF21Icon(F21Icon::Battery,91,2);
   oledF21BatteryLabel(104,10,false);u8g2.setDrawColor(1);
   u8g2.drawFrame(1,15,62,39);u8g2.drawFrame(66,15,61,39);

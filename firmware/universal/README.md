@@ -1,12 +1,27 @@
-# Phase 5.2.2C-1 — isolated universal firmware baseline
+# Universal T-Beam Supreme firmware
 
-This is a **build-only copy of the current Board A application** and is not yet universal.
-It is a protected starting point for subsequent refactors; no original files changed.
+The historical Phase 5.2.2C-1 copy was build-only and **not yet universal**.
+Subsequent commits added NVS vessel identity, the standardized fleet
+operational profile, SOS/ACK/CANCEL, GPS/weather/OLED, F06 SD sandboxing,
+and experimental guarded relay candidates. Do **not** deploy an arbitrary
+PlatformIO environment or assume build-only means hardware accepted.
 
-**Do not upload this image to both devices.** The copied radio code still uses
-hardcoded `NODE_ID=0xA1`, `NODE_NAME=Vessel-A`, and Board-A-specific neighbor and
-SOS logic. Flashing it to both vessels would duplicate their network identities.
+**New board and recovery instructions:** see
+[**Fleet enrollment and universal firmware recovery**](./FLEET_ONBOARDING_AND_RECOVERY.md).
 
-Next: implement per-device NVS identity provisioning, replace opposite-node
-hardcoding, reconcile per-vessel weather and SOS/display behavior, then run a
-full two-device regression before calling the firmware universal.
+The normal common-fleet profile is
+`tbeam-supreme-fleet-universal-operational-build-only`. It loads the
+device's existing `vessel-ident` NVS keys and does not automatically
+assign a new vessel number.
+
+The USB enrollment-only profile is
+`tbeam-supreme-fleet-usb-enrollment-build-only`.
+The external utility is `scripts/fleet/onboard.py`; its default allocator
+reserves IDs 1–3 and assigns ID 4+ for an additional blank device.
+Replacing a dead V001 is a different procedure described in the guide.
+
+The physical multihop laboratory profile
+`tbeam-supreme-multihop-v002-supervised-bench` is intentionally separate.
+It must **never** be used to restore V003 or as normal universal fleet
+firmware. V001-V002-V003 multihop transmission remains subject to
+independent hardware validation.

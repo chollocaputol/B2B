@@ -37,5 +37,17 @@ int main(){
   assert(s.reserve(21+i,2,true,false,false));
  assert(!s.reserve(500,2,true,false,false));
  assert(!s.live(500));
+ // The OLED's SOS path must still be able to disarm V002 immediately.
+ Session emergencyStop;
+ assert(!emergencyStop.press(2,true,true,1)); // emergency cannot activate
+ assert(emergencyStop.press(2,true,false,2)); // OFF -> PREP
+ assert(emergencyStop.press(2,true,true,3));  // PREP -> OFF during SOS
+ assert(!emergencyStop.preparing(3));
+ assert(emergencyStop.press(2,true,false,4));
+ assert(emergencyStop.press(2,true,false,5)); // LIVE
+ assert(emergencyStop.live(6));
+ assert(emergencyStop.press(2,true,true,7));  // LIVE -> OFF during SOS
+ assert(!emergencyStop.live(8));
+ assert(!emergencyStop.reserve(8,2,true,false,false));
  std::puts("supervised V002 bench gate host PASS");
 }

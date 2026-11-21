@@ -1833,6 +1833,19 @@ void handleOLEDButton() {
       // GPIO2 remains the only physical SOS start/cancel input.
       const bool f19ActiveSOS=f21r42SOSBrowse.emergency();
       if (f19ActiveSOS) {
+#if THESIS_MULTIHOP_BENCH_RF == 1
+        // The SOS display path bypasses the DEV PDR page. A long GPIO0 hold
+        // must therefore be an emergency relay STOP while PREP/LIVE is active.
+        // This changes only V002 lab relay state, never the SOS/CANCEL state.
+        if(duration>=BUTTON_LONG_PRESS_MS && multihopDevRequested()) {
+          const bool disarmed=multihopDevToggle();
+          if(disarmed) {
+            Serial.println("[MULTIHOP-BENCH] EMERGENCY_UI_DISARM relay=OFF; SOS_UNCHANGED=1");
+            lastOLEDUpdate=0;
+            return;
+          }
+        }
+#endif
         // F21R4.3: SOS is always visible first, but during deliberate
         // browsing GPIO0 retains each operational page's own hold menu.
         // Menus are view-only; GPIO2 and the LoRa SOS state are untouched.

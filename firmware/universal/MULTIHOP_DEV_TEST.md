@@ -42,7 +42,7 @@ This is part of the existing feature/firmware-multihop branch, not a new project
 No serial/GPIO operator control is installed for radio permission. This preview
 remains build-only; GPIO0 is display/test-preview control, not an SOS trigger.
 
-## Supervised V002 physical bench integration (NOT YET BUILD VERIFIED)
+## Supervised V002 physical bench integration
 The separate opt-in profile `tbeam-supreme-multihop-v002-supervised-bench`
 adds a constrained V002 physical radio path. It is not the accepted F23D
 permission candidate and does not change that candidate's default-deny
@@ -66,6 +66,12 @@ behavior. No sea deployment or acceptance claim is authorized.
   integrity/readback and V003 reception, not just a local radio-success code.
 - Frames remain unauthenticated; only fixed-route supervised laboratory
   tests are contemplated. This is not safe to deploy at sea.
-- This bench profile is **not yet build- or hardware-validated**.
-  The existing F22 and F23D physical candidate profiles do not define
+- The six-profile PlatformIO build at `bc5bf68` **passed on
+  2026-11-21**; that build does not cover the emergency-stop correction or
+  prove any on-device delivery. Rebuild this revision before flash review.
+- If a received/local SOS forces the OLED into emergency browsing while
+  V002's relay is PREP/LIVE, a GPIO0 **long hold stops relay immediately**
+  without cancelling or acknowledging the SOS. This is an emergency bench
+  STOP, not an SOS operation. Normal SOS browsing resumes after stop.
+- The existing F22 and F23D physical candidate profiles do not define
   `THESIS_MULTIHOP_BENCH_RF` and remain unchanged.

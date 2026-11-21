@@ -9,10 +9,16 @@ public:
  static constexpr uint16_t kMaxAttempts=128;
  static constexpr uint32_t kMaxRadioToRxMs=5000UL;
  bool press(uint32_t self,bool ready,bool emergency,uint32_t now) {
-  if(self!=2U || !ready || emergency)return false;
+  if(self!=2U || !ready)return false;
+  // A long hold must ALWAYS be able to turn the supervised relay OFF,
+  // including while a remote SOS forces the OLED into emergency browsing.
+  // An emergency must never cause OFF/PREP to transition to LIVE.
+  if(state_==State::Live || (state_==State::Prepared && emergency)){
+    revoke();return true;
+  }
+  if(emergency)return false;
   if(state_==State::Off){state_=State::Prepared;return true;}
-  if(state_==State::Prepared){state_=State::Live;began_=now;attempts_=0;return true;}
-  revoke();return true;
+  state_=State::Live;began_=now;attempts_=0;return true;
  }
  void revoke(){state_=State::Off;attempts_=0;}
  State state()const{return state_;}

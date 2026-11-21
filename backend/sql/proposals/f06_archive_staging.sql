@@ -4,6 +4,20 @@
 -- Existing five public tables and their current privileges are untouched.
 BEGIN;
 
+-- Independent export approval. Never populated by the importer.
+CREATE TABLE public.dtn_f06_approved_exports (
+  vessel_number integer NOT NULL CHECK (vessel_number BETWEEN 1 AND 9999),
+  session_name text NOT NULL CHECK (session_name ~ '^S[0-9A-F]{7}$'),
+  journal_name text NOT NULL DEFAULT 'sos_events.jsonl'
+    CHECK (journal_name = 'sos_events.jsonl'),
+  file_sha256 text NOT NULL CHECK (file_sha256 ~ '^[0-9A-F]{64}$'),
+  original_bytes integer NOT NULL CHECK (original_bytes BETWEEN 0 AND 65536),
+  record_count integer NOT NULL CHECK (record_count BETWEEN 0 AND 128),
+  approved_by uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
+  approved_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (vessel_number, session_name, journal_name)
+);
+
 CREATE TABLE public.dtn_f06_history_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   imported_by uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
@@ -32,10 +46,14 @@ CREATE TABLE public.dtn_f06_history_records (
 );
 
 -- These are restricted archival evidence tables, not dashboard Data API tables.
+ALTER TABLE public.dtn_f06_approved_exports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dtn_f06_history_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dtn_f06_history_records ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.dtn_f06_history_files, public.dtn_f06_history_records
+REVOKE ALL ON public.dtn_f06_approved_exports,
+  public.dtn_f06_history_files, public.dtn_f06_history_records
   FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON public.dtn_f06_approved_exports FROM service_role;
+GRANT SELECT ON public.dtn_f06_approved_exports TO service_role;
 GRANT SELECT, INSERT ON public.dtn_f06_history_files,
   public.dtn_f06_history_records TO service_role;
 -- No RLS policies: neither anon nor ordinary logged-in users can read/write.
@@ -74,6 +92,19 @@ BEGIN
   v_count := jsonb_array_length(p_records);
   IF v_count > 128 THEN
     RAISE EXCEPTION 'archive batch too large';
+  END IF;
+
+  -- A self-declared file digest never grants archive authorization.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.dtn_f06_approved_exports a
+    WHERE a.vessel_number = p_vessel
+      AND a.session_name = p_session
+      AND a.journal_name = 'sos_events.jsonl'
+      AND a.file_sha256 = p_sha256
+      AND a.original_bytes = p_size
+      AND a.record_count = v_count
+  ) THEN
+    RAISE EXCEPTION 'closed-export manifest not independently approved';
   END IF;
 
   -- Unique session/journal acts as an immutable file idempotency key.

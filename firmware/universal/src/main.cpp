@@ -29,6 +29,9 @@ extern void f23dPollEvidence();
 #include "../../shared/hardware/gps_service.h"
 #include <Arduino.h>
 #include "sos_controls.h"
+#ifndef THESIS_MULTIHOP_DEV_TEST
+#define THESIS_MULTIHOP_DEV_TEST 0
+#endif
 #include "physical_indicators.h"
 // USB-only fleet enrollment; excluded from every accepted V003 profile.
 #ifndef THESIS_FLEET_USB_ENROLLMENT
@@ -1380,6 +1383,10 @@ void loop() {
   }
   processSOSRetries();
   processCancelRetries();
+#if THESIS_MULTIHOP_DEV_TEST == 1
+  // Must run AFTER operational SOS and CANCEL retry handling.
+  multihopDevPollPrepared();
+#endif
 // F23D readiness begin
 // F23D physical begin
 // F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
@@ -2008,6 +2015,14 @@ void handleOLEDButton() {
         sdOLEDSubview = (sdOLEDSubview + 1U) % 3U;
         Serial.printf("[OLED-SD] VIEW=%u DISPLAY_ONLY\n", (unsigned)sdOLEDSubview);
 #endif
+#endif
+#if THESIS_MULTIHOP_DEV_TEST == 1
+      } else if (oledPage == 3 && duration >= BUTTON_LONG_PRESS_MS) {
+        // DEV PDR page 4: lab observation toggle only; never grants relay RF.
+        // Existing GPIO2 SOS handling and SD recording are unaffected.
+        const bool changed=multihopDevToggle();
+        Serial.printf("[MULTIHOP-DEV-UI] toggle=%u preview=%u RADIO_TX=DISABLED\n",
+                      unsigned(changed),unsigned(multihopDevRequested()));
 #endif
       } else if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
         alertDemoMode = (alertDemoMode + 1) % 4;
@@ -3056,7 +3071,15 @@ void oledPDRPage() {
     snprintf(line,sizeof(line),"PDR EST:%.1f%%",peer.pdr);
     u8g2.drawStr(0,47,line);
   }
+#if THESIS_MULTIHOP_DEV_TEST == 1
+  if (VesselIdentity::ready() && VesselIdentity::nodeId()==2U)
+    snprintf(line,sizeof(line),"TXF:%lu RLY:%s",(unsigned long)txFailures,
+             multihopDevRequested()?"PREP":"OFF");
+  else
+    snprintf(line,sizeof(line),"TXF:%lu RLY:N/A",(unsigned long)txFailures);
+#else
   snprintf(line,sizeof(line),"TX FAIL:%lu",(unsigned long)txFailures);
+#endif
   u8g2.drawStr(0,60,line);
   u8g2.sendBuffer();
 }

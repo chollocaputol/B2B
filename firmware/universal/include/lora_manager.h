@@ -36,6 +36,12 @@ uint32_t getRecentMacPeerCount(uint32_t nowMs, uint32_t horizonMs);
 void setupLoRa();
 void startReceive();
 void pollLoRaReceive();
+#if THESIS_MULTIHOP_DEV_TEST == 1
+// DEV Page 4 experiment only; these functions NEVER authorize forwarding RF.
+bool multihopDevRequested();
+bool multihopDevToggle();
+void multihopDevPollPrepared();
+#endif
 // PHASE 5.2.2C-3G-4E2: CAD IRQ must not enter RX readData().
 enum class TelemetryCadResult : uint8_t {
   None, Scanning, Free, Busy, RxActive, Error, Timeout, Interrupted

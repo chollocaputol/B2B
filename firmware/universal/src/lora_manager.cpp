@@ -57,6 +57,37 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #include "../../shared/communication/control_retry_schedule.h"
 #include "weather_manager.h"
 #include "../../shared/communication/compact_position_v2.h"
+#ifndef THESIS_MULTIHOP_DEV_TEST
+#define THESIS_MULTIHOP_DEV_TEST 0
+#endif
+#if THESIS_MULTIHOP_DEV_TEST == 1
+#include "../../shared/relay/compact_position_relay.h"
+#include "../../shared/relay/multihop_dev_test.h"
+#if THESIS_F22_FLEET_OPERATIONAL != 1 || THESIS_LAB_RELAY_TX != 0 || THESIS_F23D_PHYSICAL_CANDIDATE != 0
+#error "DEV relay observation requires F22 and all physical relay transmission OFF"
+#endif
+static CompactPositionRelay::Queue multihopDevQueue;
+static MultihopDevTest::Control multihopDevControl;
+bool multihopDevRequested(){return multihopDevControl.requested();}
+bool multihopDevToggle(){
+  const bool changed=multihopDevControl.toggle(
+      VesselIdentity::nodeId(),VesselIdentity::ready(),
+      hasActiveLocalSOS() || getActiveSOSCount()>0);
+  if(changed)multihopDevQueue=CompactPositionRelay::Queue{}; // no stale cross-mode replay
+  return changed;
+}
+void multihopDevPollPrepared(){
+  if (!multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) return;
+  // No routine relay processing can run ahead of outstanding local emergency control.
+  if (activeEmergency || sosPending || cancelPending || macCadScanActive ||
+      digitalRead(LORA_DIO1)==HIGH) return;
+  CompactPositionRelay::Frame prepared;
+  if (!multihopDevQueue.take(prepared,false)) return;
+  Serial.printf("[MULTIHOP-DEV] PREPARED origin=1 relay=2 seq=%lu uptime=%lu bytes=25 RADIO_TX=DISABLED\n",
+      (unsigned long)prepared.sequence,(unsigned long)prepared.uptimeSeconds);
+  SD_EVENT(false,"relay_position_preview",1U,prepared.sequence,0);
+}
+#endif
 #include "../../shared/communication/receive_format_guard.h"
 #include "../../shared/communication/device_verification_contract.h"
 #include "../../shared/communication/device_shadow_receiver.h"
@@ -1670,6 +1701,16 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       Serial.println("[RX-POS2] Invalid v2 position frame");
       return;
     }
+#if THESIS_MULTIHOP_DEV_TEST == 1
+    // V002-only routine route preparation, after the existing format gate.
+    // Must use ORIGINAL 25-byte bytes before conversion to a 62-byte local view.
+    if (multihopDevControl.mayPrepare(VesselIdentity::nodeId(),VesselIdentity::ready())) {
+      const auto offered=multihopDevQueue.offer(buffer,length,NODE_ID);
+      Serial.printf("[MULTIHOP-DEV] OFFER origin=%lu seq=%lu result=%s queued=%u RADIO_TX=DISABLED\n",
+                    (unsigned long)pos.originId,(unsigned long)pos.sequence,
+                    CompactPositionRelay::name(offered),unsigned(multihopDevQueue.pending()));
+    }
+#endif
     normalizedPosition.magic = PACKET_MAGIC;
     normalizedPosition.version = PACKET_VERSION;
     normalizedPosition.packetType = PACKET_TELEMETRY;

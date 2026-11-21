@@ -75,6 +75,7 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #if THESIS_MULTIHOP_DEV_TEST == 1
 #include "../../shared/relay/compact_position_relay.h"
 #include "../../shared/relay/compact_position_hop1.h"
+#include "../../shared/relay/multihop_priority.h"
 #include "../../shared/relay/multihop_dev_test.h"
 #if THESIS_F22_FLEET_OPERATIONAL != 1 || THESIS_LAB_RELAY_TX != 0 || THESIS_F23D_PHYSICAL_CANDIDATE != 0
 #error "DEV relay observation requires F22 and all physical relay transmission OFF"
@@ -899,9 +900,11 @@ static int multihopBenchTransmit(const VesselPacket& p) {
 #endif
 void multihopDevPollPrepared(){
   if(!multihopDevRequested())return;
-  // Prepared SOS and CANCEL always preempt routine position traffic.
-  if(activeEmergency || sosPending || cancelPending || getActiveSOSCount()>0 ||
-     relayDryRun.size()>0 || macCadScanActive || digitalRead(LORA_DIO1)==HIGH)return;
+  // Prepared SOS/CANCEL preempt routine traffic. A peer SOS remaining
+  // ACTIVE after its relay queue drains must not starve routine telemetry.
+  if(!MultihopPriority::mayDrainRoutine(activeEmergency,sosPending,
+      cancelPending,relayDryRun.size()>0,macCadScanActive,
+      digitalRead(LORA_DIO1)==HIGH))return;
   CompactPositionRelay::Frame f{};
   if(!multihopDevQueue.take(f,false))return;
   VesselPacket p{};
@@ -1814,7 +1817,7 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     // Must use ORIGINAL 25-byte bytes before conversion to a 62-byte local view.
     if (multihopDevRequested() && VesselIdentity::ready() && NODE_ID==2U) {
       const auto offered=multihopDevQueue.offer(buffer,length,NODE_ID);
-      Serial.printf("[MULTIHOP-DEV] OFFER origin=%lu seq=%lu result=%s queued=%u RADIO_TX=DISABLED\n",
+      Serial.printf("[MULTIHOP-DEV] OFFER origin=%lu seq=%lu result=%s queued=%u TX=NOT_AT_ADMISSION\n",
                     (unsigned long)pos.originId,(unsigned long)pos.sequence,
                     CompactPositionRelay::name(offered),unsigned(multihopDevQueue.pending()));
     }

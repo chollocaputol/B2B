@@ -16,8 +16,10 @@ This is part of the existing feature/firmware-multihop branch, not a new project
   NOT a transmission. V003 already supports receiving 62-byte telemetry with
   origin/sequence preserved. Weather/battery/name fields absent from POSITION_V2
   are never invented or flagged as valid.
-- Routine preview preparation is deferred while local SOS/CANCEL transmission
-  is pending or remote SOS remains active. No packet is retransmitted.
+- Routine preview preparation defers while an own-vessel emergency or a
+  relayed SOS/CANCEL is pending. A remote SOS remaining active in the peer
+  table does NOT indefinitely block routine forwarding once the urgent
+  relay queue has drained. The preview does not retransmit packets.
 - GPIO0 long-hold on Development page 4 (PDR) toggles V002's PREVIEW OFF/PREP;
   the last line reports `RLY:OFF` or `RLY:PREP`. V001/V003 cannot enable it.
   Turning it OFF clears queued entries; the toggle is volatile and NOT an RF grant.
@@ -48,6 +50,9 @@ adds a constrained V002 physical radio path. It is not the accepted F23D
 permission candidate and does not change that candidate's default-deny
 behavior. No sea deployment or acceptance claim is authorized.
 
+- Boot output identifies the supervised profile with
+  `[MULTIHOP-BENCH-BOOT] PROFILE=V002_SUPERVISED_R1`; the older
+  `[LAB-RELAY] BUILD=DISABLED` banner refers only to the legacy relay.
 - DEV PDR Page 4, GPIO0 HOLD: **OFF -> PREP -> LIVE -> OFF**.
   V002 (NVS vessel ID 2) alone can proceed. PREP records queues without
   forwarding. LIVE requires the second deliberate hold. V001 and V003
@@ -61,14 +66,20 @@ behavior. No sea deployment or acceptance claim is authorized.
   position telemetry converted to existing 62-byte legacy v1 telemetry,
   hop=1, original origin/sequence preserved. Routine traffic cannot
   preempt local SOS/CANCEL or queued relayed SOS/CANCEL.
+- V002's SD logger boots `SOS_ARMED` with **routine recording OFF**.
+  For the complete telemetry relay journal the operator must explicitly
+  select `CONTINUOUS` in the SD recording menu, without erasing the card.
+  SOS event writes are marked urgent independently. The radio sender
+  also prints attempt details on serial for immediate inspection.
 - The existing SD writer is asked to record both radio result and measured
   TX-to-RX interval; research acceptance still requires verifying journal
   integrity/readback and V003 reception, not just a local radio-success code.
 - Frames remain unauthenticated; only fixed-route supervised laboratory
   tests are contemplated. This is not safe to deploy at sea.
-- The six-profile PlatformIO build at `bc5bf68` **passed on
-  2026-11-21**; that build does not cover the emergency-stop correction or
-  prove any on-device delivery. Rebuild this revision before flash review.
+- The six-profile PlatformIO build at `bc5bf68` passed on
+  2026-11-21; the corrected V002 profile at `63da2b0` also passed
+  locally on 2026-11-21. Neither verifies this priority/banner change
+  or actual on-device delivery. Rebuild this revision before flash review.
 - If a received/local SOS forces the OLED into emergency browsing while
   V002's relay is PREP/LIVE, a GPIO0 **long hold stops relay immediately**
   without cancelling or acknowledging the SOS. This is an emergency bench

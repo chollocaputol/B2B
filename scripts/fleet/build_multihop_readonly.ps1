@@ -42,7 +42,7 @@ Write-Host "No upload/flash, COM, NVS or SD operations are performed."
 
 $compiler = Get-Command g++ -ErrorAction SilentlyContinue
 if ($compiler) {
-    foreach ($test in @('compact_position_relay_host', 'compact_position_hop1_host', 'multihop_dev_test_host', 'multihop_supervised_bench_host')) {
+    foreach ($test in @('compact_position_relay_host', 'compact_position_hop1_host', 'multihop_dev_test_host', 'multihop_supervised_bench_host', 'multihop_priority_host')) {
         $source = Join-Path $testRoot ($test + '.cpp')
         $exe = Join-Path $OutputDirectory ($test + '.exe')
         $log = Join-Path $OutputDirectory ($test + '.txt')

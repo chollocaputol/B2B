@@ -6,11 +6,11 @@ This document separates **repository facts**, **requirements supplied by the pro
 
 ## 1. Endpoint and versioning
 
-- **Team decision:** Keep the existing Vite + React + TypeScript application as the dashboard. Device ingestion and privileged database operations belong in a separate backend API service. Do not introduce Next.js or a Supabase Edge Function.
-- **Proposed endpoint:** `POST /api/v1/ingest` over HTTPS.
-- **Repository fact (rechecked 2026-10-31):** `frontend/` is the Vite React/TypeScript dashboard (`frontend/package.json`, `frontend/vite.config.ts`, `frontend/src/`). Its package has React and TypeScript, but no backend API service is present in the inspected repository. Keep the dashboard and backend as separate applications/services; their deployment arrangement is not selected here.
-- The separate backend API is responsible for device authentication, request and payload validation, registered vessel/device identity checks, backend LoRa-source trust classification, idempotency and duplicate handling, telemetry ingestion, SOS action processing and authorization, and secure Supabase database operations. It derives uploader identity from the authenticated credential and does not trust a body-supplied identity or origin-auth status.
-- The Vite dashboard communicates with the backend through authenticated API requests for protected data and permitted actions. Dashboard user authentication and authorization remain separate from device credentials. Configure the backend's allowed browser origins and credential/token handling as part of deployment; do not place device credentials or Supabase service-role credentials in browser code.
+- **Updated team architecture decision (2026-11-22; supersedes the 2026-10-31 service choice):** Keep the existing React + Vite + TypeScript dashboard, hosted on Netlify. Use the existing Supabase project for PostgreSQL, Auth, Realtime, and future HTTPS ingestion implemented as **Supabase Edge Functions**, not Next.js routes or a separately hosted custom backend.
+- **Logical proposed device API:** `POST /api/v1/ingest` describes the not-yet-implemented production contract. Its actual Edge Function URL, route and credentials require separate review. Do **not** confuse this with the narrower `/functions/v1/ingest-f06-history` historical evidence importer.
+- **Repository fact (rechecked 2026-11-22):** `frontend/` is an existing Vite React/TypeScript application. The connected Supabase project has five public tables but no deployed Edge Functions; its five existing public tables have RLS disabled and currently allow `anon` data access. Secure them before public ingestion or dashboard integration.
+- The Supabase Edge Function API is responsible for device authentication, request and payload validation, registered vessel/device identity checks, backend LoRa-source trust classification, idempotency and duplicate handling, telemetry ingestion, SOS action processing and authorization, and secure Supabase database operations. It derives uploader identity from the authenticated credential and does not trust a body-supplied identity or origin-auth status.
+- The Vite dashboard communicates with the backend through authenticated API requests for protected data and permitted actions. Dashboard user authentication and authorization remain separate from device credentials. Configure Edge Function browser origins and credential/token handling as part of deployment; do not place device credentials or Supabase service-role credentials in browser code.
 - The backend framework/runtime, hosting/deployment platform, and whether the backend is deployed separately from or alongside the static Vite dashboard remain open decisions. No framework, platform, or hosting arrangement is implied by this contract.
 - Use both a versioned URL (`v1`) and an integer `schema_version` in the request envelope. Do not infer or negotiate a new LoRa packet version through the HTTP API.
 
@@ -238,7 +238,7 @@ Provision a device row linked to a vessel before issuing credentials. Device reg
 
 Dashboard personnel authenticate through user auth, not the device token flow. User authorization must be checked server-side for vessel visibility and rescue confirmation. Only administrators/rescue operators may confirm rescue; vessel users may activate/cancel their own SOS but cannot confirm rescue. The exact role source and vessel-scope policy require approval.
 
-Never place Supabase service-role credentials in firmware, frontend/browser bundles, JSONL records, or API responses. Keep privileged credentials in the backend service's server-only runtime configuration. Do not log device tokens, MAC keys, or authorization headers.
+Never place Supabase service-role credentials in firmware, frontend/browser bundles, JSONL records, or API responses. Keep privileged credentials in Supabase Edge Function server-only runtime configuration. Do not log device tokens, MAC keys, or authorization headers.
 
 ## 11. Current firmware gaps requiring future work
 

@@ -77,3 +77,30 @@ Database transaction tests and real cloud upload are BLOCKED until a
 separate permitted staging environment is available and its price is
 explicitly accepted. The earlier 11/11 Node validator fixtures are
 host-only and do not satisfy DB SQL or live Edge Function acceptance.
+
+## 2026-11-22 local HTTP handler gate (Node, no Supabase calls)
+
+The shared pure request handler is supabase/functions/_shared/f06_history_http.ts.
+The Deno Edge Function entrypoint delegates to it. Only the HTTP logic
+is exercised on loopback 127.0.0.1 using MOCK operator authentication
+and MOCK database RPC. There are no cloud credentials, deployments,
+external network requests, SOS notifications or live database writes.
+
+Verified here on Node 22.16.0: 26/26 HTTP request cases PASS.
+Cases include missing/invalid user, operator authorization, SHA mismatch,
+invalid kinds, malformed F06 JSONL, LEGACY exclusion, manifest denial,
+approved 4-record synthetic archive, identical retry, altered file,
+cross-session identity collision, size bounds and provider failures.
+The test records are synthetic, not the original V002 evidence.
+The mock archive RPC is not a real PostgreSQL transaction.
+
+Windows runner: scripts/dtn/test_f06_history_http.ps1 from a clean
+feature worktree, which executes the earlier 11 JSONL validator fixtures
+plus these 26 HTTP tests (37 expected). Only user-run Windows output
+may establish Windows acceptance. This does not execute the actual
+Deno runtime adapter or a full Supabase Auth+Postgres integration.
+Original V002 HTTP import, local Deno runtime, production RLS, device
+credentials, firmware Wi-Fi/HTTPS and live cloud ingest are PENDING.
+
+history_only response is not an operational SOS acknowledgment,
+rescue confirmation, or production DTN acknowledgment.

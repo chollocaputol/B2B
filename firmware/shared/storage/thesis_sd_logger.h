@@ -9,6 +9,16 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+// F24D build-only bridge; default-disabled, never schedules SD access.
+#ifndef THESIS_DTN_F24D_BUILD_ONLY
+#define THESIS_DTN_F24D_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24D_BUILD_ONLY != 0 && THESIS_DTN_F24D_BUILD_ONLY != 1
+#error "F24D preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24D_BUILD_ONLY == 1
+#include "dtn_f24d_arduino_read_port.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -90,6 +100,21 @@
 #endif
 
 namespace ThesisSDLogger {
+#if THESIS_DTN_F24D_BUILD_ONLY == 1
+// Compiler-only seam. Gate always rejects; NO SD.open and no runtime caller.
+struct F24DNoPhysicalPermission {
+  bool allowClosedJournal(const DTNAckLedger::Stream&, const char*) const {return false;}
+};
+using F24DBuildOnlyJob=DTNF24D::Job<DTNF24DArduino::ReadFile,DTNF24DArduino::ReadVolume>;
+inline DTNF24D::Result f24dBuildOnlyDeny(const DTNAckLedger::Stream& stream){
+  DTNF24DArduino::ReadVolume volume;
+  F24DBuildOnlyJob job;
+  F24DNoPhysicalPermission deny;
+  const auto first=job.begin(volume,stream,deny);
+  (void)job.step(deny,true,DTNF24D::kChunkBytes);
+  return first;
+}
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
 inline bool f23dStorageFrozen();

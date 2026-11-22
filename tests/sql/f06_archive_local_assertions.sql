@@ -40,6 +40,15 @@ BEGIN
   THEN
     RAISE EXCEPTION 'service role can self-approve a manifest';
   END IF;
+  -- Historical archived rows are append-only for the importer.
+  -- An identical retry must not require widening service_role privileges.
+  IF has_table_privilege('service_role','public.dtn_f06_history_files','UPDATE')
+    OR has_table_privilege('service_role','public.dtn_f06_history_files','DELETE')
+    OR has_table_privilege('service_role','public.dtn_f06_history_records','UPDATE')
+    OR has_table_privilege('service_role','public.dtn_f06_history_records','DELETE')
+  THEN
+    RAISE EXCEPTION 'historical archives must stay immutable to importer';
+  END IF;
   IF has_function_privilege('anon',
     'public.dtn_archive_f06_sos_file(uuid,integer,text,text,integer,jsonb)','EXECUTE')
      OR has_function_privilege('authenticated',

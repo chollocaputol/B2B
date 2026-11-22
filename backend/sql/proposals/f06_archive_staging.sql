@@ -117,8 +117,10 @@ BEGIN
   IF v_file IS NULL THEN
     SELECT * INTO v_existing FROM public.dtn_f06_history_files
       WHERE vessel_number = p_vessel AND session_name = p_session
-        AND journal_name = 'sos_events.jsonl'
-      FOR UPDATE;
+        AND journal_name = 'sos_events.jsonl';
+    -- The unique ON CONFLICT INSERT above serializes competing attempts.
+    -- Historical file rows are immutable: no UPDATE or row-lock privilege
+    -- should be granted to the importer just for an identical retry.
     IF NOT FOUND OR v_existing.file_sha256 <> p_sha256
        OR v_existing.original_bytes <> p_size
        OR v_existing.record_count <> v_count THEN

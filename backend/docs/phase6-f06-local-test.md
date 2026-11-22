@@ -60,3 +60,24 @@ proof of historical V002 upload or production DTN. The next milestones
 are isolated Edge Function request tests, independent original-manifest
 approval by an operator, correct production RLS design, and then a
 controlled historical archive import. No offline logs become live SOS.
+
+## 2026-11-22 first real Windows Docker execution
+
+User verified Windows PowerShell 5.1, Node 24.14.1, Docker Engine 29.9.3,
+WSL2, clean feature worktree at commit 8aabb74 and successful Docker
+postgres:17-bookworm image pull. F06 JSONL host test: **11/11 PASS**.
+The original five-table schema and proposed three archive tables applied
+in disposable local Postgres. SQL assertions **PASS 1/7 through 3/7**.
+Assertion 4 stopped on an identical-file retry with PostgreSQL
+`permission denied for table dtn_f06_history_files` from
+`SELECT ... FOR UPDATE`. The importer is intentionally restricted to
+SELECT/INSERT; FOR UPDATE needs UPDATE privilege. This is a SQL defect,
+not a Windows/Docker/Node error. The temporary container was removed.
+
+A follow-up `fix(database)` removes that unnecessary locking clause,
+retains immutable-table privileges, and expands the privilege regression
+check. The unique `INSERT ... ON CONFLICT DO NOTHING` already protects
+competing attempts at the immutable file key. **The new seven database
+tests are NOT YET VERIFIED** until run by the user on the corrected commit.
+The separately entered interactive `LOCAL DTN VALIDATION COMPLETED`
+message after a failed command is not test acceptance.

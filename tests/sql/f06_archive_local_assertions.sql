@@ -49,6 +49,15 @@ BEGIN
   THEN
     RAISE EXCEPTION 'historical archives must stay immutable to importer';
   END IF;
+  -- The actual Supabase local RPC originally raised 42501 on auth.users.
+  -- Verify the proposal now supplies only actor-ID visibility to service_role.
+  IF NOT has_column_privilege('service_role','auth.users','id','SELECT')
+    OR has_column_privilege('service_role','auth.users','email','SELECT')
+    OR has_column_privilege('anon','auth.users','id','SELECT')
+    OR has_column_privilege('authenticated','auth.users','id','SELECT')
+  THEN
+    RAISE EXCEPTION 'F06 actor lookup must grant service_role ID-only SELECT';
+  END IF;
   IF has_function_privilege('anon',
     'public.dtn_archive_f06_sos_file(uuid,integer,text,text,integer,jsonb)','EXECUTE')
      OR has_function_privilege('authenticated',

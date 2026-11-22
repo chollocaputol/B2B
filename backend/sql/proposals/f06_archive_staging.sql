@@ -56,6 +56,11 @@ REVOKE INSERT, UPDATE, DELETE ON public.dtn_f06_approved_exports FROM service_ro
 GRANT SELECT ON public.dtn_f06_approved_exports TO service_role;
 GRANT SELECT, INSERT ON public.dtn_f06_history_files,
   public.dtn_f06_history_records TO service_role;
+-- This SECURITY INVOKER RPC checks actor existence in auth.users.
+-- Grant only the ID column, not table-wide Auth user access. In the
+-- isolated 2026-11-22 lab this narrowly scoped grant resolved SQLSTATE 42501;
+-- ordinary anon/authenticated roles receive no Auth table permissions.
+GRANT SELECT (id) ON auth.users TO service_role;
 -- No RLS policies: neither anon nor ordinary logged-in users can read/write.
 
 CREATE FUNCTION public.dtn_archive_f06_sos_file(

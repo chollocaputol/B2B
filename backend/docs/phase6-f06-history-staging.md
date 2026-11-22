@@ -1,6 +1,8 @@
 # F06 historical SOS staging importer — Supabase development gate
 
-Status (2026-11-22): FEATURE BRANCH CODE ONLY. NOT DEPLOYED. NO LIVE DATA WRITES.
+Status (2026-11-22): FEATURE BRANCH ONLY. NOT DEPLOYED. No live cloud data writes.
+Local isolated Supabase Auth + Edge Runtime + PostgREST + PostgreSQL synthetic
+integration accepted 5/5 on Windows; this does NOT approve production ingestion.
 Architecture: Existing React + Vite + TypeScript dashboard on Netlify;
 Supabase Auth, PostgreSQL, Realtime and Edge Functions are the backend.
 No Next.js runtime and no separately hosted backend API.
@@ -18,7 +20,7 @@ an authoritative new emergency action or rescue confirmation.
   flat ASCII JSONL parser, per-file event identity collision detection
 - supabase/functions/ingest-f06-history/index.ts: POST authenticated
   with a Supabase user JWT; requires server-fetched user
-  app_metadata.dtn_archive_importer===true; no such user granted here
+  app_metadata.dtn_archive_importer===true; synthetic users granted ONLY in local lab
 - backend/sql/proposals/f06_archive_staging.sql: proposed restrictive
   archive-only RLS tables, an independently approved export table, and
   a privileged atomic idempotent RPC.
@@ -73,10 +75,11 @@ live Edge Function deployments, or main branch changes here.
 Supabase project currently has **zero development branches**. Creating
 one requested a billable-project confirmation ID. No branch has been
 created, no cost approved, and no production SQL has been applied.
-Database transaction tests and real cloud upload are BLOCKED until a
-separate permitted staging environment is available and its price is
-explicitly accepted. The earlier 11/11 Node validator fixtures are
-host-only and do not satisfy DB SQL or live Edge Function acceptance.
+A paid cloud staging project and real cloud upload remain BLOCKED until
+explicit cost and deployment approval. Instead, a separate local Docker
+Supabase project thesis-f06-local was used for real Auth/Edge/Postgres
+integration, without cloud deployment. Earlier host fixtures alone did not
+satisfy that gate; the 22 November local 5/5 test now does, for synthetic data.
 
 ## 2026-11-22 local HTTP handler gate (Node, no Supabase calls)
 
@@ -99,8 +102,47 @@ feature worktree, which executes the earlier 11 JSONL validator fixtures
 plus these 26 HTTP tests (37 expected). Only user-run Windows output
 may establish Windows acceptance. This does not execute the actual
 Deno runtime adapter or a full Supabase Auth+Postgres integration.
-Original V002 HTTP import, local Deno runtime, production RLS, device
-credentials, firmware Wi-Fi/HTTPS and live cloud ingest are PENDING.
+Original V002 HTTP import, production RLS, device credentials, firmware
+Wi-Fi/HTTPS and cloud ingest are PENDING. The actual local Deno runtime
+integration completed separately on 22 November, with synthetic data only.
 
 history_only response is not an operational SOS acknowledgment,
 rescue confirmation, or production DTN acknowledgment.
+
+## 2026-11-22 actual isolated Supabase integration — USER WINDOWS 5/5 PASS
+
+- User-run local Windows PowerShell 5.1 test on 2026-11-22, script
+  F06_Local_Edge_E2E_Synthetic_v3.ps1, script SHA256
+  2BE780C4B8A971529FD95A8E739F5EB6B703B363DC4E4B4ED2A6C710AA969A7A.
+- Explicit `supabase@2.122.1 functions serve ingest-f06-history --workdir
+  <isolated lab> --network-id thesis-f06-loopback` was necessary to put the
+  edge runtime on Kong's Docker network; temporary `docker network connect`
+  alone did not survive runtime container recreation.
+- Local Windows Firewall block 54321/54322 verified. Same-Wi-Fi phone could
+  not reach the API, but router client isolation was not independently ruled out;
+  CLI still published both ports on 0.0.0.0 / [::]. Do not claim airtight LAN isolation.
+- Local schema SQL proposal applied manually (NOT a migration and NOT cloud).
+  First direct PostgREST RPC returned 403/42501 permission denied for
+  auth.users. Local administrator granted `SELECT(id)` to service_role;
+  direct RPC then returned HTTP 400/P0001 unapproved manifest as designed.
+  This checked-in SQL proposal now codifies that ID-only grant, replacing a
+  broader mock grant; the revised source still requires local retesting.
+- Actual edge importer test: 1 unapproved file rejected HTTP 409;
+  2 approved synthetic file accepted HTTP 200; 3 identical replay duplicate
+  HTTP 200; 4 altered bytes rejected HTTP 422; 5 second approved session with
+  colliding event identity rejected HTTP 409 and rolled back. 5/5 PASS.
+- Synthetic session S2F1E41B; 1 historical archive file, 1 SOS event record,
+  2 independent manifest rows (including rejected collision test). All five
+  operational table counts unchanged; emergency_alerts 0 before / 0 after.
+- Local stack stopped with `supabase@2.122.1 stop --workdir <isolated lab>`;
+  CLI reported data backed up in Docker volume. Local test accounts and evidence
+  intentionally retained. No original V002 archive upload, main-branch change,
+  device flash, physical multi-hop acceptance or production deployment.
+
+**Important:** This paragraph records the accepted **prior lab run with a
+manual ID-only grant**. Source changes added after that run are a hardening
+candidate, NOT a claim of a new post-change 5/5 rerun. Before release,
+run 11/11 validator + 26/26 HTTP + 7/7 disposable database tests on the
+new Git revision, then fresh real local Auth/Edge/PostgreSQL tests without a
+manual auth.users grant. Audit all original five tables' RLS/privileges and
+independently approve real exported SHA manifests before any production use.

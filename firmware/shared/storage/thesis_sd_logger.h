@@ -84,6 +84,19 @@
 #endif
 #include "dtn_f24i_sd_owner_bridge.h"
 #endif
+// F24J: host-only arbiter; all existing physical SD paths remain unclaimed.
+#ifndef THESIS_DTN_F24J_BUILD_ONLY
+#define THESIS_DTN_F24J_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24J_BUILD_ONLY != 0 && THESIS_DTN_F24J_BUILD_ONLY != 1
+#error "F24J preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24J_BUILD_ONLY == 1
+#if THESIS_DTN_F24I_BUILD_ONLY != 1
+#error "F24J requires F24I deny-only bridge"
+#endif
+#include "dtn_f24j_owner_coordinator.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -977,6 +990,13 @@ inline void poll() {
     noPhysicalPort.observedUrgent = urgentQueue.count;
     noPhysicalPort.observedResearch = telemetryQueue.count;
     (void)denyBridge.arm(DTNF24H::SessionKey{});
+#if THESIS_DTN_F24J_BUILD_ONLY == 1
+    // F24J never handles SD; no unreviewed runtime authority exists.
+    static DTNF24J::Coordinator<decltype(denyBridge),
+                                DTNF24I::NoPhysicalObserver> denyCoordinator(
+                                    denyBridge,noPhysicalWitness);
+    (void)denyCoordinator.bind(DTNF24H::SessionKey{});
+#endif
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE

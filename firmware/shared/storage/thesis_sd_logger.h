@@ -45,6 +45,19 @@
 #endif
 #include "dtn_f24f_sos_closed_lease.h"
 #endif
+// F24G: compile-only SOS seal candidate; all physical operations are denied.
+#ifndef THESIS_DTN_F24G_BUILD_ONLY
+#define THESIS_DTN_F24G_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24G_BUILD_ONLY != 0 && THESIS_DTN_F24G_BUILD_ONLY != 1
+#error "F24G preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24G_BUILD_ONLY == 1
+#if THESIS_DTN_F24F_BUILD_ONLY != 1
+#error "F24G preview requires F24F build-only gate"
+#endif
+#include "dtn_f24g_sos_seal.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -909,6 +922,14 @@ inline void poll() {
     static DTNF24F::SosClosedLease alwaysDeny;
     const DTNAckLedger::Stream noStream{};
     (void)alwaysDeny.allowClosedJournal(noStream,"");
+#endif
+#if THESIS_DTN_F24G_BUILD_ONLY == 1
+    // Compiler-only candidate check. ALWAYS denied; no seal writing or SD I/O.
+    const DTNF24G::CloseFacts noClose{};
+    const DTNF24F::OwnerNow noOwner{};
+    DTNF24G::Seal unapproved{};
+    (void)DTNF24G::prepare(DTNAckLedger::Stream{},noClose,noOwner,
+                            DTNF24D::Result::Denied,0U,unapproved);
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE

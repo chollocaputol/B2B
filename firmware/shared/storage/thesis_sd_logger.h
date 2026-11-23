@@ -58,6 +58,19 @@
 #endif
 #include "dtn_f24g_sos_seal.h"
 #endif
+// F24H: writer retirement state model; no real SD-owner port is authorized.
+#ifndef THESIS_DTN_F24H_BUILD_ONLY
+#define THESIS_DTN_F24H_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24H_BUILD_ONLY != 0 && THESIS_DTN_F24H_BUILD_ONLY != 1
+#error "F24H preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24H_BUILD_ONLY == 1
+#if THESIS_DTN_F24G_BUILD_ONLY != 1
+#error "F24H preview requires F24G build-only contract"
+#endif
+#include "dtn_f24h_writer_retirement.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -930,6 +943,15 @@ inline void poll() {
     DTNF24G::Seal unapproved{};
     (void)DTNF24G::prepare(DTNAckLedger::Stream{},noClose,noOwner,
                             DTNF24D::Result::Denied,0U,unapproved);
+#endif
+#if THESIS_DTN_F24H_BUILD_ONLY == 1
+    // Observe actual RAM queue counts ONLY; no owner evidence, no Port, no
+    // retire/flush/close/SD access, and NO grant. Existing logging unchanged.
+    static DTNF24H::Controller denyPreview;
+    DTNF24H::Snapshot noAuthority{};
+    noAuthority.urgentQueued = urgentQueue.count;
+    noAuthority.researchQueued = telemetryQueue.count;
+    (void)denyPreview.stillCandidate(noAuthority);
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE

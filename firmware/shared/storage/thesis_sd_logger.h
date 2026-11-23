@@ -227,10 +227,36 @@
 #endif
 #include "dtn_f24n_sos_restart_recovery.h"
 #endif
+// F24O: owner-bound packet/recovery adapter, host-executable and firmware
+// typechecked against a DENY witness; no physical SD permission is installed.
+#ifndef THESIS_DTN_F24O_BUILD_ONLY
+#define THESIS_DTN_F24O_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24O_BUILD_ONLY != 0 && THESIS_DTN_F24O_BUILD_ONLY != 1
+#error "F24O build-only flag must be zero or one"
+#endif
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+#if THESIS_DTN_F24N_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0
+#error "F24O only extends F24N/F24K SD denial; F23D and fleet storage must be OFF"
+#endif
+#include "dtn_f24o_owned_sos_port.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
 static DTNF24K::DenySdFacade<File> interposedSD;
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+// Denial is permanent even if the outer port is accidentally requested.
+static const DTNF24O::DenyWitness f24oNoPhysicalWitness{};
+static DTNF24O::Port<decltype(interposedSD),DTNF24O::DenyWitness>
+    f24oSosPort(interposedSD,f24oNoPhysicalWitness);
+static bool f24oBindAttempted=false;
+inline void f24oBindOnce(uint32_t vessel,const char* dir){
+  if(f24oBindAttempted)return;
+  f24oBindAttempted=true;
+  (void)f24oSosPort.bind(vessel,dir); // MUST deny; never retries
+}
+#endif
 #else
 // Preserve existing physical logger behavior for every non-F24K profile.
 // This alias is NOT an exclusive owner, a lease or a replay permission.
@@ -280,7 +306,13 @@ inline void pollF24MOne(){
   if(!ready || !f24mSosCapture.pending() || f24mSosCapture.faulted())return;
   const DTNF24M::PacketEntry* item=f24mSosCapture.front();
   if(!item)return;
-  if(!f24mSosJournal.appendChecked(interposedSD,DIRECTORY,vesselId,*item,
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+  f24oBindOnce(vesselId,DIRECTORY);
+  auto& selectedSosPort=f24oSosPort;
+#else
+  auto& selectedSosPort=interposedSD;
+#endif
+  if(!f24mSosJournal.appendChecked(selectedSosPort,DIRECTORY,vesselId,*item,
                                    FILE_APPEND,FILE_READ)){
     f24mSosCapture.latchStorageFault();
     Serial.println("[F24M] SOS_PACKET_STORE_UNCONFIRMED; RAM_PENDING; SD_OWNER_DENIED");
@@ -301,6 +333,13 @@ static bool f24nDiscoveryFailed=false;
 inline bool f24nDiscoverClosedSessions(){
   if(f24nDiscoveryTried || !ready)return false;
   f24nDiscoveryTried=true;
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+  // F24O cannot promote the legacy root directory scanner into an owner.
+  // Until its directory handles are fully interposed, fail closed before
+  // even attempting discovery through interposedSD.
+  f24oBindOnce(vesselId,DIRECTORY);
+  if(!f24oSosPort.bound())return false;
+#endif
   if(!f24nClosedReplay.begin(vesselId,DIRECTORY))return false;
   char root[48]{};
   const int n=snprintf(root,sizeof(root),"/THESIS/F06TEST/V%03lu",
@@ -353,7 +392,13 @@ inline void pollF24NOne(){
   // ONE 88-byte SOS frame or 40-byte receipt per poll. All reader handles
   // close before returning. Without a trusted shore verifier, EVERY stored
   // receipt remains UNVERIFIED and cannot promote an SOS to delivered.
-  const auto result=f24nClosedReplay.poll(interposedSD,FILE_READ,
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+  f24oBindOnce(vesselId,DIRECTORY);
+  auto& replayPort=f24oSosPort;
+#else
+  auto& replayPort=interposedSD;
+#endif
+  const auto result=f24nClosedReplay.poll(replayPort,FILE_READ,
                                          DTNF24N::DenyReceiptVerifier{},
                                          DTNF24N::DenyReadAuthority{});
   if(result==DTNF24N::Poll::Failed){

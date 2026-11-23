@@ -121,6 +121,60 @@ template<class Backend,class Witness>class Port final {
   open_=true;
   return FileHandle(this,std::move(handle),write);
  }
+ // F24P: bounded, owner-checked directory discovery through THIS SAME port.
+ // Only exact vessel F06 root; handles remain internal (parent + one child).
+ // Never accepts a guessed closure, changes journal files, or opens for write.
+ // Failure is latched; enumeration requires an independently trustworthy
+ // physical owner not supplied by the build-only firmware profile.
+ template<class Sink>
+ bool scanClosedSessions(const char* root,const char* readMode,Sink&& sink){
+  if(!live(true) || open_ || !readMode || strcmp(readMode,"r")!=0){revoke();return false;}
+  char expected[48]{};
+  const int n=snprintf(expected,sizeof(expected),"/THESIS/F06TEST/V%03lu",
+                       (unsigned long)vessel_);
+  if(n<=0 || size_t(n)>=sizeof(expected) || !root || strcmp(root,expected)){
+   revoke();return false;
+  }
+  open_=true; // Exclude EVERY other port operation throughout directory scan.
+  auto folder=backend_.open(root,readMode);
+  if(!folder){open_=false;revoke();return false;}
+  bool good=live(true) && folder.isDirectory();
+  bool exhausted=false;
+  for(unsigned visited=0;good && visited<64;++visited){
+   if(!live(true)){good=false;break;}
+   auto child=folder.openNextFile();
+   if(!live(true)){child.close();good=false;break;}
+   if(!child){exhausted=true;break;}
+   if(!live(true)){child.close();good=false;break;}
+   const bool isDir=child.isDirectory();
+   if(!live(true)){child.close();good=false;break;}
+   const char* raw=child.name();
+   const char* slash=raw?strrchr(raw,'/'):nullptr;
+   const char* name=slash?slash+1:raw;
+   char candidate[64]{};
+   if(!raw || !name || !*name){good=false;}
+   // FS::File::name may be a basename or the precise full path.
+   // Reject a plausible-looking session from some OTHER directory.
+   else if(slash && (size_t(slash-raw)!=size_t(n) ||
+                         strncmp(raw,root,size_t(n))!=0)){good=false;}
+   else if(isDir && !DTNF24M::validSession(name)){good=false;}
+   else if(isDir){
+    const int k=snprintf(candidate,sizeof(candidate),"%s/%s",root,name);
+    if(k<=0 || size_t(k)>=sizeof(candidate))good=false;
+   }
+   child.close();
+   if(!live(true)){good=false;break;}
+   if(good && isDir && strcmp(candidate,current_)!=0){
+    if(!sink(candidate)){good=false;break;}
+    if(!live(true)){good=false;break;}
+   }
+  }
+  // F24O already treats close as mandatory cleanup, even on revoked lease.
+  // Physical handle-close scheduling remains UNPROVEN / NOT AUTHORIZED.
+  folder.close();open_=false;
+  if(!good || !exhausted || !live(true)){revoke();return false;}
+  return true;
+ }
  bool faulted()const{return fault_;}
  bool bound()const{return bound_ && !fault_;}
  bool hasHandle()const{return open_;}

@@ -241,6 +241,22 @@
 #endif
 #include "dtn_f24o_owned_sos_port.h"
 #endif
+// F24P: integrate F24N root discovery with the SAME owner-bound F24O port.
+// This is still NOT global physical all-file-handle ownership; the legacy
+// logger and F23D remain separate and the F24K facade permanently denies SD.
+#ifndef THESIS_DTN_F24P_BUILD_ONLY
+#define THESIS_DTN_F24P_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24P_BUILD_ONLY != 0 && THESIS_DTN_F24P_BUILD_ONLY != 1
+#error "Invalid F24P build-only flag"
+#endif
+#if THESIS_DTN_F24P_BUILD_ONLY == 1
+#if THESIS_DTN_F24O_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24P requires F24O/K DENY, F23D/fleet/legacy relay/physical GPIO OFF"
+#endif
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
@@ -345,6 +361,14 @@ inline bool f24nDiscoverClosedSessions(){
   const int n=snprintf(root,sizeof(root),"/THESIS/F06TEST/V%03lu",
                        (unsigned long)vesselId);
   if(n<=0 || size_t(n)>=sizeof(root))return false;
+#if THESIS_DTN_F24P_BUILD_ONLY == 1
+  // F24P uses F24O's same single owner port, not the raw logger File.
+  // DenyWitness makes this unreachable on the board; host tests inject
+  // a synthetic witness and inspect the bounded, read-only traversal.
+  return f24oSosPort.scanClosedSessions(root,FILE_READ,
+    [](const char* session){return f24nClosedReplay.addClosed(session);}) &&
+    f24nClosedReplay.lock();
+#else
   File folder=interposedSD.open(root,FILE_READ);
   if(!folder || !folder.isDirectory()){
     if(folder)folder.close();return false;
@@ -376,6 +400,7 @@ inline bool f24nDiscoverClosedSessions(){
   folder.close();
   // Never silently omit a 65th directory entry or a prior journal.
   return exhausted && healthy && f24nClosedReplay.lock();
+#endif // F24P owner-bound session directory traversal
 }
 // Defined after EventQueue and urgentQueue below; keep urgent SOS priority.
 inline bool f24nUrgentQueuePending();

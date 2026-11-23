@@ -36,6 +36,10 @@ struct Gate {
     return authorized && closed && identityMatches &&
        strncmp(path,"/THESIS/F06TEST/V002/",21U)==0;
   }
+  bool allowClosedJournalBytes(const L::Stream& stream,const char* path,
+                               uint64_t) const {
+    return allowClosedJournal(stream,path); // F24B fixture has NO true seal
+  }
 };
 struct MockDigest {
   bool valid=true;
@@ -88,15 +92,15 @@ int main(){
   assert(volume.readOpens==1 && volume.writeOpens==0 && digest.calls==1);
   char json[DTNJsonlSnapshot::kMaxLineBytes+1U]{};
   Candidate got{};
-  assert(reader.next(ledger,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,ledger,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==0U && got.fields.vesselId==2U && got.fields.eventIndex==1U);
-  assert(reader.next(ledger,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,ledger,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==1U);
-  assert(reader.next(ledger,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,ledger,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==2U);
-  assert(reader.next(ledger,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,ledger,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==3U);
-  assert(reader.next(ledger,json,sizeof(json),got)==Read::End);
+  assert(reader.next(gate,ledger,json,sizeof(json),got)==Read::End);
   reader.close();assert(!reader.opened());
 
   // Explicit per-record replies 0=accepted, 1=rejected, 2=duplicate.
@@ -111,11 +115,26 @@ int main(){
   assert(ledger.firstPending()==1U && ledger.acknowledged(2U));
   Ledger reboot;assert(reboot.load(store,key)==L::Load::Loaded);
   assert(reader.begin(volume,key,gate,digest,reboot)==Open::Ready);
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==1U); // skipped 0 from durable prefix
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==3U); // skipped out-of-order accepted 2
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::End);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::End);
+
+  // F24F: revocation between consecutive next() calls may not read SD at all.
+  // A later accidental restoration of the gate must not revive that reader.
+  assert(reader.begin(volume,key,gate,digest,reboot)==Open::Ready);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::CandidateUnverified);
+  const auto cursorBeforeRevocation=reader.cursor();
+  gate.authorized=false;
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::NotAuthorized);
+  assert(reader.cursor().ordinal==cursorBeforeRevocation.ordinal);
+  assert(got.fields.eventIndex==0U); // stale candidate never reissued
+  gate.authorized=true;
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::NotAuthorized);
+  assert(reader.cursor().ordinal==cursorBeforeRevocation.ordinal);
+  // Only the sole actual SD owner may perform close() in device firmware.
+  reader.close();
 
   // A different digest, uploader, session, or journal cannot borrow this sidecar.
   auto wrong=key;wrong.sha256[1]=1U;
@@ -145,24 +164,24 @@ int main(){
   volume.deny=false;
   assert(reader.begin(volume,key,gate,digest,reboot)==Open::Ready);
   volume.bytes.push_back('X');
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::SourceChanged);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::SourceChanged);
   reader.close();volume.bytes.pop_back();
 
   // Malformed record is NOT skipped, even if its ordinal was previously ACK'd.
   MockVolume damaged;damaged.bytes=event(1)+"{bad}\n"+event(3);
   assert(reader.begin(damaged,key,gate,digest,reboot)==Open::Ready);
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::Malformed);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::Malformed);
   assert(reader.cursor().ordinal==1U); // refuses to cross damaged ordinal
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::Malformed);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::Malformed);
   reader.close();
   MockVolume misVessel;misVessel.bytes=event(1)+event(2,3U);
   assert(reader.begin(misVessel,key,gate,digest,reboot)==Open::Ready);
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::WrongVessel);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::WrongVessel);
   reader.close();
 
   MockVolume partial;partial.bytes=event(1)+event(2).substr(0,20);
   assert(reader.begin(partial,key,gate,digest,reboot)==Open::Ready);
-  assert(reader.next(reboot,json,sizeof(json),got)==Read::IncompleteTail);
+  assert(reader.next(gate,reboot,json,sizeof(json),got)==Read::IncompleteTail);
   reader.close();
 
   MockVolume oversized;oversized.bytes=std::string(static_cast<size_t>(kMaxJournalBytes)+1U,'x');
@@ -172,10 +191,10 @@ int main(){
   SlotStore emptyStore;Ledger fresh;initial(fresh,emptyStore,key);
   assert(reader.begin(window,key,gate,digest,fresh)==Open::Ready);
   for(unsigned i=0;i<64U;++i){
-    assert(reader.next(fresh,json,sizeof(json),got)==Read::CandidateUnverified);
+    assert(reader.next(gate,fresh,json,sizeof(json),got)==Read::CandidateUnverified);
     assert(got.frame.ordinal==i);
   }
-  assert(reader.next(fresh,json,sizeof(json),got)==Read::WindowBlocked);
+  assert(reader.next(gate,fresh,json,sizeof(json),got)==Read::WindowBlocked);
   assert(reader.cursor().ordinal==64U);
   reader.close();
 
@@ -186,7 +205,7 @@ int main(){
       "{\"kind\":\"weather\",\"vessel_id\":2,\"boot_token\":43,\"event_index\":1,\"uptime_ms\":0}\n";
   assert(reader.begin(weatherVolume,weather,gate,digest,weatherLedger)==Open::Ready);
   assert(weatherVolume.lastPath=="/THESIS/F06TEST/V002/S58BAFE2/telemetry.jsonl");
-  assert(reader.next(weatherLedger,json,sizeof(json),got)==Read::CandidateUnverified);
+  assert(reader.next(gate,weatherLedger,json,sizeof(json),got)==Read::CandidateUnverified);
   assert(got.frame.ordinal==0U);
   assert(weatherVolume.writeOpens==0U);
   std::puts("F24B closed F06 read-only replay / gap skip / fail-closed: PASS");

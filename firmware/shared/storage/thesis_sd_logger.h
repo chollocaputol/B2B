@@ -32,6 +32,19 @@
 #endif
 #include "dtn_f24e_sd_owner_scheduler.h"
 #endif
+// F24F: compile-only SOS close lease. The default is never authorized.
+#ifndef THESIS_DTN_F24F_BUILD_ONLY
+#define THESIS_DTN_F24F_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24F_BUILD_ONLY != 0 && THESIS_DTN_F24F_BUILD_ONLY != 1
+#error "F24F preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24F_BUILD_ONLY == 1
+#if THESIS_DTN_F24E_BUILD_ONLY != 1
+#error "F24F preview requires F24E build-only scheduler"
+#endif
+#include "dtn_f24f_sos_closed_lease.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -890,6 +903,12 @@ inline void poll() {
     static DTNF24E::Scheduler<DTNF24DArduino::ReadFile,DTNF24DArduino::ReadVolume> preview;
     const F24DNoPhysicalPermission deny{};
     (void)preview.poll(deny,false,true);
+#endif
+#if THESIS_DTN_F24F_BUILD_ONLY == 1
+    // Typecheck only: no proof, no open, no SD access and no new transmissions.
+    static DTNF24F::SosClosedLease alwaysDeny;
+    const DTNAckLedger::Stream noStream{};
+    (void)alwaysDeny.allowClosedJournal(noStream,"");
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE

@@ -22,7 +22,7 @@ enum class Open : uint8_t {
 };
 enum class Read : uint8_t {
   CandidateUnverified, End, WindowBlocked, IncompleteTail, Oversize,
-  Malformed, WrongVessel, IoError, SourceChanged, LedgerMismatch, NotOpen
+  Malformed, WrongVessel, IoError, SourceChanged, LedgerMismatch, NotOpen, NotAuthorized
 };
 struct Candidate {
   DTNJsonlSnapshot::Record frame{};
@@ -44,7 +44,8 @@ inline DTNJsonlSnapshot::Journal journalOf(DTNAckLedger::Journal type) {
 // File: bool isOpen() const; uint64_t size() const;
 //       bool readAt(uint64_t offset,uint8_t& out) const; void close().
 // Volume: bool openReadOnly(const char* path, File& out).
-// Gate: bool allowClosedJournal(const Stream&, const char* exactPath) const.
+// Gate: bool allowClosedJournal(const Stream&,const char* exactPath) const;
+//       bool allowClosedJournalBytes(const Stream&,const char*,uint64_t) const.
 // Digest: bool verifyCompleteSha256(const File&,uint64_t bytes,const uint8_t expected[32]) const.
 // Ledger: F24A Ledger<Store>, already loaded, bound to this exact stream.
 // Return CandidateUnverified is never automatic production upload approval.
@@ -68,6 +69,9 @@ public:
     }
     const uint64_t bytes=file_.size();
     if (bytes>kMaxJournalBytes) {close();return Open::Oversize;}
+    if (!gate.allowClosedJournalBytes(stream,path_,bytes)) {
+      close();return Open::NotAuthorized;
+    }
     if (!digest.verifyCompleteSha256(file_,bytes,stream.sha256)) {
       close();return Open::DigestMismatch;
     }
@@ -78,22 +82,36 @@ public:
   }
   void close(){
     file_.close();opened_=false;bytes_=0;cursor_=DTNJsonlSnapshot::Cursor{};
-    path_[0]='\0';stream_=DTNAckLedger::Stream{};
+    path_[0]='\0';stream_=DTNAckLedger::Stream{};revoked_=false;
   }
   bool opened()const{return opened_ && file_.isOpen();}
   const char* path()const{return opened()?path_:"";}
   uint64_t frozenBytes()const{return opened()?bytes_:0U;}
   DTNJsonlSnapshot::Cursor cursor()const{return cursor_;}
 
-  Read next(const Ledger& ledger,char* json,size_t capacity,Candidate& candidate) {
-    if (!opened())return Read::NotOpen;
+  // Gate is pure-RAM and MUST be rechecked before ANY File/Volume read.
+  // After permission loss this reader is permanently revoked until close() +
+  // begin() under a fresh lease. Closing an SD File requires the SD owner;
+  // caller must NOT close or destroy a live reader after ownership is lost.
+  Read next(const Gate& gate,const Ledger& ledger,char* json,size_t capacity,Candidate& candidate) {
+    candidate=Candidate{};
+    if (!opened_)return Read::NotOpen;
+    if (revoked_)return Read::NotAuthorized;
+    if (!gate.allowClosedJournal(stream_,path_)) {
+      revoked_=true;return Read::NotAuthorized;
+    }
+    if (!file_.isOpen())return Read::NotOpen;
     if (!ledger.ready()||!DTNAckLedger::sameStream(ledger.state().stream,stream_))
       return Read::LedgerMismatch;
-    if (file_.size()!=bytes_)return Read::SourceChanged;
+    if (file_.size()!=bytes_){revoked_=true;return Read::SourceChanged;}
     if (!json || capacity<3U || capacity>DTNJsonlSnapshot::kMaxLineBytes+1U)
       return Read::IoError;
-    Source source{file_};
+    Source source{file_,gate,stream_,path_};
     for (;;) {
+      // Revalidate between skipped ACKed records and before the next SD read.
+      if (!gate.allowClosedJournal(stream_,path_)) {
+        revoked_=true;return Read::NotAuthorized;
+      }
       if (cursor_.offset==bytes_) {
         if (cursor_.ordinal<ledger.firstPending())return Read::LedgerMismatch;
         const uint64_t mask=ledger.ackMask();
@@ -110,6 +128,11 @@ public:
       auto scratch=cursor_;
       DTNJsonlSnapshot::Record frame{};
       const auto status=DTNJsonlSnapshot::next(source,bytes_,scratch,json,capacity,frame);
+      // A gate may be revoked *during* byte reads, not only between calls.
+      // The scratch cursor is not committed until this post-read check passes.
+      if (!gate.allowClosedJournal(stream_,path_)) {
+        revoked_=true;return Read::NotAuthorized;
+      }
       if (status!=DTNJsonlSnapshot::Outcome::Record) {
         switch(status){
           case DTNJsonlSnapshot::Outcome::End:return Read::End;
@@ -136,13 +159,19 @@ public:
 private:
   struct Source {
     const File& file;
-    uint64_t size()const{return file.size();}
+    const Gate& gate;
+    const DTNAckLedger::Stream& stream;
+    const char* path;
+    uint64_t size()const{
+      return gate.allowClosedJournal(stream,path)?file.size():0U;
+    }
     bool readByte(uint64_t position,uint8_t& out)const{
-      return file.readAt(position,out);
+      return gate.allowClosedJournal(stream,path)&&file.readAt(position,out);
     }
   };
   File file_{};
   bool opened_=false;
+  bool revoked_=false;
   char path_[kPathCapacity]{};
   uint64_t bytes_=0;
   DTNAckLedger::Stream stream_{};

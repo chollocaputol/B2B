@@ -19,6 +19,19 @@
 #if THESIS_DTN_F24D_BUILD_ONLY == 1
 #include "dtn_f24d_arduino_read_port.h"
 #endif
+// F24E: no physical grant and no new SD access in the build-only preview.
+#ifndef THESIS_DTN_F24E_BUILD_ONLY
+#define THESIS_DTN_F24E_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24E_BUILD_ONLY != 0 && THESIS_DTN_F24E_BUILD_ONLY != 1
+#error "F24E build-only flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24E_BUILD_ONLY == 1
+#if THESIS_DTN_F24D_BUILD_ONLY != 1
+#error "F24E preview requires F24D build-only dependency"
+#endif
+#include "dtn_f24e_sd_owner_scheduler.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -871,6 +884,13 @@ inline void pollExport() {
 }
 
 inline void poll() {
+#if THESIS_DTN_F24E_BUILD_ONLY == 1
+    // This does NOT queue a session or touch the SD bus; the grant is always denied.
+    // Compiles the actual main-loop owner hook without enabling replay or RF.
+    static DTNF24E::Scheduler<DTNF24DArduino::ReadFile,DTNF24DArduino::ReadVolume> preview;
+    const F24DNoPhysicalPermission deny{};
+    (void)preview.poll(deny,false,true);
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;

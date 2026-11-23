@@ -213,6 +213,20 @@
 #endif
 #include "dtn_f24m_sos_packet_store.h"
 #endif
+// F24N: incremental full-frame cold-restart reconstruction in the actual
+// logger main-loop path. Reuses permanently denied F24K/F24M build profile.
+#ifndef THESIS_DTN_F24N_BUILD_ONLY
+#define THESIS_DTN_F24N_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24N_BUILD_ONLY != 0 && THESIS_DTN_F24N_BUILD_ONLY != 1
+#error "F24N build-only flag must be zero or one"
+#endif
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+#if THESIS_DTN_F24M_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F06_SD_SANDBOX != 1
+#error "F24N requires F24M/F24K permanently denied F06 sandbox, F23D OFF"
+#endif
+#include "dtn_f24n_sos_restart_recovery.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
@@ -276,6 +290,85 @@ inline void pollF24MOne(){
 }
 #endif
 
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+// A real code path, but unreachable in the only permitted F24N image:
+// F24K's SD.begin() always rejects, hence 'ready' never becomes true.
+// Host tests prove the same Replay object against real disposable files.
+// This is NOT independent media proof, an approved reader lease or RF replay.
+static DTNF24N::Replay<32,12> f24nClosedReplay;
+static bool f24nDiscoveryTried=false;
+static bool f24nDiscoveryFailed=false;
+inline bool f24nDiscoverClosedSessions(){
+  if(f24nDiscoveryTried || !ready)return false;
+  f24nDiscoveryTried=true;
+  if(!f24nClosedReplay.begin(vesselId,DIRECTORY))return false;
+  char root[48]{};
+  const int n=snprintf(root,sizeof(root),"/THESIS/F06TEST/V%03lu",
+                       (unsigned long)vesselId);
+  if(n<=0 || size_t(n)>=sizeof(root))return false;
+  File folder=interposedSD.open(root,FILE_READ);
+  if(!folder || !folder.isDirectory()){
+    if(folder)folder.close();return false;
+  }
+  bool healthy=true;
+  bool exhausted=false;
+  for(unsigned visited=0;visited<64;++visited){
+    File child=folder.openNextFile();
+    if(!child){exhausted=true;break;}
+    // FS::File.name() can be full path or basename; accept only a complete
+    // eight-character SXXXXXXX session name after extracting the basename.
+    const char* raw=child.name();
+    const char* last=raw?strrchr(raw,'/'):nullptr;
+    const char* name=last?last+1:raw;
+    char candidate[64]{};
+    const bool isDir=child.isDirectory();
+    const bool isSession=isDir && DTNF24M::validSession(name);
+    if(isDir && !isSession)healthy=false; // no silently omitted session dirs
+    if(isSession){
+      const int length=snprintf(candidate,sizeof(candidate),"%s/%s",root,name);
+      if(length<=0 || size_t(length)>=sizeof(candidate))healthy=false;
+    }
+    child.close();
+    if(!healthy)break;
+    if(!isSession)continue; // other F06 research files are not SOS sessions
+    if(strcmp(candidate,DIRECTORY)==0)continue;
+    if(!f24nClosedReplay.addClosed(candidate)){healthy=false;break;}
+  }
+  folder.close();
+  // Never silently omit a 65th directory entry or a prior journal.
+  return exhausted && healthy && f24nClosedReplay.lock();
+}
+// Defined after EventQueue and urgentQueue below; keep urgent SOS priority.
+inline bool f24nUrgentQueuePending();
+inline void pollF24NOne(){
+  if(!ready || f24nDiscoveryFailed || f24nClosedReplay.completed() ||
+     f24mSosCapture.pending() || f24nUrgentQueuePending())return;
+  if(!f24nDiscoveryTried){
+    if(!f24nDiscoverClosedSessions()){
+      f24nDiscoveryFailed=true;
+      Serial.println("[F24N] CLOSED_SOS_RECOVERY_DENIED; OWNER_OR_SCAN_UNKNOWN");
+      return;
+    }
+  }
+  // ONE 88-byte SOS frame or 40-byte receipt per poll. All reader handles
+  // close before returning. Without a trusted shore verifier, EVERY stored
+  // receipt remains UNVERIFIED and cannot promote an SOS to delivered.
+  const auto result=f24nClosedReplay.poll(interposedSD,FILE_READ,
+                                         DTNF24N::DenyReceiptVerifier{},
+                                         DTNF24N::DenyReadAuthority{});
+  if(result==DTNF24N::Poll::Failed){
+    f24nDiscoveryFailed=true;
+    Serial.println("[F24N] SOURCE_CORRUPT_OR_UNKNOWN; REPLAY_DENIED");
+  }else if(result==DTNF24N::Poll::Completed){
+    Serial.printf("[F24N] HOST-REVIEW-ONLY recovered=%u pending=%u delivered=%u unverified_receipts=%lu physical_permission=NO\n",
+      unsigned(f24nClosedReplay.ledger().count()),
+      unsigned(f24nClosedReplay.ledger().pending()),
+      unsigned(f24nClosedReplay.ledger().delivered()),
+      (unsigned long)f24nClosedReplay.unverified());
+  }
+}
+#endif
+
 inline bool isAuthorizedVessel(uint32_t id) {
 #if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
     // No hardware/media approval input in this phase. The following decision
@@ -313,6 +406,10 @@ struct EventQueue {
 };
 static EventQueue urgentQueue;
 static EventQueue telemetryQueue;
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+// F24N poll is declared above the queues; inspect only after full declaration.
+inline bool f24nUrgentQueuePending(){ return urgentQueue.count != 0; }
+#endif
 static uint32_t bootToken = 0;
 static uint32_t eventCounter = 0;
 static uint32_t lostUrgent = 0, lostTelemetry = 0;
@@ -1073,6 +1170,11 @@ inline void poll() {
 #endif
     pollEvents();
     if (!ready) return;
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+    // SOS log write path retains priority; no replay or SD activity during
+    // pending urgent capture. Physical F24N SD owner remains hard-denied.
+    pollF24NOne();
+#endif
 
     // Read-only storage audit, once every 30 seconds.
     static uint32_t lastAuditMs = 0;

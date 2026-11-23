@@ -54,6 +54,13 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #include "../../shared/relay/relay_authorization_contract.h"
 #include "../../shared/relay/lab_relay_gate.h"
 #include "lora_manager.h"
+// Exact 62-byte SOS payload ingress; no SD or RF action in this function.
+#ifndef THESIS_DTN_F24M_BUILD_ONLY
+#define THESIS_DTN_F24M_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+extern bool thesisF24MObserveSOSPacket(const VesselPacket&,uint8_t);
+#endif
 #include "../../shared/communication/control_retry_schedule.h"
 #include "weather_manager.h"
 #include "../../shared/communication/compact_position_v2.h"
@@ -1640,6 +1647,10 @@ void transmitSOS() {
   pendingSOS.packetType = PACKET_SOS;
   strncpy(pendingSOS.message, "SOS", sizeof(pendingSOS.message) - 1);
   pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+  // Capture original complete SOS bytes, before any RF attempt; never SD I/O.
+  (void)thesisF24MObserveSOSPacket(pendingSOS,0U);
+#endif
   sosPending = true;
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
@@ -1960,6 +1971,11 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,MultiPeerSOS::name(result));
     if(result==MultiPeerSOS::Result::Stale||result==MultiPeerSOS::Result::Full)return;
     if(result==MultiPeerSOS::Result::New){
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+      // Only after existing RX validation and accepted NEW SOS admission.
+      // Neighbor acknowledgement logic and LoRa behavior remain unchanged.
+      (void)thesisF24MObserveSOSPacket(p,1U);
+#endif
       bool validPosition = (p.flags & FLAG_GPS_FIX)!=0;
       const double latitudeSOS=p.latitude_e7/1e7;
       const double longitudeSOS=p.longitude_e7/1e7;

@@ -845,6 +845,19 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
 }
 #endif
 
+// F24M: the actual LoRa SOS call sites only copy exact packet bytes into RAM.
+// No SD File operation or forwarding permission exists in this bridge.
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+#if THESIS_SD_LOGGER != 1
+#error "F24M capture requires enabled logger in DENY-only preview"
+#endif
+bool thesisF24MObserveSOSPacket(const VesselPacket& packet,uint8_t source){
+  const auto result=ThesisSDLogger::f24mSosCapture.capture(packet,source);
+  return result==DTNF24M::CaptureResult::Queued ||
+         result==DTNF24M::CaptureResult::Duplicate;
+}
+#endif
+
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
 extern bool f23dSDRadioBusy();
@@ -1316,6 +1329,16 @@ void loop() {
 #if !THESIS_F23D_SD_EVIDENCE
 // F23D SD end
   ThesisSDLogger::poll();
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+  // Read-only preview diagnostics; never a durability or end-to-end ACK claim.
+  static uint32_t f24mReportAt=0;
+  if(uint32_t(millis()-f24mReportAt)>=30000UL){
+    f24mReportAt=millis();
+    Serial.printf("[F24M-PREVIEW] pending=%u full_drop=%lu owner=DENIED durable=NO\n",
+      unsigned(ThesisSDLogger::f24mSosCapture.pending()),
+      (unsigned long)ThesisSDLogger::f24mSosCapture.lost());
+  }
+#endif
 // F23D SD begin
 #endif
 // F23D SD end

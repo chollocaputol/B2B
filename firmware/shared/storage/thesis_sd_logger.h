@@ -198,6 +198,21 @@
 #endif
 #include "dtn_f24k_sd_interposition.h"
 #endif
+// F24M: real firmware SOS packet capture seams, but no authorized SD owner.
+// Only the permanently denied F24K SD profile may activate this build-only
+// preview. Never enable on an operational or F23D physical SD profile.
+#ifndef THESIS_DTN_F24M_BUILD_ONLY
+#define THESIS_DTN_F24M_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24M_BUILD_ONLY != 0 && THESIS_DTN_F24M_BUILD_ONLY != 1
+#error "F24M build-only flag must be zero or one"
+#endif
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_SD_LOGGER != 1
+#error "F24M requires F24K DENY SD, logger enabled, independent F23D writer OFF"
+#endif
+#include "dtn_f24m_sos_packet_store.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
@@ -242,6 +257,24 @@ static char DIAGNOSTICS[64] = "/THESIS/VESSEL_002/diagnostics.jsonl";
 inline bool appendRecord(const char* path, const char* record);
 static char TELEMETRY[64] = "/THESIS/VESSEL_002/telemetry.jsonl";
 static char SOS_EVENTS[64] = "/THESIS/VESSEL_002/sos_events.jsonl";
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+// Actual radio packet ingress -> bounded RAM queue; NO storage in RX/TX path.
+// F24K facade is denied, therefore the preview cannot mount or write a card.
+static DTNF24M::PendingQueue<8> f24mSosCapture;
+static DTNF24M::SessionWriter f24mSosJournal;
+inline void pollF24MOne(){
+  if(!ready || !f24mSosCapture.pending() || f24mSosCapture.faulted())return;
+  const DTNF24M::PacketEntry* item=f24mSosCapture.front();
+  if(!item)return;
+  if(!f24mSosJournal.appendChecked(interposedSD,DIRECTORY,vesselId,*item,
+                                   FILE_APPEND,FILE_READ)){
+    f24mSosCapture.latchStorageFault();
+    Serial.println("[F24M] SOS_PACKET_STORE_UNCONFIRMED; RAM_PENDING; SD_OWNER_DENIED");
+    return;
+  }
+  (void)f24mSosCapture.acknowledgeDurableAppend();
+}
+#endif
 
 inline bool isAuthorizedVessel(uint32_t id) {
 #if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
@@ -1033,6 +1066,11 @@ inline void poll() {
 #endif
 // F23D SD end
     if (!ready) return;
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+    // Only main-loop owner path may access SD; one SOS frame per iteration.
+    // This compile-only profile inherits the F24K permanently denied facade.
+    pollF24MOne();
+#endif
     pollEvents();
     if (!ready) return;
 

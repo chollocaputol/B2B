@@ -177,7 +177,36 @@
 #endif
 #endif
 
+// F24K: actual ThesisSDLogger SD entrypoints pass through one named facade.
+// Legacy profiles alias SD byte-for-byte. Only the F24K build-only profile
+// selects the permanently denied implementation; other SD owners not covered.
+#ifndef THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY
+#define THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 0 && THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
+#error "Invalid F24K build-only flag"
+#endif
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
+#if THESIS_DTN_F24J_BUILD_ONLY != 1 || THESIS_DTN_F24I_BUILD_ONLY != 1 || THESIS_DTN_F24H_BUILD_ONLY != 1
+#error "F24K requires F24J/I/H build-only model chain"
+#endif
+#if THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0
+#error "F24K forbids physical pilot, F23D independent writer, and fleet SD activation"
+#endif
+#if THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24K requires legacy relay/GPIO outputs off"
+#endif
+#include "dtn_f24k_sd_interposition.h"
+#endif
 namespace ThesisSDLogger {
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
+// This object has NO SD backend: no mount, open or physical File handle.
+static DTNF24K::DenySdFacade<File> interposedSD;
+#else
+// Preserve existing physical logger behavior for every non-F24K profile.
+// This alias is NOT an exclusive owner, a lease or a replay permission.
+static auto& interposedSD = SD;
+#endif
 #if THESIS_DTN_F24D_BUILD_ONLY == 1
 // Compiler-only seam. Gate always rejects; NO SD.open and no runtime caller.
 struct F24DNoPhysicalPermission {
@@ -567,7 +596,7 @@ inline bool appendRecord(const char* path, const char* record) {
 // F23D SD end
     if (!ready) return false;
 
-    File file = SD.open(path, FILE_APPEND);
+    File file = interposedSD.open(path, FILE_APPEND);
 
     if (!file) {
         Serial.println("[SD-LOG] OPEN_FAIL");
@@ -633,17 +662,17 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     sdSPI.begin(36, 37, 35, 47);
 
     // Last argument false: do not format on mount failure.
-    if (!SD.begin(47, sdSPI, 1000000, "/sd", 5, false)) {
+    if (!interposedSD.begin(47, sdSPI, 1000000, "/sd", 5, false)) {
         Serial.println("[SD-LOG] MOUNT_FAIL");
         return false;
     }
 
     Serial.printf(
         "[SD-LOG] MOUNT_OK capacity_mib=%llu\n",
-        (unsigned long long)(SD.cardSize() / 1048576ULL)
+        (unsigned long long)(interposedSD.cardSize() / 1048576ULL)
     );
 
-    if (!SD.exists("/THESIS") && !SD.mkdir("/THESIS")) {
+    if (!interposedSD.exists("/THESIS") && !interposedSD.mkdir("/THESIS")) {
         Serial.println("[SD-LOG] ROOT_CREATE_FAIL");
         return false;
     }
@@ -652,14 +681,14 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     // Do not touch /THESIS/VESSEL_XXX journals. Every boot creates its own
     // empty session directory. Collisions are skipped, never reopened.
     const char* f06Root = "/THESIS/F06TEST";
-    if (!SD.exists(f06Root) && !SD.mkdir(f06Root)) {
+    if (!interposedSD.exists(f06Root) && !interposedSD.mkdir(f06Root)) {
         Serial.println("[SD-F06] TEST_ROOT_CREATE_FAIL; NO JOURNAL WRITES");
         return false;
     }
     char f06VesselRoot[40];
     snprintf(f06VesselRoot, sizeof(f06VesselRoot), "%s/V%03lu",
              f06Root, (unsigned long)vesselId);
-    if (!SD.exists(f06VesselRoot) && !SD.mkdir(f06VesselRoot)) {
+    if (!interposedSD.exists(f06VesselRoot) && !interposedSD.mkdir(f06VesselRoot)) {
         Serial.println("[SD-F06] VESSEL_TEST_ROOT_CREATE_FAIL; NO JOURNAL WRITES");
         return false;
     }
@@ -673,8 +702,8 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
             Serial.println("[SD-F06] SESSION_PATH_TOO_LONG; NO JOURNAL WRITES");
             return false;
         }
-        if (SD.exists(candidate)) continue;
-        if (!SD.mkdir(candidate)) {
+        if (interposedSD.exists(candidate)) continue;
+        if (!interposedSD.mkdir(candidate)) {
             Serial.println("[SD-F06] SESSION_DIR_CREATE_FAIL; NO JOURNAL WRITES");
             return false;
         }
@@ -692,12 +721,12 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     Serial.printf("[SD-F06] SANDBOX_READY path=%s legacy_journals=UNTOUCHED\n", DIRECTORY);
 #endif
 
-    if (!SD.exists(DIRECTORY) && !SD.mkdir(DIRECTORY)) {
+    if (!interposedSD.exists(DIRECTORY) && !interposedSD.mkdir(DIRECTORY)) {
         Serial.println("[SD-LOG] VESSEL_DIR_CREATE_FAIL");
         return false;
     }
 
-    File dir = SD.open(DIRECTORY, FILE_READ);
+    File dir = interposedSD.open(DIRECTORY, FILE_READ);
 
     if (!dir || !dir.isDirectory()) {
         Serial.println("[SD-LOG] VESSEL_DIR_INVALID");
@@ -713,8 +742,8 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     uint32_t priorLines = 0;
     bool lastLineComplete = false;
 
-    if (SD.exists(DIAGNOSTICS)) {
-        File previous = SD.open(DIAGNOSTICS, FILE_READ);
+    if (interposedSD.exists(DIAGNOSTICS)) {
+        File previous = interposedSD.open(DIAGNOSTICS, FILE_READ);
 
         if (!previous) {
             Serial.println("[SD-VERIFY] PRIOR_OPEN_FAIL");
@@ -800,7 +829,7 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
         return false;
     }
 
-    File verification = SD.open(DIAGNOSTICS, FILE_READ);
+    File verification = interposedSD.open(DIAGNOSTICS, FILE_READ);
 
     if (!verification) {
         ready = false;
@@ -891,10 +920,10 @@ inline void pollExport() {
             exportActive = false;
             return;
         }
-        exportFile = SD.open(exportPaths[exportIndex], FILE_READ);
+        exportFile = interposedSD.open(exportPaths[exportIndex], FILE_READ);
         if (!exportFile) {
             // A missing file is valid only when it does not exist.
-            if (SD.exists(exportPaths[exportIndex])) {
+            if (interposedSD.exists(exportPaths[exportIndex])) {
                 Serial.printf("[SDX] ERROR OPEN_FAILED index=%u\n", (unsigned)exportIndex);
                 exportActive = false;
                 return;
@@ -1015,13 +1044,13 @@ inline void poll() {
         uint64_t telemetryBytes = 0;
         uint64_t sosBytes = 0;
 
-        File telemetryFile = SD.open(TELEMETRY, FILE_READ);
+        File telemetryFile = interposedSD.open(TELEMETRY, FILE_READ);
         if (telemetryFile) {
             telemetryBytes = telemetryFile.size();
             telemetryFile.close();
         }
 
-        File sosFile = SD.open(SOS_EVENTS, FILE_READ);
+        File sosFile = interposedSD.open(SOS_EVENTS, FILE_READ);
         if (sosFile) {
             sosBytes = sosFile.size();
             sosFile.close();
@@ -1080,7 +1109,7 @@ inline void poll() {
 #if THESIS_F06_SD_SANDBOX == 1
 // F06 historical inspection: USB-only, allowlisted and read-only.
 // F19R2 additionally allows V003 F06 sessions when compiled with dual-display.
-// No caller-supplied path or filename is ever sent to SD.open().
+// No caller-supplied path or filename is ever sent to interposedSD.open().
 // Exactly two selectors are allowed: LEGACY or S + 7 uppercase hex digits.
 // These routines NEVER use FILE_APPEND, FILE_WRITE, mkdir, remove or rename.
 static constexpr uint32_t HISTORY_MAX_FILE_BYTES = 1048576UL;
@@ -1145,7 +1174,7 @@ inline void listHistory() {
     }
     char root[48];
     snprintf(root, sizeof(root), "/THESIS/F06TEST/V%03lu", (unsigned long)vesselId);
-    File directory = SD.open(root, FILE_READ);
+    File directory = interposedSD.open(root, FILE_READ);
     if (!directory || !directory.isDirectory()) {
         if (directory) directory.close();
         Serial.println("[SDH] ERROR SESSION_DIRECTORY_MISSING"); return;
@@ -1230,7 +1259,7 @@ inline void requestHistory(const char* selector) {
     } else {
         Serial.println("[SDH] ERROR SELECTOR_REJECTED"); return;
     }
-    File root = SD.open(historyRoot, FILE_READ);
+    File root = interposedSD.open(historyRoot, FILE_READ);
     if (!root || !root.isDirectory()) {
         if (root) root.close();
         Serial.println("[SDH] ERROR TARGET_DIRECTORY_MISSING"); return;
@@ -1243,9 +1272,9 @@ inline void requestHistory(const char* selector) {
         if (!historyPath(path, sizeof(path), i)) {
             Serial.println("[SDH] ERROR PATH_TOO_LONG"); return;
         }
-        File file = SD.open(path, FILE_READ);
+        File file = interposedSD.open(path, FILE_READ);
         if (!file) {
-            if (SD.exists(path)) {
+            if (interposedSD.exists(path)) {
                 Serial.println("[SDH] ERROR FILE_OPEN_FAILED"); return;
             }
             historySizes[i] = 0; // Missing SOS file is valid: zero bytes.
@@ -1303,7 +1332,7 @@ inline void pollHistory() {
         if (!historyPath(path, sizeof(path), i)) {
             historyStop("PATH_TOO_LONG"); return;
         }
-        historyFile = SD.open(path, FILE_READ);
+        historyFile = interposedSD.open(path, FILE_READ);
         if (!historyFile || historyFile.isDirectory() ||
             historyFile.size() != historySizes[i]) {
             historyStop("FILE_CHANGED_OR_OPEN_FAILED"); return;

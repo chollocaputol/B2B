@@ -71,6 +71,19 @@
 #endif
 #include "dtn_f24h_writer_retirement.h"
 #endif
+// F24I: independent-witness bridge, physical owner absent, deny by default.
+#ifndef THESIS_DTN_F24I_BUILD_ONLY
+#define THESIS_DTN_F24I_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24I_BUILD_ONLY != 0 && THESIS_DTN_F24I_BUILD_ONLY != 1
+#error "F24I preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24I_BUILD_ONLY == 1
+#if THESIS_DTN_F24H_BUILD_ONLY != 1
+#error "F24I preview requires F24H build-only retirement model"
+#endif
+#include "dtn_f24i_sd_owner_bridge.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -952,6 +965,18 @@ inline void poll() {
     noAuthority.urgentQueued = urgentQueue.count;
     noAuthority.researchQueued = telemetryQueue.count;
     (void)denyPreview.stillCandidate(noAuthority);
+#endif
+#if THESIS_DTN_F24I_BUILD_ONLY == 1
+    // RAM-only bridge typecheck. Permanently denied: no physical owner, no
+    // actual SD Port, no session identity and absolutely no SD I/O.
+    static DTNF24I::NoPhysicalPort noPhysicalPort;
+    static const DTNF24I::NoPhysicalObserver noPhysicalWitness{};
+    static DTNF24I::GuardedPort<DTNF24I::NoPhysicalPort,
+                                DTNF24I::NoPhysicalObserver> denyBridge(
+                                    noPhysicalPort,noPhysicalWitness);
+    noPhysicalPort.observedUrgent = urgentQueue.count;
+    noPhysicalPort.observedResearch = telemetryQueue.count;
+    (void)denyBridge.arm(DTNF24H::SessionKey{});
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE

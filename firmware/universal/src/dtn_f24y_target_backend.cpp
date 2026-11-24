@@ -14,10 +14,20 @@
 #include <driver/spi_master.h>
 #include <driver/sdspi_host.h>
 #include <esp_idf_version.h>
+#include <esp32-hal-spi.h>
+#if !defined(CONFIG_IDF_TARGET_ESP32S3) || !CONFIG_IDF_TARGET_ESP32S3
+#error "F26A audited controller mapping requires ESP32-S3"
+#endif
 #if ESP_IDF_VERSION != ESP_IDF_VERSION_VAL(5,5,5)
 #error "F24Y audited SDK is ESP-IDF 5.5.5"
 #endif
 namespace {
+// Arduino bus indices are NOT ESP-IDF host enum values. On the pinned S3
+// core FSPI routes to SPI2; HSPI routes to SPI3. Keep LoRa on SPI2 and
+// reserve SPI3 for this dormant SD backend, subject to a future owner grant.
+static_assert(FSPI==0 && HSPI==1,"Unexpected Arduino S3 SPI mapping");
+constexpr spi_host_device_t kSdHost=SPI3_HOST;
+static_assert(kSdHost!=SPI2_HOST,"SD must not claim the LoRa controller");
 // This driver assumes externally qualified exclusive bus/power/card identity.
 // No such grant exists in firmware. Not instantiated by the live logger.
 // Do not mix this driver with Arduino SD/SPI on the same host.
@@ -34,10 +44,10 @@ class EspMount final {
   bus.quadwp_io_num=-1;bus.quadhd_io_num=-1;
   bus.data4_io_num=-1;bus.data5_io_num=-1;bus.data6_io_num=-1;bus.data7_io_num=-1;
   bus.max_transfer_sz=4096;
-  if(spi_bus_initialize(SPI2_HOST,&bus,SPI_DMA_CH_AUTO)!=ESP_OK)return fail();
+  if(spi_bus_initialize(kSdHost,&bus,SPI_DMA_CH_AUTO)!=ESP_OK)return fail();
   bus_=true;
-  sdmmc_host_t host=SDSPI_HOST_DEFAULT();host.slot=SPI2_HOST;host.max_freq_khz=1000;
-  sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();device.host_id=SPI2_HOST;device.gpio_cs=GPIO_NUM_47;
+  sdmmc_host_t host=SDSPI_HOST_DEFAULT();host.slot=kSdHost;host.max_freq_khz=1000;
+  sdspi_device_config_t device=SDSPI_DEVICE_CONFIG_DEFAULT();device.host_id=kSdHost;device.gpio_cs=GPIO_NUM_47;
   esp_vfs_fat_mount_config_t config{};
   config.format_if_mount_failed=false;config.max_files=2;config.disk_status_check_enable=true;
   // A failed mount can leave SDK state uncertain. Do not free/retry blindly.
@@ -48,7 +58,7 @@ class EspMount final {
   if(fault_||!bus_||!card_)return false;
   if(esp_vfs_fat_sdcard_unmount(root(),card_)!=ESP_OK)return fail();
   card_=nullptr;
-  if(spi_bus_free(SPI2_HOST)!=ESP_OK)return fail();
+  if(spi_bus_free(kSdHost)!=ESP_OK)return fail();
   bus_=false;return true;
  }
 };

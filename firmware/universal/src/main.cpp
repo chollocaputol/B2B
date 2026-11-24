@@ -876,6 +876,11 @@ bool thesisF24MObserveSOSPacket(const VesselPacket& packet,uint8_t source){
   return result==DTNF24M::CaptureResult::Queued ||
          result==DTNF24M::CaptureResult::Duplicate;
 }
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+bool thesisF25CObserveCancelPacket(const VesselPacket& packet,uint8_t source){
+  return packet.packetType==PACKET_SOS_CANCEL && thesisF24MObserveSOSPacket(packet,source);
+}
+#endif
 #endif
 
 // F23D SD begin

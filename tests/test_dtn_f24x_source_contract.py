@@ -47,7 +47,9 @@ for label,condition in [
  ('receipt final close checked','if(!same || !DTNF24M::storageHealthy(sd))' in n),
  ('receipt append close checked','if(!wrote || !DTNF24M::storageHealthy(sd))' in n),
  ('receipt only applied after close check',n.index('proof.close();')<n.index('if(!same || !DTNF24M::storageHealthy(sd))')<n.index('return ledger.apply(receipt,verifier)')),
- ('SOS-only not CANCEL','p.packetType==PACKET_SOS &&' in m and 'PACKET_SOS_CANCEL' not in m),
+ # F25C deliberately introduces an opt-in typed journal. Preserve the original
+ # default SOS-only rule and assert the new guarded admission separately.
+ ('default SOS-only; CANCEL only under F25C', 'p.packetType==PACKET_SOS &&' in m[m.index('inline bool validSOS'):m.index('inline bool validControl')] and 'PACKET_SOS_CANCEL' not in m[m.index('inline bool validSOS'):m.index('inline bool validControl')] and '#define THESIS_DTN_F25C_BUILD_ONLY 0' in m and '#if THESIS_DTN_F25C_BUILD_ONLY == 1\n return p.magic==PACKET_MAGIC' in m and '#else\n return false;\n#endif\n}' in m[m.index('inline bool validControl'):m.index('struct PacketEntry')]),
  ('firmware flag off default','#define THESIS_DTN_F24X_BUILD_ONLY 0' in l),
  ('firmware requires W O P K deny','THESIS_DTN_F24W_BUILD_ONLY != 1 || THESIS_DTN_F24O_BUILD_ONLY != 1 || THESIS_DTN_F24P_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1' in l),
  ('firmware selects exact owner','f24oSosPort(interposedSD.ownerForSos(),f24oNoPhysicalWitness)' in l),

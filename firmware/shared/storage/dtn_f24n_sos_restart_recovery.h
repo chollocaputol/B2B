@@ -19,10 +19,28 @@ struct Receipt {
  uint32_t origin=0,event=0,packetCrc=0;
  uint64_t serverId=0;
  uint32_t serverTag=0;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ uint8_t type=PACKET_SOS; // v1 receipts implicitly SOS; v2 explicitly CANCEL
+#endif
 };
+inline uint8_t receiptType(const Receipt& r){
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ return r.type;
+#else
+ (void)r;return PACKET_SOS;
+#endif
+}
+inline bool matchesRecord(const Receipt& r,const DTNF24M::PacketEntry& p){
+ return r.origin==p.origin && r.event==p.event && receiptType(r)==DTNF24M::recordType(p);
+}
 inline bool receiptValid(const Receipt& r){
  return r.origin>=1 && r.origin<=9999 && r.event!=0 &&
-        r.packetCrc!=0 && r.serverId!=0 && r.serverTag!=0;
+        r.packetCrc!=0 && r.serverId!=0 && r.serverTag!=0 &&
+        (receiptType(r)==PACKET_SOS
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+         || receiptType(r)==PACKET_SOS_CANCEL
+#endif
+        );
 }
 inline void le64(uint8_t* p,uint64_t v){for(unsigned i=0;i<8;++i)p[i]=uint8_t(v>>(8U*i));}
 inline uint64_t rd64(const uint8_t* p){uint64_t x=0;for(unsigned i=0;i<8;++i)x|=uint64_t(p[i])<<(8U*i);return x;}
@@ -30,16 +48,28 @@ inline bool encodeReceipt(const Receipt& r,uint8_t (&out)[kReceiptBytes]){
  if(!receiptValid(r))return false;
  memset(out,0,sizeof(out));
  memcpy(out,"F24N",4);out[4]=1;out[5]=1;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ if(r.type==PACKET_SOS_CANCEL){out[4]=2;out[6]=PACKET_SOS_CANCEL;}
+#endif
  DTNF24M::le32(out+8,r.origin);DTNF24M::le32(out+12,r.event);
  DTNF24M::le32(out+16,r.packetCrc);le64(out+20,r.serverId);
  DTNF24M::le32(out+28,r.serverTag);
  DTNF24M::le32(out+36,DTNF24M::crc32(out,36));return true;
 }
 inline bool decodeReceipt(const uint8_t* in,size_t n,Receipt& out){
- if(!in || n!=kReceiptBytes || memcmp(in,"F24N",4) || in[4]!=1 || in[5]!=1 ||
-    in[6] || in[7] || in[32] || in[33] || in[34] || in[35] ||
+ if(!in || n!=kReceiptBytes || memcmp(in,"F24N",4) || in[5]!=1 ||
+    in[7] || in[32] || in[33] || in[34] || in[35] ||
     DTNF24M::rd32(in+36)!=DTNF24M::crc32(in,36))return false;
- Receipt r{};r.origin=DTNF24M::rd32(in+8);r.event=DTNF24M::rd32(in+12);
+ const bool legacy=in[4]==1 && in[6]==0;
+ Receipt r{};
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ const bool cancel=in[4]==2 && in[6]==PACKET_SOS_CANCEL;
+ if(!legacy && !cancel)return false;
+ if(cancel)r.type=PACKET_SOS_CANCEL;
+#else
+ if(!legacy)return false;
+#endif
+ r.origin=DTNF24M::rd32(in+8);r.event=DTNF24M::rd32(in+12);
  r.packetCrc=DTNF24M::rd32(in+16);r.serverId=rd64(in+20);
  r.serverTag=DTNF24M::rd32(in+28);
  if(!receiptValid(r))return false;
@@ -76,7 +106,7 @@ template<size_t Capacity>class Ledger final{
   if(!DTNF24M::encode(p,frame))return Add::Invalid;
   for(size_t i=0;i<count_;++i){
    const auto& prior=rows_[i].packet;
-   if(prior.origin==p.origin && prior.event==p.event){
+   if(prior.origin==p.origin && prior.event==p.event && DTNF24M::recordType(prior)==DTNF24M::recordType(p)){
     if(memcmp(prior.bytes,p.bytes,DTNF24M::kWireBytes)){
      fault_=true;return Add::Conflict;
     }
@@ -91,7 +121,7 @@ template<size_t Capacity>class Ledger final{
   if(!receiptValid(r))return ReceiptResult::Invalid;
   for(size_t i=0;i<count_;++i){
    Record& e=rows_[i];
-   if(e.packet.origin!=r.origin || e.packet.event!=r.event)continue;
+   if(!matchesRecord(r,e.packet))continue;
    if(r.packetCrc!=DTNF24M::crc32(e.packet.bytes,DTNF24M::kWireBytes)){
     fault_=true;return ReceiptResult::Conflict;
    }
@@ -122,9 +152,37 @@ template<size_t Capacity>class Ledger final{
  const Record* at(size_t i)const{return !fault_ && i<count_?&rows_[i]:nullptr;}
  const DTNF24M::PacketEntry* nextPending()const{
   if(fault_)return nullptr;
-  for(size_t i=0;i<count_;++i)if(!rows_[i].delivered)return &rows_[i].packet;
+  for(size_t i=0;i<count_;++i){
+   if(rows_[i].delivered)continue;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+   // If both records are known, deliver SOS before its CANCEL even when
+   // filesystem enumeration presented CANCEL first. Never delete either.
+   const auto& p=rows_[i].packet;
+   if(DTNF24M::recordType(p)==PACKET_SOS_CANCEL){
+    for(size_t j=0;j<count_;++j){const auto& q=rows_[j].packet;
+     if(!rows_[j].delivered && q.origin==p.origin && q.event==p.event && DTNF24M::recordType(q)==PACKET_SOS)return &q;
+    }
+   }
+#endif
+   return &rows_[i].packet;
+  }
   return nullptr;
  }
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ // Record-set projection only, not live distress state or authentication.
+ // A later SOS never clears a known cancellation for the same event.
+ enum class EventState:uint8_t { Unknown, SOSSeen, CancelSeen, Fault };
+ EventState eventState(uint32_t origin,uint32_t event)const{
+  if(fault_)return EventState::Fault;
+  bool sos=false;
+  for(size_t i=0;i<count_;++i){const auto& p=rows_[i].packet;
+   if(p.origin!=origin || p.event!=event)continue;
+   if(DTNF24M::recordType(p)==PACKET_SOS_CANCEL)return EventState::CancelSeen;
+   sos=true;
+  }
+  return sos?EventState::SOSSeen:EventState::Unknown;
+ }
+#endif
  private:Record rows_[Capacity]{};size_t count_=0;bool fault_=false;
 };
 
@@ -228,7 +286,7 @@ class ReceiptWriter final{
   const Record* match=nullptr;
   for(size_t i=0;i<ledger.count();++i){
    const Record* row=ledger.at(i);
-   if(row && row->packet.origin==receipt.origin && row->packet.event==receipt.event){match=row;break;}
+   if(row && matchesRecord(receipt,row->packet)){match=row;break;}
   }
   if(!match || match->delivered ||
      receipt.packetCrc!=DTNF24M::crc32(match->packet.bytes,DTNF24M::kWireBytes) ||
@@ -262,7 +320,13 @@ class ReceiptWriter final{
   proof.close();
   if(!same || !DTNF24M::storageHealthy(sd)){fault_=true;return false;}
   written_+=kReceiptBytes;
-  return ledger.apply(receipt,verifier)==ReceiptResult::Verified;
+  #if THESIS_DTN_F25C_BUILD_ONLY == 1
+ const auto applied=ledger.apply(receipt,verifier);
+ if(applied!=ReceiptResult::Verified){fault_=true;return false;}
+ return true;
+#else
+ return ledger.apply(receipt,verifier)==ReceiptResult::Verified;
+#endif
  }
  bool faulted()const{return fault_;}
  const char* path()const{return path_;}

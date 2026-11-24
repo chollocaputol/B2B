@@ -4,6 +4,17 @@
 // Caller must provide an independently authorized *single* SD owner; F24M
 // firmware preview is hard-locked to the F24K permanently denied facade.
 #include <stdint.h>
+#ifndef THESIS_DTN_F25C_BUILD_ONLY
+#define THESIS_DTN_F25C_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F25C_BUILD_ONLY != 0 && THESIS_DTN_F25C_BUILD_ONLY != 1
+#error "Invalid F25C flag"
+#endif
+#if THESIS_DTN_F25C_BUILD_ONLY == 1 && (defined(ARDUINO) || defined(ESP_PLATFORM))
+#if THESIS_DTN_F25B_BUILD_ONLY != 1 || THESIS_DTN_F25A_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
+#error "F25C target requires inherited permanent denial"
+#endif
+#endif
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,11 +44,24 @@ inline bool validSOS(const VesselPacket& p){
         p.packetType==PACKET_SOS && p.originNodeId>=1U &&
         p.originNodeId<=9999U && p.sequenceNumber!=0U;
 }
+// F25C only: retain the legacy SOS wire and disk encoding; CANCEL uses v2.
+inline bool validControl(const VesselPacket& p){
+ if(validSOS(p))return true;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ return p.magic==PACKET_MAGIC && p.version==PACKET_VERSION &&
+  p.packetType==PACKET_SOS_CANCEL && p.originNodeId>=1U && p.originNodeId<=9999U &&
+  p.sequenceNumber!=0U && rd32(reinterpret_cast<const uint8_t*>(p.message))==p.sequenceNumber &&
+  rd32(reinterpret_cast<const uint8_t*>(p.message)+4)==p.originNodeId;
+#else
+ return false;
+#endif
+}
 struct PacketEntry {
  uint8_t bytes[kWireBytes]{};
  uint32_t origin=0, event=0;
  uint8_t source=0;
 };
+inline uint8_t recordType(const PacketEntry& p){return p.bytes[offsetof(VesselPacket,packetType)];}
 enum class CaptureResult : uint8_t {Queued,Duplicate,Invalid,Conflicting,Full,Faulted};
 
 template<size_t Capacity> class PendingQueue final {
@@ -45,10 +69,10 @@ template<size_t Capacity> class PendingQueue final {
  public:
  CaptureResult capture(const VesselPacket& p,uint8_t source){
   if(fault_)return CaptureResult::Faulted;
-  if(!validSOS(p) || source>kReceived)return CaptureResult::Invalid;
+  if(!validControl(p) || source>kReceived)return CaptureResult::Invalid;
   for(size_t i=0;i<size_;++i){
    const PacketEntry& previous=entries_[(read_+i)%Capacity];
-   if(previous.origin==p.originNodeId && previous.event==p.sequenceNumber){
+   if(previous.origin==p.originNodeId && previous.event==p.sequenceNumber && recordType(previous)==p.packetType){
     return memcmp(previous.bytes,&p,kWireBytes)==0
        ? CaptureResult::Duplicate:CaptureResult::Conflicting;
    }
@@ -75,11 +99,14 @@ template<size_t Capacity> class PendingQueue final {
 
 inline bool encode(const PacketEntry& item,uint8_t (&frame)[kFrameBytes]){
  VesselPacket p{};memcpy(&p,item.bytes,kWireBytes);
- if(!validSOS(p) || p.originNodeId!=item.origin || p.sequenceNumber!=item.event ||
+ if(!validControl(p) || p.originNodeId!=item.origin || p.sequenceNumber!=item.event ||
     item.source>kReceived)return false;
  memset(frame,0,kFrameBytes);
  frame[0]='F';frame[1]='2';frame[2]='4';frame[3]='M';
  frame[4]=1;frame[5]=item.source;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ if(p.packetType==PACKET_SOS_CANCEL){frame[4]=2;frame[6]=PACKET_SOS_CANCEL;}
+#endif
  le32(frame+8,item.origin);le32(frame+12,item.event);
  le16(frame+16,uint16_t(kWireBytes));
  le32(frame+18,crc32(item.bytes,kWireBytes));
@@ -88,12 +115,18 @@ inline bool encode(const PacketEntry& item,uint8_t (&frame)[kFrameBytes]){
 }
 inline bool decode(const uint8_t* frame,size_t size,PacketEntry& out){
  if(frame==nullptr || size!=kFrameBytes || frame[0]!='F' || frame[1]!='2' ||
-    frame[2]!='4' || frame[3]!='M' || frame[4]!=1 || frame[5]>kReceived ||
-    frame[6]!=0 || frame[7]!=0 || rd16(frame+16)!=kWireBytes ||
+    frame[2]!='4' || frame[3]!='M' || frame[5]>kReceived || frame[7]!=0 || rd16(frame+16)!=kWireBytes ||
     rd32(frame+84)!=crc32(frame,84) ||
     rd32(frame+18)!=crc32(frame+22,kWireBytes))return false;
  VesselPacket p{};memcpy(&p,frame+22,kWireBytes);
- if(!validSOS(p) || p.originNodeId!=rd32(frame+8) || p.sequenceNumber!=rd32(frame+12))return false;
+ if(!validControl(p) || p.originNodeId!=rd32(frame+8) || p.sequenceNumber!=rd32(frame+12))return false;
+ const bool legacy=frame[4]==1 && frame[6]==0 && p.packetType==PACKET_SOS;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+ const bool cancel=frame[4]==2 && frame[6]==PACKET_SOS_CANCEL && p.packetType==PACKET_SOS_CANCEL;
+ if(!legacy && !cancel)return false;
+#else
+ if(!legacy)return false;
+#endif
  PacketEntry candidate{};memcpy(candidate.bytes,frame+22,kWireBytes);
  candidate.origin=p.originNodeId;candidate.event=p.sequenceNumber;
  candidate.source=frame[5];out=candidate;return true;

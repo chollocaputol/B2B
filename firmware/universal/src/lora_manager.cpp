@@ -60,6 +60,9 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #endif
 #if THESIS_DTN_F24M_BUILD_ONLY == 1
 extern bool thesisF24MObserveSOSPacket(const VesselPacket&,uint8_t);
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+extern bool thesisF25CObserveCancelPacket(const VesselPacket&,uint8_t);
+#endif
 #endif
 #include "../../shared/communication/control_retry_schedule.h"
 #include "weather_manager.h"
@@ -1749,6 +1752,11 @@ void cancelActiveSOS() {
   const uint32_t origin = NODE_ID;
   memcpy(pendingCancel.message + 4, &origin, 4);
   cancelPending = true;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+  // Capture only the newly constructed original intent, not reconstructed NVS
+  // retry metadata. The existing guarded bridge is shared with SOS.
+  (void)thesisF25CObserveCancelPacket(pendingCancel,0U);
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
   f23dSDPacket("LOCAL_CANCEL",pendingCancel);
@@ -1939,6 +1947,9 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     Serial.printf("[PEER-SOS] CANCEL origin=%lu event=%lu result=%s\n",
       (unsigned long)p.originNodeId,(unsigned long)cancelId,MultiPeerSOS::name(result));
     if (result!=MultiPeerSOS::Result::Cancelled && result!=MultiPeerSOS::Result::CancelDuplicate)return;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+    if(result==MultiPeerSOS::Result::Cancelled)(void)thesisF25CObserveCancelPacket(p,1U);
+#endif
     if (incomingBSOS.known && incomingBSOS.originId==p.originNodeId &&
         incomingBSOS.eventId==cancelId)incomingBSOS.cancelled=true;
     VesselPacket ack={};ack.magic=PACKET_MAGIC;ack.version=PACKET_VERSION;

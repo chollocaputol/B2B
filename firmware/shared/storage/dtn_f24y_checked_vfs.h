@@ -13,6 +13,7 @@
 #include <dirent.h>
 #ifdef _WIN32
 #include <io.h>
+#include <direct.h>
 #else
 #include <unistd.h>
 #endif
@@ -52,6 +53,16 @@ struct NativeVfs {
  static int sync(int fd){return ::fsync(fd);}
  static int close(int fd){return ::close(fd);}
 #endif
+ // Exclusive directory creation is host-only. ESP32 never creates a session here.
+ static bool createDirectory(const char* p){
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+  (void)p;return false;
+#elif defined(_WIN32)
+  return ::_mkdir(p)==0;
+#else
+  return ::mkdir(p,0700)==0;
+#endif
+ }
  static DIR* dirOpen(const char* p){return ::opendir(p);}
  static struct dirent* dirNext(DIR* d){return ::readdir(d);}
  static int dirClose(DIR* d){return ::closedir(d);}
@@ -82,6 +93,18 @@ template<class Driver,class Sys=NativeVfs> class Backend final {
  template<class... Args> explicit Backend(Args&&... args):driver_(std::forward<Args>(args)...){ }
  Backend(const Backend&)=delete;Backend& operator=(const Backend&)=delete;
  bool mount(){if(mounted_||fault_)return false;if(!driver_.mount())return fail();mounted_=true;return true;}
+ // F25B: only after owner mount; no recursive mkdir or existing-directory reuse.
+ bool createSession(uint32_t vessel,const char* current){
+#if defined(ARDUINO) || defined(ESP_PLATFORM)
+  (void)vessel;(void)current;return fail();
+#else
+  char journal[96]{},path[512]{};
+  if(!active() || fd_[0]>=0 || fd_[1]>=0 || directory_ || !DTNF24M::sandboxPath(journal,sizeof(journal),current,vessel) || !full(journal,path))return fail();
+  char* slash=strrchr(path,'/');if(!slash)return fail();*slash=0;
+  if(!parent(path) || Sys::kind(path)!=FileKind::Missing || !Sys::createDirectory(path) || Sys::kind(path)!=FileKind::Directory)return fail();
+  return true;
+#endif
+ }
  bool exists(const char* path,bool& found){
   found=false;char p[512]{};if(!active()||fd_[0]>=0||fd_[1]>=0)return false;
   if(!full(path,p)||!parent(p))return fail();

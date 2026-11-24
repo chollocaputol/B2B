@@ -3,14 +3,22 @@
 // No session identity, mount start, replay, receipt, or storage permission.
 #include "dtn_f24z_session_service.h"
 #include <atomic>
+#if THESIS_DTN_F25B_BUILD_ONLY == 1
+#include "dtn_f25b_session_lifecycle.h"
+#endif
 namespace DTNF25A {
 using Queue=DTNF24M::PendingQueue<8>;
 enum class Tick:uint8_t { ContextDenied, Busy, NotDue, Denied, Unexpected };
 struct Report { size_t pending=0; uint32_t lost=0; };
 template<class Backend> class Runtime final {
  const DTNF24W::DenyWitness mountWitness_{};
+#if THESIS_DTN_F25B_BUILD_ONLY == 1
+ const DTNF25B::DenyWitness evidenceWitness_{};
+ DTNF25B::Service<Backend,DTNF24W::DenyWitness,DTNF25B::DenyWitness> service_;
+#else
  const DTNF24O::DenyWitness evidenceWitness_{};
  DTNF24Z::Service<Backend,DTNF24W::DenyWitness,DTNF24O::DenyWitness> service_;
+#endif
  std::atomic<uintptr_t> owner_{0};
  std::atomic_flag entry_=ATOMIC_FLAG_INIT;
  bool attempted_=false, halted_=false; uint32_t last_=0;

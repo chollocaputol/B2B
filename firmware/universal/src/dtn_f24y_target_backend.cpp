@@ -105,6 +105,23 @@ extern const ZLinkTable thesis_f24z_link_anchor __attribute__((used))={
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "../../shared/storage/dtn_f25a_runtime_deny.h"
+#if THESIS_DTN_F25B_BUILD_ONLY == 1
+namespace {
+using BService=DTNF25B::Service<Target,DTNF24W::DenyWitness,DTNF25B::DenyWitness>;
+struct BLinkTable {
+ ZResult (BService::*start)(uint32_t,const char*);
+ ZResult (BService::*scan)();
+ ZResult (BService::*append)(ZQueue&);
+ ZResult (BService::*poll)(const ZVerifier&);
+ ZResult (BService::*receipt)(const DTNF24N::Receipt&,const ZVerifier&);
+ ZResult (BService::*shutdown)();
+};
+}
+extern "C" {
+extern const BLinkTable thesis_f25b_link_anchor __attribute__((used))={
+ &BService::start,&BService::discover,&BService::append<ZQueue>,&BService::poll<ZVerifier>,&BService::receipt<ZVerifier>,&BService::shutdown};
+}
+#endif
 namespace {
 // Actual target adapter, private instance, immutable denial, no callable start.
 DTNF25A::Runtime<Target> f25aRuntime;

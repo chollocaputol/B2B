@@ -34,7 +34,7 @@ for label,condition in [
  ('existing receipt writer','DTNF24N::ReceiptWriter receipts_' in z),
  ('no new queue','PendingQueue' not in z),
  ('atomic nonblocking entry','test_and_set(std::memory_order_acquire)' in z and 'clear(std::memory_order_release)' in z),
- ('all public operations serialized',z.count('Entry lock(gate_);if(!lock.acquired)return Result::Deferred;')==7),
+ ('all public operations serialized',z.count('Entry lock(gate_);if(!lock.acquired)return Result::Deferred;')==10 and all(x in z for x in ('Result archiveAccess()', 'Result inspectClosedJournal(', 'Result readClosedFrame('))),
  ('authority separate from busy','return busy(e,old)?Result::Deferred:Result::Done;' in z),
  ('identity loss still faults','!authority(e,vessel_)||!same(e)||!owner_.checkedIdentity' in z),
  ('urgent blocks old-session operations','(old&&e.urgentPending)' in z),

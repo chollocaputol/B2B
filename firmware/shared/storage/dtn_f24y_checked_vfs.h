@@ -122,6 +122,15 @@ template<class Driver,class Sys=NativeVfs> class Backend final {
  // F24Z checked discovery. Current session must exist. Only exact old
  // session directories enter the snapshot; a trusted closure witness is required.
  template<class Guard> bool discover(uint32_t vessel,const char* current,DTNF24W::SessionSnapshot& out,const Guard& allowed){
+  return discoverImpl(vessel,current,out,allowed,false);
+ }
+#if THESIS_DTN_F26C_BUILD_ONLY == 1 && !defined(ARDUINO) && !defined(ESP_PLATFORM)
+ template<class Guard> bool discoverMaintenance(uint32_t vessel,const char* reservedAbsent,DTNF24W::SessionSnapshot& out,const Guard& allowed){
+  return discoverImpl(vessel,reservedAbsent,out,allowed,true);
+ }
+#endif
+ private:
+ template<class Guard> bool discoverImpl(uint32_t vessel,const char* current,DTNF24W::SessionSnapshot& out,const Guard& allowed,bool maintenance){
   out={};char journal[96]{},logical[48]{},path[512]{};
   if(!active()||fd_[0]>=0||fd_[1]>=0||directory_||!allowed())return fail();
   if(!DTNF24M::sandboxPath(journal,sizeof(journal),current,vessel))return fail();
@@ -155,13 +164,14 @@ template<class Driver,class Sys=NativeVfs> class Backend final {
   }
   if(!allowed()||Sys::dirClose(directory_)!=0)return fail();
   directory_=nullptr;
-  if(!allowed()||!good||!exhausted||!foundCurrent)return fail();
+  if(!allowed()||!good||!exhausted||(maintenance?foundCurrent:!foundCurrent))return fail();
   // Stable lexical order for deterministic recovery, not chronology proof.
   for(size_t i=1;i<copy.count;++i)for(size_t j=i;j>0&&strcmp(copy.paths[j-1],copy.paths[j])>0;--j){
    char tmp[64];memcpy(tmp,copy.paths[j-1],64);memcpy(copy.paths[j-1],copy.paths[j],64);memcpy(copy.paths[j],tmp,64);
   }
   out=copy;return true;
  }
+ public:
  bool child(uint8_t,uint8_t){return fail();} // Directory traversal not migrated.
  bool io(uint8_t s,Action a,uint8_t* p,size_t n){
   if(!slot(s))return false;

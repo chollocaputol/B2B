@@ -9,7 +9,13 @@
 #if THESIS_DTN_F26B_BUILD_ONLY == 1
 #include "dtn_f26b_capacity_guard.h"
 #endif
+#if THESIS_DTN_F26C_BUILD_ONLY == 1 && THESIS_DTN_F26B_BUILD_ONLY != 1
+#error F26C requires F26B
+#endif
 namespace DTNF24Z {
+#if THESIS_DTN_F26C_BUILD_ONLY == 1 && !defined(ARDUINO) && !defined(ESP_PLATFORM)
+struct ArchiveFrame {uint8_t bytes[DTNF24M::kFrameBytes]{};size_t length=0;};
+#endif
 enum class Result:uint8_t { Done, Deferred, Empty, Progress, Rejected, Fault
 #if THESIS_DTN_F26B_BUILD_ONLY == 1
  , CapacityBlocked
@@ -40,6 +46,24 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
   return busy(e,old)?Result::Deferred:Result::Done;
  }
  bool liveOld()const{const auto e=witness_.view();return same(e)&&DTNF24O::validEvidence(e,vessel_)&&!e.urgentPending;}
+#if THESIS_DTN_F26C_BUILD_ONLY == 1
+ template<class Queue> Result bypassBlocked(Queue& q){
+  if(q.faulted())return fail();
+  // Only an already persisted duplicate or a missing counterpart may bypass.
+  // Other pending records remain in their original order; no new event bypass.
+  for(size_t i=1;i<q.pending();++i){
+   const auto* p=q.at(i);if(!p)return fail();
+   const auto d=DTNF26B::admit(replay_.ledger(),*p,writer_.written()/DTNF24M::kFrameBytes);
+   if(d==DTNF26B::Admission::Conflict || d==DTNF26B::Admission::Invalid)return fail();
+   if(d==DTNF26B::Admission::AlreadyPresent)return q.acknowledgeDurableAppendAt(i)?Result::Done:fail();
+   if(d!=DTNF26B::Admission::New || !DTNF26B::partner(replay_.ledger(),*p))continue;
+   if(!writer_.appendChecked(port_,current_,vessel_,*p,"a","r") ||
+      replay_.ledger().accept(*p)!=DTNF24N::Add::Inserted || !q.acknowledgeDurableAppendAt(i))return fail();
+   return Result::Done;
+  }
+  return Result::CapacityBlocked;
+ }
+#endif
  public:
  template<class... Args> Service(const MountWitness& m,const EvidenceWitness& w,Args&&... a):witness_(w),owner_(m,std::forward<Args>(a)...),port_(owner_,w){}
  Service(const Service&)=delete;Service& operator=(const Service&)=delete;
@@ -72,6 +96,10 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
   // No new persistent packet before complete old-session recovery.
   if(!replay_.completed())return Result::Deferred;
   const auto decision=DTNF26B::admit(replay_.ledger(),*queue.front(),writer_.written()/DTNF24M::kFrameBytes);
+#if THESIS_DTN_F26C_BUILD_ONLY == 1
+  if(queue.faulted())return fail();
+  if(decision==DTNF26B::Admission::Blocked)return bypassBlocked(queue);
+#endif
   if(decision==DTNF26B::Admission::Blocked)return Result::CapacityBlocked;
   if(decision==DTNF26B::Admission::Conflict || decision==DTNF26B::Admission::Invalid)return fail();
   // Exact duplicate already checked by replay or a prior checked append.
@@ -109,6 +137,44 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
 #endif
   return Result::Done;
  }
+#if THESIS_DTN_F26C_BUILD_ONLY == 1 && !defined(ARDUINO) && !defined(ESP_PLATFORM)
+ // Called only by the strict maintenance wrapper, which binds the path and
+ // exact frame offset to a separately witnessed closed session inventory.
+ Result archiveAccess(){
+  Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
+  const auto a=admit(true);if(a!=Result::Done)return a;
+  return discovered_?Result::Done:Result::Rejected;
+ }
+ Result inspectClosedJournal(const char* dir,bool receipt,size_t expected){
+  Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
+  const auto a=admit(true);if(a!=Result::Done)return a;
+  if(!discovered_ || !dir || !strcmp(dir,current_))return Result::Rejected;
+  char path[96]{};
+  if(!(receipt?DTNF24N::receiptPath(path,sizeof(path),dir,vessel_):DTNF24M::sandboxPath(path,sizeof(path),dir,vessel_)))return Result::Rejected;
+  const bool found=port_.exists(path);
+  if(!port_.storageHealthy() || found!=(expected!=0))return fail();
+  if(!found)return liveOld()?Result::Done:fail();
+  auto f=port_.open(path,"r");if(!f)return fail();
+  const bool ok=f.size()==expected;f.close();
+  return ok && liveOld() && port_.storageHealthy()?Result::Done:fail();
+ }
+ Result readClosedFrame(const char* dir,bool receipt,size_t expected,size_t offset,ArchiveFrame& out){
+  out={};Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
+  const auto a=admit(true);if(a!=Result::Done)return a;
+  if(!discovered_ || !dir || !strcmp(dir,current_))return Result::Rejected;
+  const size_t n=receipt?DTNF24N::kReceiptBytes:DTNF24M::kFrameBytes;
+  if(!expected || expected%n || offset%n || offset>=expected)return Result::Rejected;
+  char path[96]{};
+  if(!(receipt?DTNF24N::receiptPath(path,sizeof(path),dir,vessel_):DTNF24M::sandboxPath(path,sizeof(path),dir,vessel_)))return Result::Rejected;
+  if(!port_.exists(path) || !port_.storageHealthy())return fail();
+  auto f=port_.open(path,"r");if(!f)return fail();
+  ArchiveFrame copy{};const bool ok=f.size()==expected && f.seek(offset) && f.read(copy.bytes,n)==int(n);f.close();
+  if(!ok || !liveOld() || !port_.storageHealthy())return fail();
+  DTNF24M::PacketEntry p{};DTNF24N::Receipt rc{};
+  if(!(receipt?DTNF24N::decodeReceipt(copy.bytes,n,rc):DTNF24M::decode(copy.bytes,n,p)))return fail();
+  copy.length=n;out=copy;return Result::Done;
+ }
+#endif
  Result shutdown(){
   Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
   const auto admitted=admit(false);if(admitted!=Result::Done)return admitted;

@@ -88,6 +88,16 @@ template<size_t Capacity> class PendingQueue final {
   if(!size_ || fault_)return false;
   read_=(read_+1U)%Capacity;--size_;return true;
  }
+#if THESIS_DTN_F26C_BUILD_ONLY == 1
+ // Single serialized caller: only remove the exact selected, persisted item.
+ const PacketEntry* at(size_t index)const{return index<size_?&entries_[(read_+index)%Capacity]:nullptr;}
+ bool acknowledgeDurableAppendAt(size_t index){
+  if(fault_ || index>=size_)return false;
+  if(index==0)return acknowledgeDurableAppend();
+  for(size_t i=index;i+1<size_;++i)entries_[(read_+i)%Capacity]=entries_[(read_+i+1)%Capacity];
+  --size_;return true;
+ }
+#endif
  void latchStorageFault(){fault_=true;}
  bool faulted()const{return fault_;}
  size_t pending()const{return size_;}

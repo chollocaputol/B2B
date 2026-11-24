@@ -35,7 +35,7 @@ check('unverified preflight','if(unverified)s.archive=ArchiveState::Unverified;'
 check('pending or missing partners block','ledger.pending() || s.missingPartners' in h)
 check('archive required not permission','ArchiveState::NeedsClosedArchive' in h and 'NOT retirement eligibility' in h)
 check('summary real ledger','result.capacity=DTNF26B::inspect(replay_.ledger(),writer_.written()/DTNF24M::kFrameBytes,receipts_.written()/DTNF24N::kReceiptBytes,replay_.unverified())' in z)
-check('reserve inventory before mount','!w.closedCount(reservedClosedCount) || reservedClosedCount>=DTNF26B::kClosedLimit' in b and b.index('reservedClosedCount>=DTNF26B::kClosedLimit')<b.index('vessel=v;media=e.mediaTag;'))
+check('reserve inventory before mount','!w.closedCount(reservedClosedCount) || reservedClosedCount>=DTNF26B::kClosedLimit' in b and b.index('reservedClosedCount>=DTNF26B::kClosedLimit')<b.index('vessel=v;media=e.mediaTag;',b.index('bool reserve(uint32_t')))
 check('stable count at freshness and lock','if(!reservedInventory())return false;' in b and 's.count!=reservedClosedCount' in b)
 check('no filesystem retirement','remove(' not in h+z+b and 'rename(' not in h+z+b and 'unlink(' not in h+z+b)
 check('target create still denied','bool createSession(uint32_t vessel,const char* current){\n#if defined(ARDUINO) || defined(ESP_PLATFORM)\n  (void)vessel;(void)current;return fail();' in y)

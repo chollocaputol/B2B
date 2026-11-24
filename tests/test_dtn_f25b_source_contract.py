@@ -37,7 +37,7 @@ for label,ok in [
  ('old size enforced','actual==n && live(true)' in h and 'n==bytes_[s]' in h),
  ('old read only','old && (m!=DTNF24W::Mode::Read || !n)' in h),
  ('current journal bounded','n>limit_[s]-current' in h),
- ('serialized service wrapper',h.count('Entry e(gate_);if(!e.ok)return Result::Deferred;')==7),
+ ('serialized service wrapper',h.count('Entry e(gate_);if(!e.ok)return Result::Deferred;')==11 and all(x in h for x in ('Result startMaintenance(', 'Result archiveCount(', 'Result archiveSession(', 'Result archiveFrame('))),
  ('no closure self-publication','w.closed(' in h and 'w.closedCount(' in h and 'markClosed' not in h),
  ('fault latches','if(r==Result::Fault)failed_=true' in h),
  ('new target no physical grant','struct DenyWitness : DTNF24O::DenyWitness' in h and 'bool closedCount(size_t&)const{return false;}' in h),

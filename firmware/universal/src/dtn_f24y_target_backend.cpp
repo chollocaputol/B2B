@@ -155,3 +155,11 @@ void thesisF25APoll(DTNF25A::Queue& queue,bool radioBusy){
 #endif
 #endif
 #endif
+
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+#if THESIS_DTN_F25A_BUILD_ONLY != 1 || THESIS_DTN_F25C_BUILD_ONLY != 1 || THESIS_DTN_F24Y_BUILD_ONLY != 1
+#error "Study SF requires inherited deny profile and SPI3 mount implementation"
+#endif
+#include <WiFi.h> // explicit PlatformIO dependency discovery for study worker
+#include "study_sf_target.inc"
+#endif

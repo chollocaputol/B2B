@@ -417,6 +417,7 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #include "v003_f21r4_ui_policy.h"
 #endif
 #include "weather_manager.h"
+#include "study_sf_target.h"
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
 #include "v003_f10_micro_nowcast.h"
 static_assert(!PhysicalIndicators::kOutputsEnabled &&
@@ -861,6 +862,18 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
 }
 #endif
 
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+// Capture the actual acquisition time; no synthetic UTC or upload timestamp.
+static const char* studyUtc(char (&out)[21]) {
+  if(gps.date.isValid() && gps.time.isValid() && gps.date.age()<=10000UL && gps.time.age()<=10000UL &&
+     snprintf(out,sizeof(out),"%04u-%02u-%02uT%02u:%02u:%02uZ",(unsigned)gps.date.year(),(unsigned)gps.date.month(),(unsigned)gps.date.day(),(unsigned)gps.time.hour(),(unsigned)gps.time.minute(),(unsigned)gps.time.second())==20) return out;
+  return nullptr;
+}
+static void studyMacroCapture(){char utc[21]{};const auto& w=weatherMeasurement;
+  (void)thesisStudySfWeather(w.uptimeMs,studyUtc(utc),w.selectedTempC,w.selectedRH,w.stationPressureHpa,w.pressureDeltaHpa,w.weatherState);
+}
+#endif
+
 // F24M: the actual LoRa SOS call sites only copy exact packet bytes into RAM.
 // No SD File operation or forwarding permission exists in this bridge.
 #if THESIS_DTN_F24M_BUILD_ONLY == 1
@@ -868,6 +881,9 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
 #error "F24M capture requires enabled logger in DENY-only preview"
 #endif
 bool thesisF24MObserveSOSPacket(const VesselPacket& packet,uint8_t source){
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+  char utc[21]{};return thesisStudySfControl(millis(),studyUtc(utc),packet,source);
+#else
 #if THESIS_DTN_F25A_BUILD_ONLY == 1
   const auto result=thesisF25ACapture(ThesisSDLogger::f24mSosCapture,packet,source);
 #else
@@ -875,6 +891,7 @@ bool thesisF24MObserveSOSPacket(const VesselPacket& packet,uint8_t source){
 #endif
   return result==DTNF24M::CaptureResult::Queued ||
          result==DTNF24M::CaptureResult::Duplicate;
+#endif
 }
 #if THESIS_DTN_F25C_BUILD_ONLY == 1
 bool thesisF25CObserveCancelPacket(const VesselPacket& packet,uint8_t source){
@@ -1229,6 +1246,16 @@ void setup() {
     Serial.println("[WX-LOG] BOOT_SAMPLE_QUEUE_FAILED (not recorded)");
 #endif
 
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+  // Build-only config is permanently unavailable; never power/mount or start Wi-Fi here.
+  bool sfStarted=false;
+  if(thesisStudySfConfigured() && VesselIdentity::ready() && pmu.setBLDO1Voltage(3300)) {
+    pmu.enableBLDO1();delay(200);
+    if(pmu.isEnableBLDO1()) {pinMode(34,OUTPUT);digitalWrite(34,HIGH);sfStarted=thesisStudySfStart(VesselIdentity::nodeId());}
+  }
+  Serial.printf("[STUDY-SF] started=%u; build-only; no hardware grant\n",unsigned(sfStarted));
+#endif
+
   // Each boot receives a different first telemetry slot. Subsequent intervals
   // vary independently; no change to SOS timing or packet serialization.
   randomSeed(esp_random());
@@ -1387,6 +1414,11 @@ void loop() {
 // F23D SD end
 #endif
   updateGPS();
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+  static uint32_t studyLastGps=0;
+  if(uint32_t(millis()-studyLastGps)>=30000UL){studyLastGps=millis();char utc[21]{};
+    (void)thesisStudySfGps(studyLastGps,studyUtc(utc),gpsHasFix && gps.location.isValid() && gps.location.age()<=10000UL,latitude,longitude);}
+#endif
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
   f21r4PollBattery(); // 15-second cached PMU reading, no OLED I2C reads
 #endif
@@ -1451,7 +1483,7 @@ void loop() {
   }
   processSOSRetries();
   processCancelRetries();
-#if THESIS_DTN_F25A_BUILD_ONLY == 1
+#if THESIS_DTN_F25A_BUILD_ONLY == 1 && THESIS_STUDY_SF_BUILD_ONLY != 1
   thesisF25APoll(ThesisSDLogger::f24mSosCapture,thesisF25ARadioBusy());
 #endif
 #if THESIS_MULTIHOP_DEV_TEST == 1
@@ -1502,6 +1534,9 @@ void loop() {
         const auto median = f11MacroBatch.result();
         processWeatherFromF11Median(batchOK, median.temperatureC,
                                      median.humidityPercent, median.stationPressureHpa);
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+        studyMacroCapture();
+#endif
         f11MacroSampleForMicro = true; // one fresh, accepted batch; no sixth read
         Serial.printf("[F11-MACRO] samples=5/5 valid=%u Tmed=%.2f RHmed=%.2f "
                       "Pmed=%.2f history=%u/%u dP100=%+.2f Z=%u state=%s\n",
@@ -1598,6 +1633,10 @@ void loop() {
     } else {
       f10Forecaster.invalidate();
     }
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    char studyMicroUtc[21]{};
+    (void)thesisStudySfWeather(lastF10MicroTime,studyUtc(studyMicroUtc),valid?sample.temperatureC:NAN,valid?sample.humidityPercent:NAN,valid?sample.stationPressureHpa:NAN,NAN,weatherState,V003F10Micro::stateName(f10Forecaster.state()),V003F10Micro::patternName(f10Forecaster.pattern()),valid);
+#endif
     Serial.printf("[F10-MICRO] valid=%u count=%u/11 state=%s pattern=%s "
                   "dT10=%+.2fC dRH10=%+.2fpp dP10=%+.2fhPa dewGap=%.2fC "
                   "horizon=EXPERIMENTAL_10_30_MIN OUTPUTS=OFF source=%s\n",

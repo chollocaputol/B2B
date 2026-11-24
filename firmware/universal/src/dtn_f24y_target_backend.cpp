@@ -75,4 +75,30 @@ extern const LinkTable thesis_f24y_link_anchor __attribute__((used)) = {
  &Target::mount,&Target::exists,&Target::open,&Target::io,&Target::size,
  &Target::seek,&Target::flush,&Target::close,&Target::unmount};
 }
+// F24Z: retain real discovery and the composed service methods for target
+// compilation only. The existing logger is unchanged and permanently denied.
+#if defined(THESIS_DTN_F24Z_BUILD_ONLY) && THESIS_DTN_F24Z_BUILD_ONLY == 1
+#include "../../shared/storage/dtn_f24z_session_service.h"
+namespace {
+using ZService=DTNF24Z::Service<Target,DTNF24W::DenyWitness,DTNF24O::DenyWitness>;
+using ZResult=DTNF24Z::Result;
+using ZQueue=DTNF24M::PendingQueue<8>;
+using ZVerifier=DTNF24N::DenyReceiptVerifier;
+using ZGuard=bool(*)();
+struct ZLinkTable {
+ bool (Target::*discover)(uint32_t,const char*,DTNF24W::SessionSnapshot&,const ZGuard&);
+ ZResult (ZService::*start)(uint32_t,const char*);
+ ZResult (ZService::*scan)();
+ ZResult (ZService::*append)(ZQueue&);
+ ZResult (ZService::*poll)(const ZVerifier&);
+ ZResult (ZService::*receipt)(const DTNF24N::Receipt&,const ZVerifier&);
+ ZResult (ZService::*shutdown)();
+};
+}
+extern "C" {
+extern const ZLinkTable thesis_f24z_link_anchor __attribute__((used))={
+ &Target::discover<ZGuard>,&ZService::start,&ZService::discover,
+ &ZService::append<ZQueue>,&ZService::poll<ZVerifier>,&ZService::receipt<ZVerifier>,&ZService::shutdown};
+}
+#endif
 #endif

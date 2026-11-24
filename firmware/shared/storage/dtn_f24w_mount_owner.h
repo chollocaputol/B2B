@@ -15,6 +15,8 @@ using DTNF24Q::Action;
 struct Identity { uint64_t media=0, epoch=0, owner=0; bool authorized=false, exclusive=false, allPathsInterposed=false; };
 struct DenyWitness { Identity view()const{return {};} };
 enum class State:uint8_t { Detached, Active, Draining, Faulted };
+// F24Z bounded directory result; only copied names escape the owner.
+struct SessionSnapshot { char paths[12][64]{}; size_t count=0; };
 struct NeverBackend {
  bool mount(){return false;}
  bool open(uint8_t,const char*,Mode){return false;}
@@ -122,6 +124,16 @@ template<class Backend,class Witness> class MountOwner final {
   if(!guard.ok || state_!=State::Active || !live() || !matches(t) || slots_[t.slot_].mode!=Mode::Append)return false;
   if(!backend_.flush(t.slot_) || !same())return fail();
   return true;
+ }
+ // F24Z: one directory operation under the SAME private backend and owner.
+ // No client callback while directory is open. Guard checks both identities.
+ template<class Guard> bool discover(uint32_t vessel,const char* current,SessionSnapshot& result,const Guard& guard){
+  Call scan(busy_);result={};
+  if(!scan.ok || state_!=State::Active || !live() || outstanding())return false;
+  SessionSnapshot copy{};
+  const auto allowed=[&](){return same() && guard();};
+  if(!allowed() || !backend_.discover(vessel,current,copy,allowed) || !allowed())return fail();
+  result=copy;return true;
  }
  // Planned unmount: reject all new work, drain even abandoned token slots.
  // Any failure or identity change sticks permanently; never retry/unmount.

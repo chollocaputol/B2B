@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -51,15 +52,19 @@ struct NativeVfs {
  static int sync(int fd){return ::fsync(fd);}
  static int close(int fd){return ::close(fd);}
 #endif
+ static DIR* dirOpen(const char* p){return ::opendir(p);}
+ static struct dirent* dirNext(DIR* d){return ::readdir(d);}
+ static int dirClose(DIR* d){return ::closedir(d);}
  static FileKind kind(const char* p){Stat s{};errno=0;if(pathStat(p,&s)!=0)return errno==ENOENT?FileKind::Missing:FileKind::Error;
  return regular(s)?FileKind::Regular:directory(s)?FileKind::Directory:FileKind::Error;}
  static bool size(int fd,size_t& n){Stat s{};n=0;if(fdStat(fd,&s)!=0 || !regular(s) || s.st_size<0 || uint64_t(s.st_size)>uint64_t(SIZE_MAX))return false;n=size_t(s.st_size);return true;}
 };
 // Single serialized caller required. Failures are sticky, including uncertain close.
 // Missing parent, nonregular paths, short reads/writes and ambiguous metadata fail.
-// Existing F24W owner handles tokens and scheduling; discovery still unsupported.
+// Existing F24W owner handles tokens; F24Z adds a bounded discovery snapshot.
 template<class Driver,class Sys=NativeVfs> class Backend final {
  Driver driver_; int fd_[2]{-1,-1}; Mode mode_[2]{Mode::Read,Mode::Read};
+ DIR* directory_=nullptr; // F24Z: retained on uncertain teardown, never destructor I/O.
  bool mounted_=false, fault_=false;
  bool fail(){fault_=true;return false;}
  bool active()const{return mounted_&&!fault_;}
@@ -91,6 +96,49 @@ template<class Driver,class Sys=NativeVfs> class Backend final {
   fd_[s]=Sys::open(p,m);mode_[s]=m;if(fd_[s]<0)return fail();
   size_t ignored=0;return Sys::size(fd_[s],ignored)||fail();
  }
+ // F24Z checked discovery. Current session must exist. Only exact old
+ // session directories enter the snapshot; a trusted closure witness is required.
+ template<class Guard> bool discover(uint32_t vessel,const char* current,DTNF24W::SessionSnapshot& out,const Guard& allowed){
+  out={};char journal[96]{},logical[48]{},path[512]{};
+  if(!active()||fd_[0]>=0||fd_[1]>=0||directory_||!allowed())return fail();
+  if(!DTNF24M::sandboxPath(journal,sizeof(journal),current,vessel))return fail();
+  const int n=snprintf(logical,sizeof(logical),"/THESIS/F06TEST/V%03lu",(unsigned long)vessel);
+  const char* root=driver_.root();if(!root||!*root||n<=0||size_t(n)>=sizeof(logical))return fail();
+  const int k=snprintf(path,sizeof(path),"%s%s",root,logical);
+  if(k<=0||size_t(k)>=sizeof(path)||Sys::kind(path)!=FileKind::Directory||!allowed())return fail();
+  directory_=Sys::dirOpen(path);if(!directory_||!allowed())return fail();
+  DTNF24W::SessionSnapshot copy{};bool exhausted=false,foundCurrent=false,good=true;
+  for(unsigned i=0;i<64;++i){
+   if(!allowed())return fail();
+   errno=0;const auto* entry=Sys::dirNext(directory_);const int err=errno;
+   if(!allowed())return fail();
+   if(!entry){exhausted=err==0;break;}
+   const char* name=entry->d_name;
+   if(!strcmp(name,".")||!strcmp(name,".."))continue;
+   if(!*name||strchr(name,'/')||strchr(name,'\\')){good=false;break;}
+   char childPath[512]{};const int m=snprintf(childPath,sizeof(childPath),"%s/%s",path,name);
+   if(m<=0||size_t(m)>=sizeof(childPath)){good=false;break;}
+   const auto kind=Sys::kind(childPath);if(!allowed())return fail();
+   const bool session=DTNF24M::validSession(name);
+   if(kind==FileKind::Regular&&!session)continue;
+   if(kind!=FileKind::Directory||!session){good=false;break;}
+   char candidate[64]{};const int q=snprintf(candidate,sizeof(candidate),"%s/%s",logical,name);
+   if(q<=0||size_t(q)>=sizeof(candidate)){good=false;break;}
+   if(!strcmp(candidate,current)){if(foundCurrent){good=false;break;}foundCurrent=true;continue;}
+   if(copy.count>=12){good=false;break;}
+   for(size_t j=0;j<copy.count;++j)if(!strcmp(copy.paths[j],candidate))good=false;
+   if(!good)break;
+   memcpy(copy.paths[copy.count++],candidate,size_t(q)+1);
+  }
+  if(!allowed()||Sys::dirClose(directory_)!=0)return fail();
+  directory_=nullptr;
+  if(!allowed()||!good||!exhausted||!foundCurrent)return fail();
+  // Stable lexical order for deterministic recovery, not chronology proof.
+  for(size_t i=1;i<copy.count;++i)for(size_t j=i;j>0&&strcmp(copy.paths[j-1],copy.paths[j])>0;--j){
+   char tmp[64];memcpy(tmp,copy.paths[j-1],64);memcpy(copy.paths[j-1],copy.paths[j],64);memcpy(copy.paths[j],tmp,64);
+  }
+  out=copy;return true;
+ }
  bool child(uint8_t,uint8_t){return fail();} // Directory traversal not migrated.
  bool io(uint8_t s,Action a,uint8_t* p,size_t n){
   if(!slot(s))return false;
@@ -106,6 +154,6 @@ template<class Driver,class Sys=NativeVfs> class Backend final {
  bool seek(uint8_t s,size_t n){if(!slot(s))return false;if(mode_[s]!=Mode::Read||uint64_t(n)>uint64_t(INT64_MAX))return fail();return Sys::seek(fd_[s],n)==int64_t(n)||fail();}
  bool flush(uint8_t s){if(!slot(s))return false;if(mode_[s]!=Mode::Append)return fail();return Sys::sync(fd_[s])==0||fail();}
  bool close(uint8_t s){if(!slot(s))return false;if(Sys::close(fd_[s])!=0)return fail();fd_[s]=-1;return true;}
- bool unmount(){if(!active()||fd_[0]>=0||fd_[1]>=0)return false;if(!driver_.unmount())return fail();mounted_=false;return true;}
+ bool unmount(){if(!active()||fd_[0]>=0||fd_[1]>=0||directory_)return false;if(!driver_.unmount())return fail();mounted_=false;return true;}
 };
 } // namespace DTNF24Y

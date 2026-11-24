@@ -40,6 +40,11 @@ template<class Volume,class Witness> class GuardedVolume final {
    explicit operator bool()const{return port_ && port_->liveHandle(slot_) && bool(raw_);}
    size_t size(){return allow(Action::Size)?raw_.size():0U;}
    bool isDirectory(){return allow(Action::Size)?raw_.isDirectory():false;}
+   const char* name(){return allow(Action::Size)?raw_.name():nullptr;}
+   FileHandle openNextFile(){
+     if(slot_!=0 || writer_ || !allow(Action::Enumerate))return {};
+     return port_->openNextChild(raw_);
+   }
    bool seek(size_t pos){return allow(Action::Seek)?raw_.seek(pos):false;}
    int read(){return allow(Action::Read)?raw_.read():-1;}
    int available(){return allow(Action::Read)?raw_.available():0;}
@@ -89,6 +94,18 @@ template<class Volume,class Witness> class GuardedVolume final {
    }
    return FileHandle(this,std::move(raw),slot,append);
  }
+ // F24T: reserve and check slot 1 BEFORE the raw directory iterator call.
+ // The caller must close each child before requesting another. In a revoked
+ // mock lease the raw object's implicit destructor may still perform I/O:
+ // this implementation is NOT authority for physical-media use.
+ FileHandle openNextChild(RawFile& parent){
+   if(arbiter_.activeLane()!=Lane::History || !arbiter_.hasHandle(0) ||
+      !arbiter_.openHistoryChild(lease_))return {};
+   RawFile child=parent.openNextFile();
+   if(!child){(void)arbiter_.close(lease_,1);return {};}
+   if(!arbiter_.step(lease_,1,Action::Size))return {};
+   return FileHandle(this,std::move(child),1,false);
+ }
  bool release(){return arbiter_.release(lease_);}
  bool faulted()const{return arbiter_.faulted();}
  bool quarantined()const{return arbiter_.quarantined();}
@@ -97,7 +114,7 @@ template<class Volume,class Witness> class GuardedVolume final {
    return lease_.serial!=0 && arbiter_.probe(lease_);
  }
  bool liveHandle(uint8_t slot){
-   (void)slot;return admitted() && arbiter_.hasOpenHandle();
+   return admitted() && arbiter_.hasHandle(slot);
  }
  bool stepSlot(uint8_t slot,Action a){return arbiter_.step(lease_,slot,a);}
  bool closeSlot(uint8_t slot){return arbiter_.close(lease_,slot);}

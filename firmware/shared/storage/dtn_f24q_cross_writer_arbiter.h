@@ -42,6 +42,8 @@ template<class Witness> class Arbiter final {
  }
  bool open(const Lease& l,uint8_t slot,Mode mode){
   if(!check(l) || slot>=2U || handles_[slot])return false;
+  // F24T deliberately preserves the original generic open contract.
+  // History child handles must use the dedicated openHistoryChild operation.
   if(slot==1U && (active_!=Lane::F23D || !sawAppend_))return false;
   if(mode==Mode::Append && !writer(active_))return false;
   if(mode==Mode::Append && slot!=0U)return false;
@@ -51,6 +53,13 @@ template<class Witness> class Arbiter final {
   handles_[slot]=true;read_[slot]=(mode==Mode::Read);
   if(active_==Lane::F23D && slot==0U)sawAppend_=true;
   return true;
+ }
+ // F24T: ONLY directory iteration can reserve history slot 1. The
+ // generic open(l,1,Read) contract remains rejected for History lanes.
+ bool openHistoryChild(const Lease& l){
+  if(!check(l) || active_!=Lane::History || !handles_[0] || !read_[0] ||
+     handles_[1])return false;
+  handles_[1]=true;read_[1]=true;return true;
  }
  bool step(const Lease& l,uint8_t slot,Action action){
   if(!check(l) || slot>=2U || !handles_[slot])return false;
@@ -68,7 +77,7 @@ template<class Witness> class Arbiter final {
  // separately approved owner/teardown plan. No regrant in this instance.
  bool close(const Lease& l,uint8_t slot){
   if(!check(l) || slot>=2U || !handles_[slot])return false;
-  if(active_==Lane::F23D && slot==0U && handles_[1])return false;
+  if((active_==Lane::F23D || active_==Lane::History) && slot==0U && handles_[1])return false;
   handles_[slot]=false;read_[slot]=false;return true;
  }
  bool release(const Lease& l){
@@ -79,6 +88,7 @@ template<class Witness> class Arbiter final {
  // volume metadata/exists operations which do not yet have a File slot.
  // Any changed owner/media/lease latches the same failure as File methods.
  bool probe(const Lease& l){return check(l);}
+ bool hasHandle(uint8_t slot)const{return slot<2U && handles_[slot];}
  bool hasOpenHandle()const{return handles_[0] || handles_[1];}
  bool quarantined()const{return fault_ && hasOpenHandle();}
  bool faulted()const{return fault_;}

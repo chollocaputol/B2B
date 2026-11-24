@@ -307,6 +307,23 @@
 #error "F24P requires F24O/K DENY, F23D/fleet/legacy relay/physical GPIO OFF"
 #endif
 #endif
+// F24T: deny-only, bounded F06 history directory iteration. No real SD grant.
+#ifndef THESIS_DTN_F24T_BUILD_ONLY
+#define THESIS_DTN_F24T_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24T_BUILD_ONLY != 0 && THESIS_DTN_F24T_BUILD_ONLY != 1
+#error "F24T build-only flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24T_BUILD_ONLY == 1
+#if THESIS_DTN_F24S_BUILD_ONLY != 1 || THESIS_DTN_F24R_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24Q_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F06_SD_SANDBOX != 1 || THESIS_F23D_SD_EVIDENCE != 0 || \
+    THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24T requires F24S/R/Q/K deny-only F06, F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24t_history_directory.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
@@ -358,6 +375,9 @@ using F24RRetainedFile=decltype(f24rLegacyFiles.open((const char*)nullptr,(const
 // This instance has NO physical grant: lease is zero and F24K denies mount.
 static DTNF24S::TemporaryLoggerFiles<decltype(f24rLegacyFiles)> f24sTemporaryFiles(f24rLegacyFiles);
 using F24STemporaryFile=decltype(f24sTemporaryFiles.open((const char*)nullptr,(const char*)nullptr));
+#endif
+#if THESIS_DTN_F24T_BUILD_ONLY == 1
+static DTNF24T::HistoryDirectory<decltype(f24rLegacyFiles)> f24tHistoryDirectory(f24rLegacyFiles);
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
@@ -1499,6 +1519,28 @@ inline void listHistory() {
     }
     char root[48];
     snprintf(root, sizeof(root), "/THESIS/F06TEST/V%03lu", (unsigned long)vesselId);
+#if THESIS_DTN_F24T_BUILD_ONLY == 1
+    // Purely diagnostic listing, NOT a source of trusted closed SOS sessions.
+    // DenyWitness prevents any physical File from being opened on this image.
+    char entries[DTNF24T::kMaxShown][9]{};
+    unsigned recorded=0;
+    auto outcome = f24tHistoryDirectory.scan(root,vesselId,[&](const char* session){
+        if(recorded<DTNF24T::kMaxShown){
+            memcpy(entries[recorded],session,9U);
+            ++recorded;
+        }
+    });
+    if(!outcome.opened){
+        Serial.println("[SDH] ERROR SESSION_DIRECTORY_MISSING_OR_OWNER_DENIED"); return;
+    }
+    Serial.printf("[SDH] LIST_BEGIN scope=V%03lu sessions_only=1\n",
+                  (unsigned long)vesselId);
+    if(vesselId==2U) Serial.println("[SDH] TARGET LEGACY");
+    for(unsigned i=0;i<recorded;++i)Serial.printf("[SDH] TARGET %s\n",entries[i]);
+    Serial.printf("[SDH] LIST_END shown=%u truncated=%u complete=%u fault=%u\n",
+                  outcome.shown,(unsigned)outcome.truncated,
+                  (unsigned)outcome.complete,(unsigned)outcome.faulted);
+#else
     File directory = interposedSD.open(root, FILE_READ);
     if (!directory || !directory.isDirectory()) {
         if (directory) directory.close();
@@ -1537,6 +1579,7 @@ inline void listHistory() {
     directory.close();
     Serial.printf("[SDH] LIST_END shown=%u truncated=%u\n",
                   (unsigned)shown, (unsigned)truncated);
+#endif // F24T guarded history iterator
 }
 
 inline void requestHistory(const char* selector) {

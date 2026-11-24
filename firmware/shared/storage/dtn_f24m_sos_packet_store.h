@@ -113,6 +113,11 @@ inline bool sandboxPath(char* out,size_t cap,const char* dir,uint32_t vessel){
  const int path=snprintf(out,cap,"%s/dtn_sos_packets.f24m",dir);
  return path>0 && size_t(path)<cap;
 }
+// F24X checked ports expose storageHealthy(); legacy ports retain their prior
+// behavior. This is not a retroactive claim that raw File close is checked.
+template<class SDLike>auto storageHealthyImpl(SDLike& sd,int)->decltype(bool(sd.storageHealthy())){return bool(sd.storageHealthy());}
+template<class SDLike>bool storageHealthyImpl(SDLike&,long){return true;}
+template<class SDLike>bool storageHealthy(SDLike& sd){return storageHealthyImpl(sd,0);}
 // Writer: one new per-boot F06 session file, never truncate or reopen an old
 // file for writing. One packet appended + flushed + handle closed + read back.
 // On any uncertain write/readback, latch failure: DO NOT retry an ambiguous
@@ -121,11 +126,11 @@ class SessionWriter final {
  public:
  template<class SDLike>bool appendChecked(SDLike& sd,const char* dir,
     uint32_t vessel,const PacketEntry& packet,const char* appendFlag,const char* readFlag){
-  if(fault_)return false;
+  if(fault_ || !storageHealthy(sd)){fault_=true;return false;}
   uint8_t frame[kFrameBytes]{};
   if(!encode(packet,frame)){fault_=true;return false;}
   if(!initialized_){
-   if(!sandboxPath(path_,sizeof(path_),dir,vessel) || sd.exists(path_)){
+   if(!sandboxPath(path_,sizeof(path_),dir,vessel) || sd.exists(path_) || !storageHealthy(sd)){
     fault_=true;return false;
    }
    // No persistent writer handle; creates only a *new* session file.
@@ -133,7 +138,7 @@ class SessionWriter final {
    if(!initial){fault_=true;return false;}
    const bool empty=initial.size()==0;
    initial.close();
-   if(!empty){fault_=true;return false;}
+   if(!empty || !storageHealthy(sd)){fault_=true;return false;}
    initialized_=true;
   }
   auto handle=sd.open(path_,appendFlag);
@@ -142,7 +147,7 @@ class SessionWriter final {
   const bool lengthOK=handle.write(frame,kFrameBytes)==kFrameBytes;
   handle.flush();const bool wrote=lengthOK && handle.getWriteError()==0;
   handle.close();
-  if(!wrote){fault_=true;return false;}
+  if(!wrote || !storageHealthy(sd)){fault_=true;return false;}
   auto check=sd.open(path_,readFlag);
   if(!check){fault_=true;return false;}
   bool equal=check.size()==written_+kFrameBytes && check.seek(written_);
@@ -154,7 +159,7 @@ class SessionWriter final {
    at+=step;
   }
   check.close();
-  if(!equal){fault_=true;return false;}
+  if(!equal || !storageHealthy(sd)){fault_=true;return false;}
   written_+=kFrameBytes;return true;
  }
  bool faulted()const{return fault_;}

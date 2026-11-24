@@ -154,7 +154,7 @@ template<size_t Capacity,size_t MaxSessions>class Replay final{
  template<class SDLike,class Verifier,class ReaderAuthority>
  Poll poll(SDLike& sd,const char* readFlag,const Verifier& verifier,
            const ReaderAuthority& readAuthority){
-  if(failed_ || !locked_ || !readFlag || !readAuthority())return failedPoll();
+  if(failed_ || !locked_ || !readFlag || !readAuthority() || !DTNF24M::storageHealthy(sd))return failedPoll();
   if(completed_)return Poll::Completed;
   if(index_>=count_){
    if(phase_==0){phase_=1;index_=0;offset_=0;return Poll::Progress;}
@@ -165,7 +165,9 @@ template<size_t Capacity,size_t MaxSessions>class Replay final{
   else if(!receiptPath(path,sizeof(path),sessions_[index_],vessel_))return failedPoll();
   const size_t frameSize=phase_==0?DTNF24M::kFrameBytes:kReceiptBytes;
   const size_t maxSize=phase_==0?kMaxJournalBytes:kMaxReceiptJournalBytes;
-  if(!sd.exists(path)){advance();return Poll::Progress;}
+  const bool found=sd.exists(path);
+  if(!DTNF24M::storageHealthy(sd))return failedPoll();
+  if(!found){advance();return Poll::Progress;}
   auto f=sd.open(path,readFlag);
   if(!f)return failedPoll();
   const size_t bytes=f.size();
@@ -177,7 +179,7 @@ template<size_t Capacity,size_t MaxSessions>class Replay final{
   uint8_t data[DTNF24M::kFrameBytes]{};
   const bool good=f.seek(offset_) && f.read(data,frameSize)==int(frameSize);
   f.close();
-  if(!good || !readAuthority())return failedPoll();
+  if(!good || !readAuthority() || !DTNF24M::storageHealthy(sd))return failedPoll();
   if(phase_==0){
    DTNF24M::PacketEntry p{};
    if(!DTNF24M::decode(data,frameSize,p))return failedPoll();
@@ -222,7 +224,7 @@ class ReceiptWriter final{
  bool appendVerified(SDLike& sd,const char* dir,uint32_t vessel,
       LedgerType& ledger,const Receipt& receipt,const Verifier& verifier,
       const char* appendFlag,const char* readFlag){
-  if(fault_)return false;
+  if(fault_ || !DTNF24M::storageHealthy(sd)){fault_=true;return false;}
   const Record* match=nullptr;
   for(size_t i=0;i<ledger.count();++i){
    const Record* row=ledger.at(i);
@@ -234,14 +236,14 @@ class ReceiptWriter final{
   uint8_t frame[kReceiptBytes]{};
   if(!encodeReceipt(receipt,frame)){fault_=true;return false;}
   if(!initialized_){
-   if(!receiptPath(path_,sizeof(path_),dir,vessel) || sd.exists(path_)){
+   if(!receiptPath(path_,sizeof(path_),dir,vessel) || sd.exists(path_) || !DTNF24M::storageHealthy(sd)){
     fault_=true;return false;
    }
    auto created=sd.open(path_,appendFlag);
    if(!created){fault_=true;return false;}
    const bool empty=created.size()==0;
    created.close();
-   if(!empty){fault_=true;return false;}
+   if(!empty || !DTNF24M::storageHealthy(sd)){fault_=true;return false;}
    initialized_=true;
   }
   auto handle=sd.open(path_,appendFlag);
@@ -250,7 +252,7 @@ class ReceiptWriter final{
   const bool complete=handle.write(frame,kReceiptBytes)==kReceiptBytes;
   handle.flush();const bool wrote=complete && handle.getWriteError()==0;
   handle.close();
-  if(!wrote){fault_=true;return false;}
+  if(!wrote || !DTNF24M::storageHealthy(sd)){fault_=true;return false;}
   auto proof=sd.open(path_,readFlag);
   if(!proof){fault_=true;return false;}
   uint8_t actual[kReceiptBytes]{};
@@ -258,7 +260,7 @@ class ReceiptWriter final{
       proof.seek(written_) && proof.read(actual,kReceiptBytes)==int(kReceiptBytes) &&
       memcmp(actual,frame,kReceiptBytes)==0;
   proof.close();
-  if(!same){fault_=true;return false;}
+  if(!same || !DTNF24M::storageHealthy(sd)){fault_=true;return false;}
   written_+=kReceiptBytes;
   return ledger.apply(receipt,verifier)==ReceiptResult::Verified;
  }

@@ -23,6 +23,9 @@ struct NeverBackend {
  bool flush(uint8_t){return false;}
  bool close(uint8_t){return false;}
  bool unmount(){return false;}
+ bool exists(const char*,bool&){return false;}
+ bool size(uint8_t,size_t&){return false;}
+ bool seek(uint8_t,size_t){return false;}
 };
 // Backend contract: exclusive private owner, no implicit backend I/O on
 // destruction; true means operation completed, false means possibly partial.
@@ -89,6 +92,37 @@ template<class Backend,class Witness> class MountOwner final {
   if(t.slot_==0 && slots_[1].used)return false;
   return closeSlot(t.slot_);
  }
+ // F24X checked operations. Status and result are separate; absent is not error.
+ bool checkedIdentity(uint64_t media,uint64_t epoch,uint64_t owner){
+  Call guard(busy_);return guard.ok && state_==State::Active && live() &&
+    ((bound_.media==media && bound_.epoch==epoch && bound_.owner==owner) || fail());
+ }
+ void quarantine(){Call guard(busy_);if(guard.ok)(void)fail();}
+ bool exists(const char* path,bool& result){
+  Call guard(busy_);result=false;
+  if(!guard.ok || state_!=State::Active || !live() || outstanding() || !path || !*path)return false;
+  bool found=false;
+  if(!backend_.exists(path,found) || !same())return fail();
+  result=found;return true;
+ }
+ bool size(const Token& t,size_t& result){
+  Call guard(busy_);result=0;
+  if(!guard.ok || state_!=State::Active || !live() || !matches(t))return false;
+  size_t n=0;if(!backend_.size(t.slot_,n) || !same())return fail();
+  result=n;return true;
+ }
+ bool seek(const Token& t,size_t pos){
+  Call guard(busy_);
+  if(!guard.ok || state_!=State::Active || !live() || !matches(t) || slots_[t.slot_].mode!=Mode::Read)return false;
+  if(!backend_.seek(t.slot_,pos) || !same())return fail();
+  return true;
+ }
+ bool flush(const Token& t){
+  Call guard(busy_);
+  if(!guard.ok || state_!=State::Active || !live() || !matches(t) || slots_[t.slot_].mode!=Mode::Append)return false;
+  if(!backend_.flush(t.slot_) || !same())return fail();
+  return true;
+ }
  // Planned unmount: reject all new work, drain even abandoned token slots.
  // Any failure or identity change sticks permanently; never retry/unmount.
  bool shutdown(){
@@ -132,6 +166,8 @@ template<class FileType> class DenyMountFacade final {
  template<class... A> bool rename(A&&...){return false;}
  bool end(){return owner_.shutdown();}
  State state()const{return owner_.state();}
+ using OwnerType=MountOwner<NeverBackend,DenyWitness>;
+ OwnerType& ownerForSos(){return owner_;} // Permanently denied only; same owner instance.
  private:
  const DenyWitness witness_{};
  MountOwner<NeverBackend,DenyWitness> owner_{witness_};

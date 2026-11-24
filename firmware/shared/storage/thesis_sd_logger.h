@@ -378,6 +378,19 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #endif
 #include "dtn_f24w_mount_owner.h"
 #endif
+// F24X: compile the actual SOS writer/replay against the owner-held port.
+#ifndef THESIS_DTN_F24X_BUILD_ONLY
+#define THESIS_DTN_F24X_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24X_BUILD_ONLY != 0 && THESIS_DTN_F24X_BUILD_ONLY != 1
+#error "Invalid F24X build-only flag"
+#endif
+#if THESIS_DTN_F24X_BUILD_ONLY == 1
+#if THESIS_DTN_F24W_BUILD_ONLY != 1 || THESIS_DTN_F24O_BUILD_ONLY != 1 || THESIS_DTN_F24P_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
+#error "F24X requires F24W/O/P/K DENY"
+#endif
+#include "dtn_f24x_owner_sos_port.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
@@ -389,8 +402,13 @@ static DTNF24K::DenySdFacade<File> interposedSD;
 #if THESIS_DTN_F24O_BUILD_ONLY == 1
 // Denial is permanent even if the outer port is accidentally requested.
 static const DTNF24O::DenyWitness f24oNoPhysicalWitness{};
+#if THESIS_DTN_F24X_BUILD_ONLY == 1
+static DTNF24X::Port<DTNF24W::DenyMountFacade<File>::OwnerType,DTNF24O::DenyWitness>
+    f24oSosPort(interposedSD.ownerForSos(),f24oNoPhysicalWitness);
+#else
 static DTNF24O::Port<decltype(interposedSD),DTNF24O::DenyWitness>
     f24oSosPort(interposedSD,f24oNoPhysicalWitness);
+#endif
 static bool f24oBindAttempted=false;
 inline void f24oBindOnce(uint32_t vessel,const char* dir){
   if(f24oBindAttempted)return;

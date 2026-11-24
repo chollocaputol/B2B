@@ -4,6 +4,10 @@
 // F24Q names this writer's four SD volume entrypoints through the owning
 // logger facade; ordinary/F23D-only host builds retain the SD default.
 // File-handle methods are NOT globally interposed by this macro.
+#ifndef F23D_SD_FILE_TYPE
+#define F23D_SD_FILE_TYPE File
+#define F23D_SD_FILE_TYPE_DEFAULTED 1
+#endif
 #ifndef F23D_SD_ACCESS
 #define F23D_SD_ACCESS SD
 #define F23D_SD_ACCESS_DEFAULTED 1
@@ -27,7 +31,7 @@ public:
   if(!file_ || length>F23DSD::Journal::kLine || verifying_)return false;
   if(file_.write(reinterpret_cast<const uint8_t*>(bytes),length)!=length)return false;
   file_.flush();if(file_.getWriteError())return false;
-  File readback=F23D_SD_ACCESS.open(path_,FILE_READ);
+  F23D_SD_FILE_TYPE readback=F23D_SD_ACCESS.open(path_,FILE_READ);
   if(!readback || readback.size()!=written_+length || !readback.seek(written_)){if(readback)readback.close();return false;}
   char chunk[64];size_t at=0;
   while(at<length){
@@ -57,7 +61,7 @@ public:
  }
  const char* path()const{return path_;}
 private:
- File file_,verification_;
+ F23D_SD_FILE_TYPE file_,verification_;
  char path_[F23DSD::Journal::kPath]{};
  uint32_t written_=0,checked_=0,expectedHash_=2166136261UL,actualHash_=2166136261UL;
  bool verifying_=false;
@@ -66,4 +70,9 @@ private:
 #ifdef F23D_SD_ACCESS_DEFAULTED
 #undef F23D_SD_ACCESS
 #undef F23D_SD_ACCESS_DEFAULTED
+#endif
+
+#ifdef F23D_SD_FILE_TYPE_DEFAULTED
+#undef F23D_SD_FILE_TYPE
+#undef F23D_SD_FILE_TYPE_DEFAULTED
 #endif

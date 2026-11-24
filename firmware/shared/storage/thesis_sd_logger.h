@@ -257,6 +257,23 @@
 #endif
 #include "dtn_f24q_cross_writer_arbiter.h"
 #endif
+// F24R: guard actual retained export/history File methods with an UNGRANTABLE
+// cross-writer lease in this build-only profile. F23D alternate File adapter
+// is host-tested but F23D remains compiled OFF in firmware. No physical grant.
+#ifndef THESIS_DTN_F24R_BUILD_ONLY
+#define THESIS_DTN_F24R_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY != 0 && THESIS_DTN_F24R_BUILD_ONLY != 1
+#error "Invalid F24R build-only flag"
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+#if THESIS_DTN_F24Q_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24R requires F24Q/F24K DENY; F23D, fleet, relay and physical GPIO OFF"
+#endif
+#include "dtn_f24r_guarded_file_port.h"
+#endif
 // F24P: integrate F24N root discovery with the SAME owner-bound F24O port.
 // This is still NOT global physical all-file-handle ownership; the legacy
 // logger and F23D remain separate and the F24K facade permanently denies SD.
@@ -308,6 +325,16 @@ inline DTNF24D::Result f24dBuildOnlyDeny(const DTNAckLedger::Stream& stream){
   (void)job.step(deny,true,DTNF24D::kChunkBytes);
   return first;
 }
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+// This is a real named File-method adapter at the export/history call sites,
+// but a default-denied, zero-owner-lease firmware instance. No File opens.
+static const DTNF24Q::DenyWitness f24rNoPhysicalWitness{};
+static DTNF24Q::Arbiter<DTNF24Q::DenyWitness> f24rNoPhysicalArbiter(f24rNoPhysicalWitness);
+static const DTNF24Q::Lease f24rNoLease{};
+static DTNF24R::GuardedVolume<decltype(interposedSD),DTNF24Q::DenyWitness>
+    f24rLegacyFiles(interposedSD,f24rNoPhysicalArbiter,f24rNoLease);
+using F24RRetainedFile=decltype(f24rLegacyFiles.open((const char*)nullptr,(const char*)nullptr));
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
@@ -1089,7 +1116,11 @@ static uint8_t exportIndex = 0;
 static uint32_t exportOffset = 0;
 static uint32_t exportLimit = 0;
 static uint32_t exportChecksum = 2166136261UL; // FNV-1a for transfer check
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+static F24RRetainedFile exportFile;
+#else
 static File exportFile;
+#endif
 
 inline void requestExport() {
 // F23D SD begin
@@ -1136,7 +1167,11 @@ inline void pollExport() {
             exportActive = false;
             return;
         }
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+        exportFile = f24rLegacyFiles.open(exportPaths[exportIndex], FILE_READ);
+#else
         exportFile = interposedSD.open(exportPaths[exportIndex], FILE_READ);
+#endif
         if (!exportFile) {
             // A missing file is valid only when it does not exist.
             if (interposedSD.exists(exportPaths[exportIndex])) {
@@ -1201,6 +1236,11 @@ inline void poll() {
     static const DTNF24Q::DenyWitness noPhysicalOwner{};
     static DTNF24Q::Arbiter<DTNF24Q::DenyWitness> noGrant(noPhysicalOwner);
     (void)noGrant.acquire(vesselId,DTNF24Q::Lane::Sos);
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+    // Extra compile-only actual File adapter entry; no witness or lease.
+    // Refuses before even forwarding interposedSD.open().
+    (void)f24rLegacyFiles.open("/THESIS/F06TEST/V002/S0000001/sos_events.jsonl",FILE_READ);
 #endif
 #if THESIS_DTN_F24E_BUILD_ONLY == 1
     // This does NOT queue a session or touch the SD bus; the grant is always denied.
@@ -1357,7 +1397,11 @@ static uint32_t historyOffset = 0;
 static uint32_t historySizes[3] = {};
 static uint32_t historyChecksum = 2166136261UL;
 static char historyRoot[72] = {};
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+static F24RRetainedFile historyFile;
+#else
 static File historyFile;
+#endif
 
 inline bool historyReadActive() { return historyActive; }
 
@@ -1566,7 +1610,11 @@ inline void pollHistory() {
         if (!historyPath(path, sizeof(path), i)) {
             historyStop("PATH_TOO_LONG"); return;
         }
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+        historyFile = f24rLegacyFiles.open(path, FILE_READ);
+#else
         historyFile = interposedSD.open(path, FILE_READ);
+#endif
         if (!historyFile || historyFile.isDirectory() ||
             historyFile.size() != historySizes[i]) {
             historyStop("FILE_CHANGED_OR_OPEN_FAILED"); return;

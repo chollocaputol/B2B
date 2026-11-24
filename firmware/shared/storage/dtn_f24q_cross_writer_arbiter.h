@@ -75,6 +75,10 @@ template<class Witness> class Arbiter final {
   if(!check(l) || handles_[0] || handles_[1])return false;
   active_=Lane::None;sawAppend_=false;vessel_=0;media_=mount_=owner_=0;return true;
  }
+ // F24R preflight: recheck the independently sampled witness BEFORE
+ // volume metadata/exists operations which do not yet have a File slot.
+ // Any changed owner/media/lease latches the same failure as File methods.
+ bool probe(const Lease& l){return check(l);}
  bool hasOpenHandle()const{return handles_[0] || handles_[1];}
  bool quarantined()const{return fault_ && hasOpenHandle();}
  bool faulted()const{return fault_;}

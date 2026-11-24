@@ -1,0 +1,27 @@
+# F26B — A08-02a bounded admission and retirement preflight (build only)
+
+Accepted parent `d213f81f65be886f77f5f417f113bc50f2a66ad1`. No operational permission. The profile `tbeam-supreme-f26b-capacity-deny-build-only` inherits F26A and adds `THESIS_DTN_F26B_BUILD_ONLY=1`. The existing F25A runtime remains immutable-deny; target creation is still denied. Not an RF-silent image. Do not flash.
+
+## Problem and change
+
+In the F26A positive host service, current-session appends can precede closed-session replay and do not populate the replay ledger. New records can therefore overcommit the next restart, and summaries exclude active records. F26B uses the same F24Z owner, writer, replay ledger, receipt writer and RAM queue. Only the new profile changes admission: complete closed-session replay first; validate and classify the exact typed record; block before writes if capacity is exhausted; append/flush/close/read back, then insert into the existing ledger and acknowledge the queue. A verified identical record already in the ledger coalesces without a second frame, under the existing exclusive immutable-session witness assumption. A differing same-key record faults without consuming the queue. First-observation source metadata is retained; this is not an observation-count logger. Existing profile behavior is retained when the flag is off.
+
+## Bounded policy (not field sizing)
+
+* Ledger: 32 unique typed records; no increase. Session journals: 32 packet and 32 receipt frames; unchanged 88-byte and 40-byte encoding. Queue remains eight entries.
+* For new events, require `occupied + missingPartners + 2 <= 32`. An unmatched SOS or CANCEL reserves one slot for its counterpart. An existing partner is allowed if an actual slot and active frame remain. A legacy cohort may already exceed this reservation budget; no additional new event is admitted in that case, but available counterpart slots may be used. Recovery of >32 unique legacy records still faults. The limit is at most 16 complete event pairs in this retained cohort, not 16 new events per day or guaranteed field coverage.
+* Before mounting a new session, require independent closed-session count less than 12; reserve the future closed slot. Verify that count during startup freshness checks and discovery; subsequent locked inventory continues to use the prior stable closure checks. At 12 closed sessions reject new-session creation before mount. No read-only full-inventory maintenance path is implemented yet. No rotation is implemented.
+* `CapacityBlocked` leaves the front item in RAM, without a new write, fault latch or acknowledgement. FIFO head-of-line blocking may prevent reaching a later CANCEL; the eight-entry queue can still overflow, and urgent activity may defer replay indefinitely. No deadline or survival guarantee. The currently denied runtime never reaches the positive path; a future positive caller must explicitly handle the new result.
+
+## Non-destructive retirement preflight
+
+Summary uses the same owned ledger including newly written active records. Report occupied slots, missing partners, active packet/receipt frames, over-budget and archive state. `Unverified` is conservative even if another receipt subsequently verifies; `Unresolved` includes pending records or missing pairs. `NeedsClosedArchive` means only that all known records are paired and verified-delivered. It grants no permission, does not reclaim slots, and is not proof of closure or archival safety. Even a fully delivered 32-record cohort blocks a new event. No storage removal, rewrite, rename, or extra queue is added.
+
+## Required next contracts, still OPEN
+
+1. Separate maintenance/read-only admission when the closed inventory is full; close the active writer under independent media identity and freeze a complete set of session paths, lengths and cryptographic content digests. Never self-attest closure from a successful return alone.
+2. Archive the whole dependency-closed cohort (packets, receipts, exact typed identities and cancellation history) with authenticated final receipt evidence. A mere 40-byte receipt, CRC, radio ACK or HTTP success is insufficient. Verify a complete archive against the exact frozen inventory and authenticated device/media binding. Archive must preserve late-replay/conflict behavior, not merely a count or watermark; event ID rollover/reuse and origin trust remain unresolved.
+3. Establish a durable, independently verified generation checkpoint before reclamation, retaining exact identity/digest and cancellation projection across reboot. Design for interrupted commit/delete, stale or replayed checkpoint, orphan receipts, lost archive, and media substitution. No automatic deletion until these invariants, real receipt authentication and storage authority are qualified. Do not prune unresolved SOS/CANCEL pairs. No claim that indefinite history fits finite RAM.
+4. Qualify storage budget from measured workload and outage duration, queue burst handling and emergency latency. Then implement bounded rotation, safe retirement and crash recovery. Physical SD tests need a separate authorization and disposable media; original V002 SD remains protected. No production cloud, RF relay, flash or push.
+
+Host validation uses disposable files, separate synthetic witnesses, exact codecs and verifier fixtures, not physical media or production authentication. Two independent host processes validate the mixed active/closed replay restart. Windows and ESP32 build evidence pending.

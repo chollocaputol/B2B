@@ -20,15 +20,27 @@ template<class Witness> struct Policy {
  const Witness& w;uint32_t vessel=0;uint64_t media=0,epoch=0,serial=0;
  char current[64]{};DTNF24W::SessionSnapshot snapshot{};Closure claims[12]{};
  bool prepared=false,locked=false;
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+ size_t reservedClosedCount=0;
+ bool reservedInventory()const{size_t n=0;return w.closedCount(n) && n==reservedClosedCount && n<DTNF26B::kClosedLimit;}
+#endif
  explicit Policy(const Witness& witness):w(witness){}
  bool identity()const{const auto e=w.view();return e.vessel==vessel && e.mediaTag==media && e.mountEpoch==epoch && e.ownerSerial==serial && e.mounted && e.independentOwner && e.exclusive && e.f23dClosed && e.otherWriterClosed && e.closedSessionsVerified;}
  bool reserve(uint32_t v,const char* dir){
   if(prepared)return false;
   char journal[96]{};const auto e=w.view();
   if(!DTNF24M::sandboxPath(journal,sizeof(journal),dir,v) || !DTNF24O::validEvidence(e,v) || !w.fresh(v,dir))return false;
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+  // Reserve one of the 12 future closed-session slots before mount/mkdir.
+  if(!w.closedCount(reservedClosedCount) || reservedClosedCount>=DTNF26B::kClosedLimit)return false;
+#endif
   vessel=v;media=e.mediaTag;epoch=e.mountEpoch;serial=e.ownerSerial;strncpy(current,dir,sizeof(current)-1);prepared=true;return fresh();
  }
- bool fresh()const{return prepared && identity() && DTNF24O::validEvidence(w.view(),vessel) && w.fresh(vessel,current) && identity() && DTNF24O::validEvidence(w.view(),vessel);}
+ bool fresh()const{
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+  if(!reservedInventory())return false;
+#endif
+  return prepared && identity() && DTNF24O::validEvidence(w.view(),vessel) && w.fresh(vessel,current) && identity() && DTNF24O::validEvidence(w.view(),vessel);}
  bool valid(const Closure& c)const{
   return c.vessel==vessel && c.media==media && c.closedEpoch && c.closedEpoch<epoch && c.closeSerial &&
    c.packetBytes<=DTNF24N::kMaxJournalBytes && c.packetBytes%DTNF24M::kFrameBytes==0 &&
@@ -36,6 +48,9 @@ template<class Witness> struct Policy {
  }
  bool lock(const DTNF24W::SessionSnapshot& s){
   size_t count=0;
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+  if(!reservedInventory() || s.count!=reservedClosedCount)return false;
+#endif
   if(locked || s.count>12 || !identity() || !w.closedCount(count) || count!=s.count)return false;
   for(size_t i=0;i<s.count;++i){
    char path[96]{};

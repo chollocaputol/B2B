@@ -6,9 +6,20 @@
 #include <atomic>
 #include "dtn_f24x_owner_sos_port.h"
 #include "dtn_f24n_sos_restart_recovery.h"
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+#include "dtn_f26b_capacity_guard.h"
+#endif
 namespace DTNF24Z {
-enum class Result:uint8_t { Done, Deferred, Empty, Progress, Rejected, Fault };
-struct Summary { size_t pending=0,delivered=0,sessions=0; bool completed=false; };
+enum class Result:uint8_t { Done, Deferred, Empty, Progress, Rejected, Fault
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+ , CapacityBlocked
+#endif
+ };
+struct Summary { size_t pending=0,delivered=0,sessions=0; bool completed=false;
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+ DTNF26B::Status capacity{};
+#endif
+ };
 template<class Backend,class MountWitness,class EvidenceWitness> class Service final {
  using Owner=DTNF24W::MountOwner<Backend,MountWitness>;
  const EvidenceWitness& witness_; Owner owner_; DTNF24X::Port<Owner,EvidenceWitness> port_;
@@ -57,7 +68,20 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
   Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
   const auto admitted=admit(false);if(admitted!=Result::Done)return admitted;
   if(!queue.front())return Result::Empty;
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+  // No new persistent packet before complete old-session recovery.
+  if(!replay_.completed())return Result::Deferred;
+  const auto decision=DTNF26B::admit(replay_.ledger(),*queue.front(),writer_.written()/DTNF24M::kFrameBytes);
+  if(decision==DTNF26B::Admission::Blocked)return Result::CapacityBlocked;
+  if(decision==DTNF26B::Admission::Conflict || decision==DTNF26B::Admission::Invalid)return fail();
+  // Exact duplicate already checked by replay or a prior checked append.
+  // Assumes the same exclusive immutable owner/closure witness contract.
+  if(decision==DTNF26B::Admission::AlreadyPresent)return queue.acknowledgeDurableAppend()?Result::Done:fail();
+  if(!writer_.appendChecked(port_,current_,vessel_,*queue.front(),"a","r"))return fail();
+  if(replay_.ledger().accept(*queue.front())!=DTNF24N::Add::Inserted || !queue.acknowledgeDurableAppend())return fail();
+#else
   if(!writer_.appendChecked(port_,current_,vessel_,*queue.front(),"a","r")||!queue.acknowledgeDurableAppend())return fail();
+#endif
   return Result::Done;
  }
  template<class Verifier> Result poll(const Verifier& verifier){
@@ -79,7 +103,11 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
   Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
   result={};const auto admitted=admit(false);if(admitted!=Result::Done)return admitted;
   if(!replay_.completed())return Result::Rejected;
-  result={replay_.ledger().pending(),replay_.ledger().delivered(),replay_.sessions(),true};return Result::Done;
+  result={replay_.ledger().pending(),replay_.ledger().delivered(),replay_.sessions(),true};
+#if THESIS_DTN_F26B_BUILD_ONLY == 1
+  result.capacity=DTNF26B::inspect(replay_.ledger(),writer_.written()/DTNF24M::kFrameBytes,receipts_.written()/DTNF24N::kReceiptBytes,replay_.unverified());
+#endif
+  return Result::Done;
  }
  Result shutdown(){
   Entry lock(gate_);if(!lock.acquired)return Result::Deferred;

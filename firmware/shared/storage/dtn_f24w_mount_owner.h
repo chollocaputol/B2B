@@ -56,14 +56,9 @@ template<class Backend,class Witness> class MountOwner final {
  State state()const{return state_;}
  unsigned outstanding()const{return unsigned(slots_[0].used)+unsigned(slots_[1].used);}
  Lane lane()const{return lane_;}
- bool mount(){
-  Call c(busy_); if(!c.ok || state_!=State::Detached)return false;
-  const Identity i=w_.view();
-  if(!valid(i) || i.epoch<=lastEpoch_)return false;
-  bound_=i; lastEpoch_=i.epoch;
-  if(!backend_.mount() || !same())return fail();
-  state_=State::Active;return true;
- }
+ // Existing callers retain mount(); composed services must supply the expected identity.
+ bool mount(){return mountImpl(false,0,0,0);}
+ bool mountExpected(uint64_t media,uint64_t epoch,uint64_t owner){return mountImpl(true,media,epoch,owner);}
  Token open(Lane lane,const char* path,Mode mode){
   Call c(busy_); if(!c.ok || state_!=State::Active || !live())return {};
   if(!path || !*path || !validLane(lane) || slots_[0].used || slots_[1].used)return {};
@@ -153,6 +148,16 @@ template<class Backend,class Witness> class MountOwner final {
  static bool valid(const Identity& i){return i.authorized && i.exclusive && i.allPathsInterposed && i.media && i.epoch && i.owner;}
  static bool validLane(Lane l){return l==Lane::Sos || l==Lane::LegacyAppend || l==Lane::Export || l==Lane::History || l==Lane::Audit || l==Lane::F23D;}
  static bool writer(Lane l){return l==Lane::Sos || l==Lane::LegacyAppend || l==Lane::F23D;}
+ bool mountImpl(bool match,uint64_t media,uint64_t epoch,uint64_t owner){
+  Call c(busy_); if(!c.ok || state_!=State::Detached)return false;
+  const Identity i=w_.view();
+  if(!valid(i) || i.epoch<=lastEpoch_)return false;
+  // A-07: compare the same snapshot that will be bound, before backend I/O.
+  if(match && (i.media!=media || i.epoch!=epoch || i.owner!=owner))return false;
+  bound_=i; lastEpoch_=i.epoch;
+  if(!backend_.mount() || !same())return fail();
+  state_=State::Active;return true;
+ }
  bool same()const{const Identity i=w_.view();return valid(i) && i.media==bound_.media && i.epoch==bound_.epoch && i.owner==bound_.owner;}
  bool fail(){state_=State::Faulted;return false;}
  bool live(){return state_!=State::Faulted && (same() || fail());}

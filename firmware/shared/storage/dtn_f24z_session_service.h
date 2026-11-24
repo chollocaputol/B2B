@@ -40,7 +40,7 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
   if(!DTNF24M::sandboxPath(path,sizeof(path),current,vessel)||!authority(e,vessel))return Result::Rejected;
   if(busy(e,false))return Result::Deferred;
   vessel_=vessel;media_=e.mediaTag;epoch_=e.mountEpoch;serial_=e.ownerSerial;strncpy(current_,current,sizeof(current_)-1);
-  if(!owner_.mount()||!port_.bind(vessel_,current_))return fail();
+  if(!owner_.mountExpected(media_,epoch_,serial_)||!port_.bind(vessel_,current_))return fail();
   started_=true;return Result::Done;
  }
  Result discover(){
@@ -77,7 +77,7 @@ template<class Backend,class MountWitness,class EvidenceWitness> class Service f
  }
  Result summary(Summary& result){
   Entry lock(gate_);if(!lock.acquired)return Result::Deferred;
-  result={};if(fault_)return Result::Fault;
+  result={};const auto admitted=admit(false);if(admitted!=Result::Done)return admitted;
   if(!replay_.completed())return Result::Rejected;
   result={replay_.ledger().pending(),replay_.ledger().delivered(),replay_.sessions(),true};return Result::Done;
  }

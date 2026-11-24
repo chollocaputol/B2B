@@ -1,0 +1,13 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {projectStudy,latestTimed} from '../frontend/src/studySf.ts';
+const row=(n,kind,payload,ts=null,boot='a',node=3)=>({record_id:`${boot}:${n}`,recorder_node_id:node,synced_at:'2026-11-25T01:00:00Z',record_json:{record_id:`${boot}:${n}`,recorder_node_id:node,kind,captured_at:ts,uptime_ms:n,payload}});
+const c=row(1,'cancel',{origin_node_id:2,event_id:1}),s=row(2,'sos',{origin_node_id:2,event_id:1});
+test('cancel dominates both orders',()=>{for(const a of [[c,s],[s,c]])assert.equal(projectStudy(a).events[0].state,'Cancellation observed')});
+test('different origins and event IDs remain separate',()=>assert.equal(projectStudy([c,s,row(3,'sos',{origin_node_id:4,event_id:1}),row(4,'sos',{origin_node_id:2,event_id:2})]).events.length,3));
+test('duplicate DB row is explicit failure',()=>assert.throws(()=>projectStudy([c,c])));
+test('same record ID from different recorders allowed',()=>assert.equal(projectStudy([c,row(1,'cancel',{origin_node_id:2,event_id:1},null,'a',4)]).records.length,2));
+test('unknown capture timestamp is never replaced',()=>assert.equal(latestTimed([row(1,'gps',{gps_fix:true})]),null));
+test('capture time, not receipt order',()=>{const older=row(2,'weather',{},'2026-11-24T00:00:00Z'),newer=row(1,'weather',{},'2026-11-25T00:00:00Z');assert.equal(latestTimed([newer,older]),newer)});
+test('same boot tie uses numeric counter',()=>{const ts='2026-11-25T00:00:00Z';assert.equal(latestTimed([row(9,'weather',{},ts),row(10,'weather',{},ts)]).record_id,'a:10')});
+test('cross boot tie is ambiguous',()=>{const ts='2026-11-25T00:00:00Z';assert.equal(latestTimed([row(1,'weather',{},ts),row(1,'weather',{},ts,'b')]),null)});
+test('separate weather GPS records preserved and nulls retained',()=>{const p=projectStudy([row(1,'weather',{temperature_c:null}),row(2,'gps',{gps_fix:false,latitude:null,longitude:null})]);assert.equal(p.weather[0].record_json.payload.temperature_c,null);assert.equal(p.gps[0].record_json.payload.latitude,null)});
+test('identity mismatch rejected',()=>assert.throws(()=>projectStudy([{...c,recorder_node_id:9}])));

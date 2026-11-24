@@ -1,25 +1,37 @@
 // LOCAL STUDY CANDIDATE ONLY. Do not deploy. Default denial unless explicitly configured.
-import { createClient } from 'npm:@supabase/supabase-js@2.95.0';
+// Use the built-in HTTP client so the offline worker needs no external npm modules.
 import { handleStudySf } from '../_shared/study_sf_http.ts';
-Deno.serve(async req=>{
-  const url=Deno.env.get('SUPABASE_URL');
-  const publicKey=Deno.env.get('SUPABASE_ANON_KEY');
-  const adminKey=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  // Explicit lab allowlist, never a hosted URL. Local Docker Kong is the expected host.
-  if(Deno.env.get('THESIS_SF_LOCAL_LAB')!=='1'||url!=='http://kong:8000'||!publicKey||!adminKey)
+const object = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x);
+Deno.serve(async req => {
+  const url = Deno.env.get('SUPABASE_URL');
+  const publicKey = Deno.env.get('SUPABASE_ANON_KEY');
+  const adminKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (Deno.env.get('THESIS_SF_LOCAL_LAB') !== '1' || url !== 'http://kong:8000' || !publicKey || !adminKey || publicKey === adminKey)
     return Response.json({error:'study_lab_disabled'},{status:503});
-  const opts={auth:{autoRefreshToken:false,persistSession:false}};
-  return handleStudySf(req,{
-    getRecorder: async token=>{
-      const {data,error}=await createClient(url,publicKey,opts).auth.getUser(token);
-      if(error||!data.user||data.user.app_metadata?.thesis_study_device!==true)return null;
-      // Server-managed app metadata, never user_metadata or a request claim.
-      const node=data.user.app_metadata?.thesis_node_id;
-      return Number.isInteger(node)&&node>=1&&node<=9999?node:null;
+  return handleStudySf(req, {
+    getRecorder: async token => {
+      const res = await fetch(url + '/auth/v1/user', {
+        method:'GET', headers:{apikey:publicKey,authorization:`Bearer ${token}`},
+        redirect:'error', signal:AbortSignal.timeout(10000),
+      });
+      if (res.status === 401 || res.status === 403) return null;
+      if (!res.ok) throw new Error('Auth unavailable');
+      const user: unknown = await res.json();
+      if (!object(user) || typeof user.id !== 'string' || !user.id) throw new Error('Invalid Auth response');
+      // Only server-managed metadata authorizes a device. Never trust user_metadata.
+      if (!object(user.app_metadata) || user.app_metadata.thesis_study_device !== true) return null;
+      const node = user.app_metadata.thesis_node_id;
+      return typeof node === 'number' && Number.isInteger(node) && node >= 1 && node <= 9999 ? node : null;
     },
-    store: async (recorder,records)=>{
-      const {data,error}=await createClient(url,adminKey,opts).rpc('study_sf_ingest',{p_recorder:recorder,p_records:records});
-      return {data,error};
+    store: async (recorder, records) => {
+      const res = await fetch(url + '/rest/v1/rpc/study_sf_ingest', {
+        method:'POST', headers:{apikey:adminKey,authorization:`Bearer ${adminKey}`,'content-type':'application/json',accept:'application/json'},
+        body:JSON.stringify({p_recorder:recorder,p_records:records}),
+        redirect:'error', signal:AbortSignal.timeout(10000),
+      });
+      const data: unknown = await res.json();
+      if (!res.ok) return {data:null,error:{code:res.status === 409 && object(data) && data.code === '23505' ? '23505' : 'unavailable'}};
+      return {data,error:null};
     },
   });
 });

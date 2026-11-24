@@ -42,6 +42,9 @@ template<class Volume,class Witness> class GuardedVolume final {
    bool isDirectory(){return allow(Action::Size)?raw_.isDirectory():false;}
    bool seek(size_t pos){return allow(Action::Seek)?raw_.seek(pos):false;}
    int read(){return allow(Action::Read)?raw_.read():-1;}
+   int available(){return allow(Action::Read)?raw_.available():0;}
+   size_t print(const char* text){return writer_ && text && allow(Action::Write)?raw_.print(text):0U;}
+   size_t print(char ch){return writer_ && allow(Action::Write)?raw_.print(ch):0U;}
    size_t read(uint8_t* bytes,size_t length){return bytes && allow(Action::Read)?raw_.read(bytes,length):0U;}
    size_t write(const uint8_t* bytes,size_t length){return writer_ && bytes && allow(Action::Write)?raw_.write(bytes,length):0U;}
    void flush(){if(writer_ && allow(Action::Flush))raw_.flush();}

@@ -1,0 +1,20 @@
+# F24S — Guarded short-lived F06 logger File entrypoints (BUILD ONLY)
+
+**Required parent:** locally accepted F24R `215f5d8b1e305c99208dcc3446d8488c79a599e0` on `feature/firmware-multihop`, clean worktree. This is a candidate pending Windows host tests and ESP32-S3 compilation. **DO NOT FLASH.** F24S inherits routine operational LoRa transmissions if incorrectly flashed; it is not globally RF silent.
+
+## Scope
+
+- The F24S-only `TemporaryLoggerFiles` wrapper accepts only F06 `/THESIS/F06TEST/V001..003/S[0-9A-F]{7}` directory reads and exact existing `diagnostics.jsonl`, `sos_events.jsonl`, `telemetry.jsonl` journal names. It refuses traversal, other streams, invalid modes, legacy V002 paths and directory appends before any volume operation.
+- Eight actual short-lived `ThesisSDLogger` File acquisition sites use this wrapper when `THESIS_DTN_F24S_BUILD_ONLY=1`: `appendRecord`, initialization directory validation, prior diagnostics inspection, boot verification readback, telemetry audit, SOS audit, history-target root validation, and history preflight file reads. The underlying `F24R::GuardedVolume` rechecks the F24Q witness for every supported File method; F24R now also checks `available()` and the two `print()` overloads needed by the existing logger's code.
+- The sole ESP32-S3 profile `tbeam-supreme-f24s-temporary-file-deny-build-only` extends F24R/F24Q/F24K's **permanent SD denial**. It uses F24Q `DenyWitness`, an empty lease and a denied SD facade; these eight logger paths **cannot open a physical File in this profile**. The strict F06 sandbox remains enabled; F23D, fleet SD, pilot storage, relay permission and physical GPIO activation remain disabled. Ordinary and earlier profiles are not changed by the F24S conditional branches.
+- Host test uses a **synthetic RAM file**, mocked positive owner facts, then witness revocation. Checks path allowlist, exclusion before backend open, print/available/read/write/flush/close, two-reader/writer lane restrictions, denial before calls and failure to send bytes after revocation. These positive mocks do not supply a trustworthy device owner. The existing F24R/F24Q/F24P/F24O host suite must be rerun on Windows.
+
+## Explicitly NOT resolved
+
+- **Directory iterator** `listHistory()` still uses raw parent `File` / `openNextFile()` and child File handles. F24Q only models two simultaneous handles for F23D; this directory case must be designed, bounded and interposed separately. Startup and library-side destructors, any remaining unguarded transient metadata operations, and source-global all-writer interception are NOT proven. Existing F24O SOS port has a different handle cleanup contract; reconcile before any physical grant.
+- The underlying Arduino `File` destructor may access the filesystem or free library handles after ownership/media revocation. A synthetic mock cannot prove that cleanup is safe. No card swap/mount continuity/unique physical ID, immutable closure, FAT power-loss durability, retained SOS integrity, trusted shore receipt or actual RF multihop test is provided. **No global physical SD-owner assertion is permitted.**
+- All real microSD cards, particularly the preserved V002 evidence card, remain untouched. No flashing, GitHub push, Supabase changes, Docker lab, Wi-Fi credentials, SOS relay enablement or RF experiment is part of F24S.
+
+## Host/Windows acceptance
+
+Guarded stage: exact clean F24R parent and 3 modified + 4 added files, payload hashes, no extra changes. Test new F24S native test, source contract, regression F24R (66), F24R source (21), F24Q (307), F23D default/named (20 each), F24P (133), F24O (266), then PlatformIO **compile only** `tbeam-supreme-f24s-temporary-file-deny-build-only` (never `upload`). Final acceptance requires the operator's Windows result and separate local-commit review. After F24S, independently qualify a dedicated no-SD three-board RF-only candidate before any hardware flash, and continue the physical SD owner / teardown design as a separate gated task.

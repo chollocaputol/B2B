@@ -274,6 +274,23 @@
 #endif
 #include "dtn_f24r_guarded_file_port.h"
 #endif
+// F24S: source-scoped guarded short-lived F06 logger File operations.
+// This preview is permanently denied by F24K and F24Q DenyWitness.
+#ifndef THESIS_DTN_F24S_BUILD_ONLY
+#define THESIS_DTN_F24S_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24S_BUILD_ONLY != 0 && THESIS_DTN_F24S_BUILD_ONLY != 1
+#error "Invalid F24S build-only flag"
+#endif
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+#if THESIS_DTN_F24R_BUILD_ONLY != 1 || THESIS_DTN_F24Q_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || \
+    THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_F06_SD_SANDBOX != 1 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24S requires F24R/Q/K DENY + F06 sandbox; F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24s_temporary_logger_files.h"
+#endif
 // F24P: integrate F24N root discovery with the SAME owner-bound F24O port.
 // This is still NOT global physical all-file-handle ownership; the legacy
 // logger and F23D remain separate and the F24K facade permanently denies SD.
@@ -335,6 +352,12 @@ static const DTNF24Q::Lease f24rNoLease{};
 static DTNF24R::GuardedVolume<decltype(interposedSD),DTNF24Q::DenyWitness>
     f24rLegacyFiles(interposedSD,f24rNoPhysicalArbiter,f24rNoLease);
 using F24RRetainedFile=decltype(f24rLegacyFiles.open((const char*)nullptr,(const char*)nullptr));
+#endif
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+// Independent path allowlisting layered on F24R method checks.
+// This instance has NO physical grant: lease is zero and F24K denies mount.
+static DTNF24S::TemporaryLoggerFiles<decltype(f24rLegacyFiles)> f24sTemporaryFiles(f24rLegacyFiles);
+using F24STemporaryFile=decltype(f24sTemporaryFiles.open((const char*)nullptr,(const char*)nullptr));
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
@@ -839,7 +862,11 @@ inline bool appendRecord(const char* path, const char* record) {
 // F23D SD end
     if (!ready) return false;
 
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile file = f24sTemporaryFiles.open(path, FILE_APPEND);
+#else
     File file = interposedSD.open(path, FILE_APPEND);
+#endif
 
     if (!file) {
         Serial.println("[SD-LOG] OPEN_FAIL");
@@ -969,7 +996,11 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
         return false;
     }
 
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile dir = f24sTemporaryFiles.open(DIRECTORY, FILE_READ);
+#else
     File dir = interposedSD.open(DIRECTORY, FILE_READ);
+#endif
 
     if (!dir || !dir.isDirectory()) {
         Serial.println("[SD-LOG] VESSEL_DIR_INVALID");
@@ -986,7 +1017,11 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     bool lastLineComplete = false;
 
     if (interposedSD.exists(DIAGNOSTICS)) {
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile previous = f24sTemporaryFiles.open(DIAGNOSTICS, FILE_READ);
+#else
         File previous = interposedSD.open(DIAGNOSTICS, FILE_READ);
+#endif
 
         if (!previous) {
             Serial.println("[SD-VERIFY] PRIOR_OPEN_FAIL");
@@ -1072,7 +1107,11 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
         return false;
     }
 
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile verification = f24sTemporaryFiles.open(DIAGNOSTICS, FILE_READ);
+#else
     File verification = interposedSD.open(DIAGNOSTICS, FILE_READ);
+#endif
 
     if (!verification) {
         ready = false;
@@ -1318,13 +1357,21 @@ inline void poll() {
         uint64_t telemetryBytes = 0;
         uint64_t sosBytes = 0;
 
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile telemetryFile = f24sTemporaryFiles.open(TELEMETRY, FILE_READ);
+#else
         File telemetryFile = interposedSD.open(TELEMETRY, FILE_READ);
+#endif
         if (telemetryFile) {
             telemetryBytes = telemetryFile.size();
             telemetryFile.close();
         }
 
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile sosFile = f24sTemporaryFiles.open(SOS_EVENTS, FILE_READ);
+#else
         File sosFile = interposedSD.open(SOS_EVENTS, FILE_READ);
+#endif
         if (sosFile) {
             sosBytes = sosFile.size();
             sosFile.close();
@@ -1537,7 +1584,11 @@ inline void requestHistory(const char* selector) {
     } else {
         Serial.println("[SDH] ERROR SELECTOR_REJECTED"); return;
     }
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile root = f24sTemporaryFiles.open(historyRoot, FILE_READ);
+#else
     File root = interposedSD.open(historyRoot, FILE_READ);
+#endif
     if (!root || !root.isDirectory()) {
         if (root) root.close();
         Serial.println("[SDH] ERROR TARGET_DIRECTORY_MISSING"); return;
@@ -1550,7 +1601,11 @@ inline void requestHistory(const char* selector) {
         if (!historyPath(path, sizeof(path), i)) {
             Serial.println("[SDH] ERROR PATH_TOO_LONG"); return;
         }
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile file = f24sTemporaryFiles.open(path, FILE_READ);
+#else
         File file = interposedSD.open(path, FILE_READ);
+#endif
         if (!file) {
             if (interposedSD.exists(path)) {
                 Serial.println("[SDH] ERROR FILE_OPEN_FAILED"); return;

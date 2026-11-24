@@ -241,6 +241,22 @@
 #endif
 #include "dtn_f24o_owned_sos_port.h"
 #endif
+// F24Q: source-only cross-writer arbitration model + F23D volume entrypoint
+// naming. NO physical observer or File handle interception is provided.
+#ifndef THESIS_DTN_F24Q_BUILD_ONLY
+#define THESIS_DTN_F24Q_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24Q_BUILD_ONLY != 0 && THESIS_DTN_F24Q_BUILD_ONLY != 1
+#error "Invalid F24Q build-only flag"
+#endif
+#if THESIS_DTN_F24Q_BUILD_ONLY == 1
+#if THESIS_DTN_F24P_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24Q requires F24P/K DENY; F23D, fleet, legacy relay and GPIO OFF"
+#endif
+#include "dtn_f24q_cross_writer_arbiter.h"
+#endif
 // F24P: integrate F24N root discovery with the SAME owner-bound F24O port.
 // This is still NOT global physical all-file-handle ownership; the legacy
 // logger and F23D remain separate and the F24K facade permanently denies SD.
@@ -1178,6 +1194,14 @@ inline void pollExport() {
 }
 
 inline void poll() {
+#if THESIS_DTN_F24Q_BUILD_ONLY == 1
+    // Compile the real main-loop seam against an UNGRANTABLE witness.
+    // No SD/FS/SPI/relay action, no ledger credit, and no simulated owner
+    // state is installed into any physical File lifetime.
+    static const DTNF24Q::DenyWitness noPhysicalOwner{};
+    static DTNF24Q::Arbiter<DTNF24Q::DenyWitness> noGrant(noPhysicalOwner);
+    (void)noGrant.acquire(vesselId,DTNF24Q::Lane::Sos);
+#endif
 #if THESIS_DTN_F24E_BUILD_ONLY == 1
     // This does NOT queue a session or touch the SD bus; the grant is always denied.
     // Compiles the actual main-loop owner hook without enabling replay or RF.
@@ -1577,7 +1601,11 @@ inline void pollHistory() {
 #endif // THESIS_F06_SD_SANDBOX
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
+// The named facade is SD for ordinary profiles, DENY for F24K.
+// F23D still retains long-lived File handles: no global lease asserted.
+#define F23D_SD_ACCESS interposedSD
 #include "f23d_sd_file_writer.h"
+#undef F23D_SD_ACCESS
 static F23DSD::Journal f23dJournal;
 static F23DSDFileWriter f23dWriter;
 static bool f23dInitialized=false;

@@ -362,10 +362,30 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #endif
 #include "dtn_f24u_teardown_coordinator.h"
 #endif
+// F24W: owner-held slot lifecycle preview. No physical backend exists.
+#ifndef THESIS_DTN_F24W_BUILD_ONLY
+#define THESIS_DTN_F24W_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24W_BUILD_ONLY != 0 && THESIS_DTN_F24W_BUILD_ONLY != 1
+#error "Invalid F24W build-only flag"
+#endif
+#if THESIS_DTN_F24W_BUILD_ONLY == 1
+#if THESIS_DTN_F24V_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24W requires F24V/K DENY, F23D/fleet/relay/GPIO OFF"
+#endif
+#if defined(THESIS_SD_PROBE) && THESIS_SD_PROBE != 0
+#error "F24W forbids independent SD probe"
+#endif
+#include "dtn_f24w_mount_owner.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
+#if THESIS_DTN_F24W_BUILD_ONLY == 1
+static DTNF24W::DenyMountFacade<File> interposedSD;
+#else
 static DTNF24K::DenySdFacade<File> interposedSD;
+#endif
 #if THESIS_DTN_F24O_BUILD_ONLY == 1
 // Denial is permanent even if the outer port is accidentally requested.
 static const DTNF24O::DenyWitness f24oNoPhysicalWitness{};

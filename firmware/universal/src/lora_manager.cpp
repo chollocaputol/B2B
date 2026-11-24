@@ -2149,6 +2149,14 @@ static void calculateBSequencePDR() {
   missingFromB = expected > uniqueFromB ? static_cast<uint32_t>(expected - uniqueFromB) : 0;
 }
 
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+// Conservative cooperative snapshot; not proof of RF silence or absence of
+// an in-flight preamble. No new SPI/IRQ clear/read operation is introduced.
+bool thesisF25ARadioBusy() {
+  return activeEmergency || sosPending || cancelPending || macCadScanActive ||
+         getActiveSOSCount()>0 || digitalRead(LORA_DIO1)==HIGH;
+}
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
 bool f23dSDRadioBusy() {

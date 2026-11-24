@@ -1,0 +1,13 @@
+# F25A — runtime-deny build-only candidate
+
+Parent: 64432eb4a790f6e82633e727b3480c31d3149ae0. DTN only; do not flash. This is NOT operational DTN, and ordinary LoRa RF would still be inherited if flashed.
+
+## Integration
+- `setup()` binds the Arduino application task once; `loop()` invokes the actual F24Z service after LoRa RX and SOS/CANCEL retries, subject to the conservative radio-busy snapshot. No worker task, ISR queue access, task rebinding, second F24M queue, synthetic mount authority or current session is introduced.
+- Task tokens are rejected in ISR context before obtaining the current task handle. The runtime serializes capture and poll with a nonblocking atomic entry gate. Existing local and received SOS call sites and 62-byte ABI are unchanged. Legacy F24M writer and F24N replay objects are excluded in F25A; immutable denial witnesses and the existing F24Z service own the selected runtime path.
+- Every eligible 30 seconds, one actual F24Z `append` admission is attempted. Unstarted service returns Rejected before queue consumption or backend I/O. No fabricated session, start, receipt, shutdown or discovery. An unexpected result halts further runtime admission. This does not prove positive storage operation or hardware scheduling. Queue capacity remains eight; overflow is real, RAM is volatile, and sustained emergency activity can defer all diagnostic polls. No final delivery credit.
+- F25A bypasses legacy begin, poll, history and export service. The public legacy entry bodies are conditionally excluded, including alternate journal/poll entrypoints; SD-probe and conflicting physical paths are compile-time forbidden. No legacy SPIClass instance is constructed in F25A. Other profiles retain their original code paths. The existing permanent-denial facade and dormant link anchors remain; this is not proof of global physical media ownership.
+- Radio busy snapshot is active local/remote SOS, pending SOS/CANCEL, CAD or asserted DIO1. It does not prove absence of a preamble or future IRQ; no new radio SPI/status query. Serial diagnostics may block briefly; no target timing proof. No changes to RF protocol, retry, weather, GPIO or packet semantics. CANCEL persistence and independent session closure remain later gates.
+
+## Validation boundary
+Host test uses actual F24Z service with counting backend, 39 checks and zero backend operations. Source contract 54 checks. Earlier DTN source checks and selected F24M/F24Z host regression repeated only against the changed candidate. Windows SDK/core, compilation and linked runtime entry checks pending. No positive permission, physical SD, flashing, RF relay, cloud, push or commit. V001 unavailable; original V002 card preserved.

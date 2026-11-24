@@ -483,6 +483,22 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 #ifndef THESIS_SD_PROBE
 #define THESIS_SD_PROBE 0
 #endif
+#ifndef THESIS_DTN_F25A_BUILD_ONLY
+#define THESIS_DTN_F25A_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F25A_BUILD_ONLY != 0 && THESIS_DTN_F25A_BUILD_ONLY != 1
+#error "Invalid F25A flag"
+#endif
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+#if THESIS_DTN_F24Z_BUILD_ONLY != 1 || THESIS_DTN_F24M_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_SD_LOGGER != 1 || THESIS_SD_PROBE != 0 || THESIS_F23D_SD_EVIDENCE || THESIS_F23D_PHYSICAL_CANDIDATE || THESIS_F23D_CANDIDATE || THESIS_MULTIHOP_DEV_TEST || THESIS_MULTIHOP_BENCH_RF || THESIS_LAB_RELAY_TX || THESIS_FLEET_USB_ENROLLMENT || THESIS_F22_FLEET_OPERATIONAL || THESIS_V003_F15_SD_PILOT_ARMED || THESIS_V003_F13_LIVE_OUTPUTS
+#error "F25A requires F24Z/M/K and all competing physical paths OFF"
+#endif
+static_assert(!PhysicalIndicators::kOutputsEnabled,"F25A outputs must stay OFF");
+extern bool thesisF25ABindLoop();
+extern DTNF24M::CaptureResult thesisF25ACapture(DTNF24M::PendingQueue<8>&,const VesselPacket&,uint8_t);
+extern void thesisF25APoll(DTNF24M::PendingQueue<8>&,bool);
+extern bool thesisF25ARadioBusy();
+#endif
 #if THESIS_SD_PROBE == 1
 #include "../../shared/storage/sd_probe.h"
 #endif
@@ -852,7 +868,11 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
 #error "F24M capture requires enabled logger in DENY-only preview"
 #endif
 bool thesisF24MObserveSOSPacket(const VesselPacket& packet,uint8_t source){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  const auto result=thesisF25ACapture(ThesisSDLogger::f24mSosCapture,packet,source);
+#else
   const auto result=ThesisSDLogger::f24mSosCapture.capture(packet,source);
+#endif
   return result==DTNF24M::CaptureResult::Queued ||
          result==DTNF24M::CaptureResult::Duplicate;
 }
@@ -1002,6 +1022,10 @@ static void f19r3CaptureResearch30s() {
 
 void setup() {
   Serial.begin(115200);
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  const bool f25aBound=thesisF25ABindLoop();
+  Serial.printf("[F25A] loop_bound=%u physical=DENIED legacy=OFF\n",unsigned(f25aBound));
+#endif
   delay(1200);
   Serial.println();
   Serial.println("=== UNIVERSAL VESSEL: SCHEDULED TX + RX ===");
@@ -1159,6 +1183,10 @@ void setup() {
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  // No legacy SD initialization, including power, pins, SPI or mount.
+  Serial.println("[F25A] LEGACY_SD_INIT_BYPASSED; NO_SESSION_AUTHORITY");
+#else
 #if THESIS_SD_LOGGER == 1
 #if THESIS_V003_F15_MACRO_SD_SANDBOX == 1
 #if THESIS_V003_F15_SD_PILOT_ARMED == 1
@@ -1184,6 +1212,7 @@ void setup() {
 #endif
 #else
   ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
+#endif
 #endif
 #endif
 
@@ -1318,7 +1347,7 @@ void setup() {
 // MAIN LOOP
 // ============================================================
 void loop() {
-#if THESIS_SD_LOGGER == 1
+#if THESIS_SD_LOGGER == 1 && THESIS_DTN_F25A_BUILD_ONLY != 1
 #if THESIS_F06_SD_HYBRID == 1
   // Assess authoritative local and received SOS state before SD poll.
   // An unresolved SOS keeps recording regardless of manual mode.
@@ -1343,7 +1372,7 @@ void loop() {
 #endif
 // F23D SD end
 #endif
-#if THESIS_F06_SD_SANDBOX == 1
+#if THESIS_F06_SD_SANDBOX == 1 && THESIS_DTN_F25A_BUILD_ONLY != 1
 // F23D SD begin
 #if !THESIS_F23D_SD_EVIDENCE
 // F23D SD end
@@ -1368,7 +1397,9 @@ void loop() {
 // F23D SD begin
 #if !THESIS_F23D_SD_EVIDENCE
 // F23D SD end
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
   ThesisSDLogger::pollExport();
+#endif
 // F23D SD begin
 #endif
 // F23D SD end
@@ -1415,6 +1446,9 @@ void loop() {
   }
   processSOSRetries();
   processCancelRetries();
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  thesisF25APoll(ThesisSDLogger::f24mSosCapture,thesisF25ARadioBusy());
+#endif
 #if THESIS_MULTIHOP_DEV_TEST == 1
   // Must run AFTER operational SOS and CANCEL retry handling.
   multihopDevPollPrepared();

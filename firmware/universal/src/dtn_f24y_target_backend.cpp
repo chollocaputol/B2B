@@ -1,4 +1,4 @@
-// F24Y target adapter. Retained for compile/link evidence ONLY. No runtime caller.
+// F24Y/Z retain compile/link evidence. F25A adds a separate permanent-deny runtime caller.
 #ifndef THESIS_DTN_F24Y_BUILD_ONLY
 #define THESIS_DTN_F24Y_BUILD_ONLY 0
 #endif
@@ -76,7 +76,7 @@ extern const LinkTable thesis_f24y_link_anchor __attribute__((used)) = {
  &Target::seek,&Target::flush,&Target::close,&Target::unmount};
 }
 // F24Z: retain real discovery and the composed service methods for target
-// compilation only. The existing logger is unchanged and permanently denied.
+// compilation only in F24Z. F25A below supplies the separate runtime path.
 #if defined(THESIS_DTN_F24Z_BUILD_ONLY) && THESIS_DTN_F24Z_BUILD_ONLY == 1
 #include "../../shared/storage/dtn_f24z_session_service.h"
 namespace {
@@ -100,5 +100,31 @@ extern const ZLinkTable thesis_f24z_link_anchor __attribute__((used))={
  &Target::discover<ZGuard>,&ZService::start,&ZService::discover,
  &ZService::append<ZQueue>,&ZService::poll<ZVerifier>,&ZService::receipt<ZVerifier>,&ZService::shutdown};
 }
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "../../shared/storage/dtn_f25a_runtime_deny.h"
+namespace {
+// Actual target adapter, private instance, immutable denial, no callable start.
+DTNF25A::Runtime<Target> f25aRuntime;
+uintptr_t f25aTaskToken(){
+ if(xPortInIsrContext())return 0;
+ return reinterpret_cast<uintptr_t>(xTaskGetCurrentTaskHandle());
+}
+}
+bool thesisF25ABindLoop(){return f25aRuntime.bind(f25aTaskToken());}
+DTNF24M::CaptureResult thesisF25ACapture(DTNF25A::Queue& queue,const VesselPacket& packet,uint8_t source){
+ return f25aRuntime.capture(f25aTaskToken(),queue,packet,source);
+}
+void thesisF25APoll(DTNF25A::Queue& queue,bool radioBusy){
+ DTNF25A::Report report{};
+ const auto result=f25aRuntime.poll(f25aTaskToken(),queue,millis(),radioBusy,report);
+ if(result==DTNF25A::Tick::Denied || result==DTNF25A::Tick::Unexpected)
+  Serial.printf("[F25A] admission=%s pending=%u full_drop=%lu durable=NO physical=DENIED\n",
+    result==DTNF25A::Tick::Denied?"REJECTED_NO_SESSION":"UNEXPECTED_STOP_REVIEW",
+    unsigned(report.pending),(unsigned long)report.lost);
+}
+#endif
 #endif
 #endif

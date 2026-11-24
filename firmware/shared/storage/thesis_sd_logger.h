@@ -399,7 +399,7 @@ static DTNF24W::DenyMountFacade<File> interposedSD;
 #else
 static DTNF24K::DenySdFacade<File> interposedSD;
 #endif
-#if THESIS_DTN_F24O_BUILD_ONLY == 1
+#if THESIS_DTN_F24O_BUILD_ONLY == 1 && THESIS_DTN_F25A_BUILD_ONLY != 1
 // Denial is permanent even if the outer port is accidentally requested.
 static const DTNF24O::DenyWitness f24oNoPhysicalWitness{};
 #if THESIS_DTN_F24X_BUILD_ONLY == 1
@@ -466,7 +466,9 @@ inline bool f23dStorageFrozen();
 #endif
 // F23D SD end
 
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
 static SPIClass sdSPI(HSPI);
+#endif
 static bool ready = false;
 static uint32_t lastHeartbeat = 0;
 static uint32_t vesselId = 0;
@@ -484,8 +486,13 @@ static char SOS_EVENTS[64] = "/THESIS/VESSEL_002/sos_events.jsonl";
 // Actual radio packet ingress -> bounded RAM queue; NO storage in RX/TX path.
 // F24K facade is denied, therefore the preview cannot mount or write a card.
 static DTNF24M::PendingQueue<8> f24mSosCapture;
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
 static DTNF24M::SessionWriter f24mSosJournal;
+#endif
 inline void pollF24MOne(){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
   if(!ready || !f24mSosCapture.pending() || f24mSosCapture.faulted())return;
   const DTNF24M::PacketEntry* item=f24mSosCapture.front();
   if(!item)return;
@@ -502,6 +509,7 @@ inline void pollF24MOne(){
     return;
   }
   (void)f24mSosCapture.acknowledgeDurableAppend();
+#endif // F25A legacy path excluded
 }
 #endif
 
@@ -510,10 +518,15 @@ inline void pollF24MOne(){
 // F24K's SD.begin() always rejects, hence 'ready' never becomes true.
 // Host tests prove the same Replay object against real disposable files.
 // This is NOT independent media proof, an approved reader lease or RF replay.
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
 static DTNF24N::Replay<32,12> f24nClosedReplay;
 static bool f24nDiscoveryTried=false;
 static bool f24nDiscoveryFailed=false;
+#endif
 inline bool f24nDiscoverClosedSessions(){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return false;
+#else
   if(f24nDiscoveryTried || !ready)return false;
   f24nDiscoveryTried=true;
 #if THESIS_DTN_F24O_BUILD_ONLY == 1
@@ -568,10 +581,14 @@ inline bool f24nDiscoverClosedSessions(){
   // Never silently omit a 65th directory entry or a prior journal.
   return exhausted && healthy && f24nClosedReplay.lock();
 #endif // F24P owner-bound session directory traversal
+#endif // F25A legacy path excluded
 }
 // Defined after EventQueue and urgentQueue below; keep urgent SOS priority.
 inline bool f24nUrgentQueuePending();
 inline void pollF24NOne(){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
   if(!ready || f24nDiscoveryFailed || f24nClosedReplay.completed() ||
      f24mSosCapture.pending() || f24nUrgentQueuePending())return;
   if(!f24nDiscoveryTried){
@@ -603,6 +620,7 @@ inline void pollF24NOne(){
       unsigned(f24nClosedReplay.ledger().delivered()),
       (unsigned long)f24nClosedReplay.unverified());
   }
+#endif // F25A legacy path excluded
 }
 #endif
 
@@ -927,6 +945,9 @@ inline bool queueMicroOutlook(uint32_t uptimeMs, bool inputValid, uint8_t histor
 #endif // THESIS_F07_WEATHER_LOG
 
 inline void pollEvents() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -952,10 +973,14 @@ inline void pollEvents() {
         Serial.printf("[SD-EVENT] DROPPED urgent=%lu telemetry=%lu\n",
           (unsigned long)lostUrgent, (unsigned long)lostTelemetry);
     }
+#endif // F25A legacy path excluded
 }
 
 
 inline bool appendRecord(const char* path, const char* record) {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    (void)path; (void)record; return false;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return false;
@@ -986,9 +1011,13 @@ inline bool appendRecord(const char* path, const char* record) {
     }
 
     return true;
+#endif // F25A legacy path excluded
 }
 
 inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    (void)pmu; (void)id; return false;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return false;
@@ -1244,6 +1273,7 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     Serial.printf("[SD-LOG] READY path=%s\n", DIRECTORY);
 
     return true;
+#endif // F25A legacy path excluded
 }
 
 
@@ -1263,6 +1293,9 @@ static File exportFile;
 #endif
 
 inline void requestExport() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    Serial.println("[F25A] LEGACY_EXPORT_DENIED"); return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1286,9 +1319,13 @@ inline void requestExport() {
     exportChecksum = 2166136261UL;
     exportActive = true;
     Serial.println("[SDX] SESSION_START files=3 encoding=HEX checksum=FNV1A32");
+#endif // F25A legacy path excluded
 }
 
 inline void pollExport() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1366,9 +1403,13 @@ inline void pollExport() {
     Serial.printf("[SDX] DATA %u %lu %s\n", (unsigned)exportIndex,
                   (unsigned long)exportOffset, encoded);
     exportOffset += (uint32_t)actual;
+#endif // F25A legacy path excluded
 }
 
 inline void poll() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 #if THESIS_DTN_F24Q_BUILD_ONLY == 1
     // Compile the real main-loop seam against an UNGRANTABLE witness.
     // No SD/FS/SPI/relay action, no ledger credit, and no simulated owner
@@ -1529,6 +1570,7 @@ inline void poll() {
         ready = false;
         Serial.println("[SD-LOG] DISABLED_AFTER_WRITE_FAIL");
     }
+#endif // F25A legacy path excluded
 }
 
 #if THESIS_F06_SD_SANDBOX == 1
@@ -1584,6 +1626,9 @@ inline void historyStop(const char* reason) {
 }
 
 inline void listHistory() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    Serial.println("[F25A] LEGACY_HISTORY_DENIED"); return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1664,9 +1709,13 @@ inline void listHistory() {
     Serial.printf("[SDH] LIST_END shown=%u truncated=%u\n",
                   (unsigned)shown, (unsigned)truncated);
 #endif // F24T guarded history iterator
+#endif // F25A legacy path excluded
 }
 
 inline void requestHistory(const char* selector) {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    (void)selector; Serial.println("[F25A] LEGACY_HISTORY_DENIED"); return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1752,9 +1801,13 @@ inline void requestHistory(const char* selector) {
     historyChecksum = 2166136261UL;
     historyActive = true;
     Serial.printf("[SDH] SESSION_START target=%s files=3\n", selector);
+#endif // F25A legacy path excluded
 }
 
 inline void pollHistory() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1827,6 +1880,7 @@ inline void pollHistory() {
     Serial.printf("[SDH] DATA %u %lu %s\n", (unsigned)i,
                   (unsigned long)historyOffset, hex);
     historyOffset += static_cast<uint32_t>(wanted);
+#endif // F25A legacy path excluded
 }
 #endif // THESIS_F06_SD_SANDBOX
 // F23D SD begin

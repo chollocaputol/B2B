@@ -186,6 +186,26 @@
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 0 && THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
 #error "Invalid F24K build-only flag"
 #endif
+// F24V: core-aware close ordering and installed-framework source-bound
+// negative tests. NO physical owner and NO implicit destructor guarantee.
+#ifndef THESIS_DTN_F24V_BUILD_ONLY
+#define THESIS_DTN_F24V_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24V_BUILD_ONLY != 0 && THESIS_DTN_F24V_BUILD_ONLY != 1
+#error "Invalid F24V build-only flag"
+#endif
+#if THESIS_DTN_F24V_BUILD_ONLY == 1
+#if THESIS_DTN_F24U_BUILD_ONLY != 1 || THESIS_DTN_F24T_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24S_BUILD_ONLY != 1 || THESIS_DTN_F24R_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24Q_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F06_SD_SANDBOX != 1 || THESIS_F23D_SD_EVIDENCE != 0 || \
+    THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24V requires permanent F24U/T/S/R/Q/K DENY and F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24v_core_close_policy.h"
+static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physical SD");
+#endif
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 #if THESIS_DTN_F24J_BUILD_ONLY != 1 || THESIS_DTN_F24I_BUILD_ONLY != 1 || THESIS_DTN_F24H_BUILD_ONLY != 1
 #error "F24K requires F24J/I/H build-only model chain"

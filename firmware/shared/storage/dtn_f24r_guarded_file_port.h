@@ -56,7 +56,18 @@ template<class Volume,class Witness> class GuardedVolume final {
    int getWriteError(){return writer_ && allow(Action::Size)?raw_.getWriteError():1;}
    void close(){
      if(!port_)return;
+#if defined(THESIS_DTN_F24V_BUILD_ONLY) && THESIS_DTN_F24V_BUILD_ONLY == 1
+     // F24V: never make a slot look drained BEFORE backend close. A fresh
+     // owner/media witness is checked again when releasing the slot.
+     // This is a deny-build guard, NOT proof of successful fsync/fclose or
+     // that a physical owner remains valid throughout raw_.close().
+     if(port_->permitCloseSlot(slot_)){
+       raw_.close();
+       if(port_->closeSlot(slot_))port_=nullptr;
+     }
+#else
      if(port_->closeSlot(slot_)){raw_.close();port_=nullptr;}
+#endif
      // Revoked: leave tracked handle quarantined; do not call raw_.close().
      // WARNING: destruction of the raw File is an additional unresolved risk.
    }
@@ -125,6 +136,7 @@ template<class Volume,class Witness> class GuardedVolume final {
    return admitted() && arbiter_.hasHandle(slot);
  }
  bool stepSlot(uint8_t slot,Action a){return arbiter_.step(lease_,slot,a);}
+ bool permitCloseSlot(uint8_t slot){return arbiter_.permitClose(lease_,slot);}
  bool closeSlot(uint8_t slot){return arbiter_.close(lease_,slot);}
  Volume& volume_;
  Arbiter& arbiter_;

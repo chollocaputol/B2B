@@ -76,6 +76,16 @@ template<class Witness> class Arbiter final {
   }
   return false;
  }
+ // F24V: pre-close authorization does not release a lease slot.
+ // The caller must run the raw backend close while the owner is still valid,
+ // then call close() for a second witness check and slot release. This narrows
+ // false-closed accounting but does NOT make Arduino File::close() infallible
+ // or prevent a media/witness switch during the backend operation.
+ bool permitClose(const Lease& l,uint8_t slot){
+  if(!check(l) || slot>=2U || !handles_[slot])return false;
+  if((active_==Lane::F23D || active_==Lane::History) && slot==0U && handles_[1])return false;
+  return true;
+ }
  // Closing a File after ownership or media revocation is ALSO SD I/O.
  // Never close by force: leave a quarantined outstanding handle until a
  // separately approved owner/teardown plan. No regrant in this instance.

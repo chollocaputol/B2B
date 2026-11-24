@@ -324,6 +324,24 @@
 #endif
 #include "dtn_f24t_history_directory.h"
 #endif
+// F24U: pre-revocation drain is a DENY-only software preview. Its typechecked
+// runtime instance cannot obtain an SD lease or open a physical Arduino File.
+#ifndef THESIS_DTN_F24U_BUILD_ONLY
+#define THESIS_DTN_F24U_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY != 0 && THESIS_DTN_F24U_BUILD_ONLY != 1
+#error "F24U build-only flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY == 1
+#if THESIS_DTN_F24T_BUILD_ONLY != 1 || THESIS_DTN_F24S_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24R_BUILD_ONLY != 1 || THESIS_DTN_F24Q_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F06_SD_SANDBOX != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24U requires F24T/S/R/Q/K permanent deny and F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24u_teardown_coordinator.h"
+#endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
 // This object has NO SD backend: no mount, open or physical File handle.
@@ -378,6 +396,11 @@ using F24STemporaryFile=decltype(f24sTemporaryFiles.open((const char*)nullptr,(c
 #endif
 #if THESIS_DTN_F24T_BUILD_ONLY == 1
 static DTNF24T::HistoryDirectory<decltype(f24rLegacyFiles)> f24tHistoryDirectory(f24rLegacyFiles);
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY == 1
+// Permanent DenyWitness and zero lease: even begin() must refuse.
+// No physical FileHandle is ever constructed by this instance.
+static DTNF24U::Teardown<decltype(f24rLegacyFiles)> f24uNoGrantTeardown(f24rLegacyFiles);
 #endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
@@ -1295,6 +1318,9 @@ inline void poll() {
     static const DTNF24Q::DenyWitness noPhysicalOwner{};
     static DTNF24Q::Arbiter<DTNF24Q::DenyWitness> noGrant(noPhysicalOwner);
     (void)noGrant.acquire(vesselId,DTNF24Q::Lane::Sos);
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY == 1
+    (void)f24uNoGrantTeardown.begin(); // ungrantable, no SD operation
 #endif
 #if THESIS_DTN_F24R_BUILD_ONLY == 1
     // Extra compile-only actual File adapter entry; no witness or lease.

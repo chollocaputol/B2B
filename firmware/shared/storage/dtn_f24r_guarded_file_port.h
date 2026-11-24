@@ -72,12 +72,12 @@ template<class Volume,class Witness> class GuardedVolume final {
  GuardedVolume(const GuardedVolume&)=delete;
  GuardedVolume& operator=(const GuardedVolume&)=delete;
  bool exists(const char* path){
-   if(!path || !admitted())return false;
+   if(!path || arbiter_.retiring() || !admitted())return false;
    const bool result=volume_.exists(path);
    return admitted()?result:false;
  }
  FileHandle open(const char* path,const char* mode){
-   if(!path || !mode || !admitted())return {};
+   if(!path || !mode || arbiter_.retiring() || !admitted())return {};
    const bool append=strcmp(mode,"a")==0;
    const bool read=strcmp(mode,"r")==0;
    if(!append && !read)return {};
@@ -106,6 +106,14 @@ template<class Volume,class Witness> class GuardedVolume final {
    if(!arbiter_.step(lease_,1,Action::Size))return {};
    return FileHandle(this,std::move(child),1,false);
  }
+ // F24U: strictly cooperative pre-revocation drain. The caller retains and
+ // explicitly closes every FileHandle before finishRetirement(). No surprise
+ // ownership-loss cleanup, auto-close, forced unmount or regrant is attempted.
+ bool verifyRetirementOwner(){return arbiter_.retiring() && arbiter_.probe(lease_);}
+ bool beginRetirement(){return arbiter_.beginRetirement(lease_);}
+ bool finishRetirement(){return arbiter_.finishRetirement(lease_);}
+ bool retiring()const{return arbiter_.retiring();}
+ bool hasOpenHandle()const{return arbiter_.hasOpenHandle();}
  bool release(){return arbiter_.release(lease_);}
  bool faulted()const{return arbiter_.faulted();}
  bool quarantined()const{return arbiter_.quarantined();}

@@ -38,10 +38,10 @@ template<class Witness> class Arbiter final {
   if(!suitable(f,vessel))return {};
   if(generation_==UINT32_MAX){fault_=true;return {};}
   vessel_=vessel;media_=f.mediaTag;mount_=f.mountEpoch;owner_=f.ownerSerial;
-  ++generation_;active_=lane;sawAppend_=false;return {owner_,generation_,lane};
+  ++generation_;active_=lane;sawAppend_=false;retiring_=false;return {owner_,generation_,lane};
  }
  bool open(const Lease& l,uint8_t slot,Mode mode){
-  if(!check(l) || slot>=2U || handles_[slot])return false;
+  if(retiring_ || !check(l) || slot>=2U || handles_[slot])return false;
   // F24T deliberately preserves the original generic open contract.
   // History child handles must use the dedicated openHistoryChild operation.
   if(slot==1U && (active_!=Lane::F23D || !sawAppend_))return false;
@@ -57,12 +57,16 @@ template<class Witness> class Arbiter final {
  // F24T: ONLY directory iteration can reserve history slot 1. The
  // generic open(l,1,Read) contract remains rejected for History lanes.
  bool openHistoryChild(const Lease& l){
-  if(!check(l) || active_!=Lane::History || !handles_[0] || !read_[0] ||
+  if(retiring_ || !check(l) || active_!=Lane::History || !handles_[0] || !read_[0] ||
      handles_[1])return false;
   handles_[1]=true;read_[1]=true;return true;
  }
  bool step(const Lease& l,uint8_t slot,Action action){
   if(!check(l) || slot>=2U || !handles_[slot])return false;
+  // During orderly retirement no new content I/O is admitted. A writer may
+  // flush its already-written bytes while the SAME verified owner is present;
+  // raw close must follow while the lease is still valid.
+  if(retiring_ && action!=Action::Flush)return false;
   switch(action){
    case Action::Read: case Action::Seek: case Action::Enumerate:
     return read_[slot] && (action!=Action::Enumerate || active_==Lane::History || active_==Lane::Sos);
@@ -80,9 +84,22 @@ template<class Witness> class Arbiter final {
   if((active_==Lane::F23D || active_==Lane::History) && slot==0U && handles_[1])return false;
   handles_[slot]=false;read_[slot]=false;return true;
  }
+ // F24U: begin a monotonic quiesce *before* revoking owner/media access.
+ // Prevent all new opens and content actions, but allow ordered flush/close
+ // while a fresh witness still verifies the exact media and owner epoch.
+ // This is only a software lease model; no physical File teardown authority.
+ bool beginRetirement(const Lease& l){
+  if(!check(l))return false;
+  retiring_=true;return true;
+ }
+ bool finishRetirement(const Lease& l){
+  if(!retiring_ || !check(l) || hasOpenHandle())return false;
+  return release(l);
+ }
+ bool retiring()const{return retiring_;}
  bool release(const Lease& l){
   if(!check(l) || handles_[0] || handles_[1])return false;
-  active_=Lane::None;sawAppend_=false;vessel_=0;media_=mount_=owner_=0;return true;
+  active_=Lane::None;sawAppend_=false;retiring_=false;vessel_=0;media_=mount_=owner_=0;return true;
  }
  // F24R preflight: recheck the independently sampled witness BEFORE
  // volume metadata/exists operations which do not yet have a File slot.
@@ -111,6 +128,6 @@ template<class Witness> class Arbiter final {
  uint32_t vessel_=0,generation_=0;
  uint64_t media_=0,mount_=0,owner_=0;
  Lane active_=Lane::None;
- bool handles_[2]{},read_[2]{},fault_=false,sawAppend_=false;
+ bool handles_[2]{},read_[2]{},fault_=false,sawAppend_=false,retiring_=false;
 };
 } // namespace DTNF24Q

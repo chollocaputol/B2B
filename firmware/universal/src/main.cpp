@@ -424,6 +424,9 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #if THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 0 && THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1
 #error "Invalid SF7 universal offline flag"
 #endif
+#if THESIS_STUDY_SF_CLOUD == 1 && THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1
+#error "Cloud sync requires the universal study architecture"
+#endif
 #if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
 #if THESIS_STUDY_SF_BUILD_ONLY != 1 || THESIS_DTN_F25A_BUILD_ONLY != 1 || THESIS_STUDY_SF_OFFLINE_V003 || THESIS_STUDY_SF_SYNC_V003 || THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || THESIS_V003_F10_MICRO_NOWCAST != 1 || THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || WEATHER_FAST_TEST != 0
 #error "SF7 needs the offline study architecture and field weather settings"
@@ -1288,6 +1291,8 @@ void setup() {
   Serial.printf("[STUDY-SF] started=%u; V003 OFFLINE STORAGE BENCH; WIFI=DISABLED\n",unsigned(sfStarted));
 #elif THESIS_STUDY_SF_SYNC_V003 == 1
   Serial.printf("[STUDY-SF] started=%u; V003 LOCAL HTTPS SYNC BENCH\n",unsigned(sfStarted));
+#elif THESIS_STUDY_SF_CLOUD == 1
+  Serial.printf("[STUDY-SF] started=%u; UNIVERSAL CLOUD CANDIDATE node=%lu; private config controls Wi-Fi\n",unsigned(sfStarted),(unsigned long)VesselIdentity::nodeId());
 #elif THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
   Serial.printf("[STUDY-SF] started=%u; UNIVERSAL OFFLINE node=%lu; WIFI=DISABLED\n",unsigned(sfStarted),(unsigned long)VesselIdentity::nodeId());
 #else

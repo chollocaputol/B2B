@@ -37,3 +37,4 @@ __pycache__/
 
 # Private DTN bench configuration (never commit)
 study_sf_local_config.generated.h
+study_sf_cloud_config.generated.h

@@ -65,3 +65,56 @@ live I4B `thesis-dtn-i4b-fc698ec03bde.txt`
 The I5 summaries and I6 R3 recovery summary, private flash/readback and
 request/response evidence stay outside Git. No credential, private SD record,
 coordinate, raw NVS, key or firmware artifact is included in this record.
+
+## CLOUD4 hosted sync (functional bench acceptance)
+
+`tbeam-supreme-universal-study-cloud` inherits the same universal study
+profile and NVS identity, SD journal, SOS_ARMED/CONTINUOUS modes, LoRa and
+weather path. Offline profile is unchanged. Optional ignored
+`study_sf_cloud_config.generated.h` contains one device's own login, Wi-Fi
+and publishable key; no privileged key. Missing/mismatched config leaves
+SD recording active and Wi-Fi off. Private images are device-specific in
+configuration only, not source/profile; protect them as credentials.
+The worker uses verified TLS (ESP-IDF certificate bundle), time acquisition,
+password sign-in on reconnect or expiry, RAM-only bearer, 30s auth retry,
+and the unchanged journal/receipt contract. No new server or SD format.
+Compile and physical tests must pass before release; no lossless or
+flash-extraction protection claim. The eight-record queue remains bounded.
+
+## CLOUD4 bench acceptance — 26 November 2026
+
+CLOUD1 deployed migration `20261125213233_cloud1_secure_legacy_and_study_sf`,
+secured the five retained legacy tables and registered prototype nodes 2/3.
+CLOUD2 deployed the existing authenticated ingestion function, verified real
+hosted Auth, role isolation, exact receipts, duplicate and conflict handling.
+CLOUD3 published the authenticated Netlify study dashboard; public demo is
+separate. Hosted database and frontend commits are ancestors of this change.
+CLOUD4A compiled both profiles; source contracts passed 19/19 and 33/33 and
+native session policy passed. Offline recovery build flash differed by 16
+bytes from the original; no binary-equivalence claim. Private V002/V003
+cloud builds each used 105380 RAM and 1484876 flash bytes (reported static
+usage), verified app-only readback and preserved the prefix/NVS before boot.
+Both enrolled devices authenticated and uploaded to hosted Supabase without
+a laptop gateway. V003 recovered from HTTP 403 by fresh authentication;
+the cause of that response is unknown. Physical restart replay returned
+exact duplicate receipts. V003 stored two GPS no-fix records before Wi-Fi
+returned and one invalid-weather record afterward, then delivered all three
+after restart. Latest V003 transcript: 27 confirmed batches, 58 accepted
+and 50 duplicate identities; all 108 identities matched hosted PostgreSQL.
+V002's two receipt identities also matched. Last verified hosted snapshot:
+113 rows, including 1 excluded known synthetic fixture; 112 non-fixture
+bench records (V002:2, V003:110). This is not complete-card accounting.
+Netlify displayed both recording vessels and actual synchronized history;
+missing sensor/GPS values remained unavailable and live LoRa link unknown.
+Local research database last verified 266 rows; it was not changed here.
+
+Keep credentials and generated headers, ELF/BIN files, raw NVS, flash
+backups and serial evidence private. Same firmware source/profile for both
+nodes; private device-specific credentials are compiled in, not a common
+binary. No privileged key or new enrollment path. Physical credential
+extraction resistance, long-offline token lifetime trial, Wi-Fi retry energy,
+full-card loss accounting, sustained concurrent capture/upload, field
+accuracy, endurance and multihop remain unverified. Wi-Fi retries may emit
+ESP_ERR_WIFI_STATE; reconnection succeeded in the observed trial. Restart
+replays earlier files because the cursor is RAM-only; no automatic deletion.
+Do not mix power optimization or other unrelated improvements into CLOUD4.

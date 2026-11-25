@@ -21,6 +21,8 @@ bool usable(const StudyConfig& c){return c.authorized&&c.ssid&&*c.ssid&&c.passwo
 bool storageUsable(const StudyConfig& c){
 #if THESIS_STUDY_SF_OFFLINE_V003 == 1
  return true;
+#elif THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+ return true;
 #else
  return usable(c);
 #endif
@@ -43,7 +45,7 @@ void studyWorker(void* opaque){
  static EspMount mount;static StudySF::Journal journal;
  if(!mount.mount()||!journal.begin(mount.root(),studyNode,studyBoot)){Serial.println("[STUDY-SF] STORAGE_START_FAILED; no durability claim");vTaskDelete(nullptr);return;}
  studyStorageReady.store(true);
-#if THESIS_STUDY_SF_OFFLINE_V003 == 1
+#if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
  Serial.printf("[STUDY-SF] OFFLINE_READY node=%lu path=/sd/study_sf/v%04lu/%s.jsonl; WIFI=DISABLED\n",(unsigned long)studyNode,(unsigned long)studyNode,studyBoot);
  // Read at most one existing batch on boot, without acknowledging or uploading it.
  // This is evidence of a readable retained prefix, not a full-card audit.
@@ -58,12 +60,12 @@ void studyWorker(void* opaque){
 #endif
  for(;;){StudySF::Record record{};
   if(xQueueReceive(studyQueue,&record,0)==pdTRUE){if(!journal.append(record)){studyStorageReady.store(false);Serial.println("[STUDY-SF] STORAGE_WRITE_FAILED; STOP; review retained files");vTaskDelete(nullptr);return;}Serial.println("[STUDY-SF] APPEND_CHECKED");
-#if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_SYNC_V003 == 1
+#if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_SYNC_V003 == 1 || THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
   // Exact appended/read-back-checked record, for local serial evidence only.
   Serial.printf("[STUDY-SF] STORED %s\n",record.line);
 #endif
   }
-#if THESIS_STUDY_SF_OFFLINE_V003 != 1
+#if THESIS_STUDY_SF_OFFLINE_V003 != 1 && THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1
   const uint32_t now=millis();
   if(!syncStopped){
    if(WiFi.status()!=WL_CONNECTED){if(online){online=false;Serial.println("[STUDY-SF] WIFI_DISCONNECTED; retaining records");}if(!netStarted||uint32_t(now-lastConnect)>=30000U){netStarted=true;lastConnect=now;WiFi.persistent(false);WiFi.mode(WIFI_STA);WiFi.begin(c.ssid,c.password);}}

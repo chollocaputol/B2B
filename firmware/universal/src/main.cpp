@@ -418,6 +418,17 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #endif
 #include "weather_manager.h"
 #include "study_sf_target.h"
+#ifndef THESIS_STUDY_SF_UNIVERSAL_OFFLINE
+#define THESIS_STUDY_SF_UNIVERSAL_OFFLINE 0
+#endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 0 && THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1
+#error "Invalid SF7 universal offline flag"
+#endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+#if THESIS_STUDY_SF_BUILD_ONLY != 1 || THESIS_DTN_F25A_BUILD_ONLY != 1 || THESIS_STUDY_SF_OFFLINE_V003 || THESIS_STUDY_SF_SYNC_V003 || THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || THESIS_V003_F10_MICRO_NOWCAST != 1 || THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || WEATHER_FAST_TEST != 0
+#error "SF7 needs the offline study architecture and field weather settings"
+#endif
+#endif
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
 #include "v003_f10_micro_nowcast.h"
 static_assert(!PhysicalIndicators::kOutputsEnabled &&
@@ -534,6 +545,9 @@ static uint32_t nextTelemetryIntervalMs() {
 // DEVELOPMENT ONLY: set to 0 for real 10-minute sampling before field use.
 #ifndef WEATHER_FAST_TEST
 #define WEATHER_FAST_TEST 1
+#endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1 && WEATHER_FAST_TEST != 0
+#error "SF7 requires actual ten-minute weather history"
 #endif
 const unsigned long WEATHER_INTERVAL = WEATHER_FAST_TEST ? 5000UL : 600000UL;
 const unsigned long GPS_STATUS_INTERVAL = 5000UL;
@@ -1097,6 +1111,11 @@ void setup() {
   f09SensorAuthorized = F22UniversalCapability::validIdentity(
       VesselIdentity::ready(), VesselIdentity::nodeId());
 #endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+  // SF7: explicitly selected shared-wiring profile, same NVS policy for all IDs.
+  f09SensorAuthorized = F22UniversalCapability::validIdentity(
+      VesselIdentity::ready(), VesselIdentity::nodeId());
+#endif
 #if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
   // Override the legacy ID3-only rule in the separate BUILD-ONLY preview.
   // Operator MUST confirm physical SDA21/SCL48 standard wiring before flashing.
@@ -1111,7 +1130,9 @@ void setup() {
   } else {
     weatherInputsValid = false;
     weatherState = WEATHER_CALIBRATING;
-#if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+    Serial.println("[SF7] SENSOR ACCESS BLOCKED: invalid/unprovisioned identity");
+#elif THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
     Serial.println("[F22R3A-PREVIEW] SENSOR ACCESS BLOCKED: invalid/unprovisioned identity");
 #else
     Serial.println("[F09-I2C] SENSOR ACCESS BLOCKED: requires Vessel-003");
@@ -1256,6 +1277,8 @@ void setup() {
   if(thesisStudySfConfigured() && VesselIdentity::ready() &&
 #if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_SYNC_V003 == 1
      VesselIdentity::nodeId()==3U &&
+#elif THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+     f09SensorAuthorized &&
 #endif
      pmu.setBLDO1Voltage(3300)) {
     pmu.enableBLDO1();delay(200);
@@ -1265,6 +1288,8 @@ void setup() {
   Serial.printf("[STUDY-SF] started=%u; V003 OFFLINE STORAGE BENCH; WIFI=DISABLED\n",unsigned(sfStarted));
 #elif THESIS_STUDY_SF_SYNC_V003 == 1
   Serial.printf("[STUDY-SF] started=%u; V003 LOCAL HTTPS SYNC BENCH\n",unsigned(sfStarted));
+#elif THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+  Serial.printf("[STUDY-SF] started=%u; UNIVERSAL OFFLINE node=%lu; WIFI=DISABLED\n",unsigned(sfStarted),(unsigned long)VesselIdentity::nodeId());
 #else
   Serial.printf("[STUDY-SF] started=%u; build-only; no hardware grant\n",unsigned(sfStarted));
 #endif
@@ -1282,7 +1307,7 @@ void setup() {
 
   lastWeatherTime = millis();
 #if THESIS_V003_F12_INDICATOR_PREVIEW == 1
-#if THESIS_F22_FLEET_OPERATIONAL == 1
+#if THESIS_F22_FLEET_OPERATIONAL == 1 || THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
   f12IndicatorPreview.begin(f09SensorAuthorized &&
       F22UniversalCapability::validIdentity(VesselIdentity::ready(),VesselIdentity::nodeId()));
 #else
@@ -1299,7 +1324,7 @@ void setup() {
   // software-only; physical outputs need a dedicated explicit LIVE profile.
   f13RailEnableBitCached = pmu.isEnableBLDO2();
   f13LastRailPollMs = millis();
-#if THESIS_F22_FLEET_OPERATIONAL == 1
+#if THESIS_F22_FLEET_OPERATIONAL == 1 || THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
   f13Indicators.begin(f09SensorAuthorized &&
       F22UniversalCapability::validIdentity(VesselIdentity::ready(),VesselIdentity::nodeId()),
       f13RailEnableBitCached);

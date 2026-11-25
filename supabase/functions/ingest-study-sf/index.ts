@@ -1,4 +1,4 @@
-// LOCAL STUDY CANDIDATE ONLY. Do not deploy. Default denial unless explicitly configured.
+// Approved hosted thesis project or explicitly enabled isolated local lab.
 // Use the built-in HTTP client so the offline worker needs no external npm modules.
 import { handleStudySf } from '../_shared/study_sf_http.ts';
 const object = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -6,7 +6,9 @@ Deno.serve(async req => {
   const url = Deno.env.get('SUPABASE_URL');
   const publicKey = Deno.env.get('SUPABASE_ANON_KEY');
   const adminKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (Deno.env.get('THESIS_SF_LOCAL_LAB') !== '1' || url !== 'http://kong:8000' || !publicKey || !adminKey || publicKey === adminKey)
+  if (!url || !(url === 'https://twqumqiplqqfhixjvxeo.supabase.co' ||
+      (url === 'http://kong:8000' && Deno.env.get('THESIS_SF_LOCAL_LAB') === '1')) ||
+      !publicKey || !adminKey || publicKey === adminKey)
     return Response.json({error:'study_lab_disabled'},{status:503});
   return handleStudySf(req, {
     getRecorder: async token => {
@@ -19,7 +21,7 @@ Deno.serve(async req => {
       const user: unknown = await res.json();
       if (!object(user) || typeof user.id !== 'string' || !user.id) throw new Error('Invalid Auth response');
       // Only server-managed metadata authorizes a device. Never trust user_metadata.
-      if (!object(user.app_metadata) || user.app_metadata.thesis_study_device !== true) return null;
+      if (!object(user.app_metadata) || user.app_metadata.thesis_study_device !== true || user.app_metadata.thesis_study_reviewer === true) return null;
       const node = user.app_metadata.thesis_node_id;
       return typeof node === 'number' && Number.isInteger(node) && node >= 1 && node <= 9999 ? node : null;
     },

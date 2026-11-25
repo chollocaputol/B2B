@@ -933,6 +933,9 @@ bool pollSDExportCommand() {
     int c = Serial.read();
     if (c == '\n' || c == '\r') {
       command[used] = '\0';
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+      Serial.println("[STUDY-SF] LEGACY_SD_COMMAND_DISABLED");
+#else
       if (strcmp(command, "SD EXPORT") == 0) {
 #if THESIS_F06_SD_SANDBOX == 1
         if (ThesisSDLogger::historyReadActive())
@@ -948,6 +951,7 @@ bool pollSDExportCommand() {
         ThesisSDLogger::requestHistory(command + 8);
 #endif
       else Serial.println("[SDX] ERROR UNKNOWN_COMMAND");
+#endif
       used = 0;
       return true;
     }
@@ -1247,13 +1251,24 @@ void setup() {
 #endif
 
 #if THESIS_STUDY_SF_BUILD_ONLY == 1
-  // Build-only config is permanently unavailable; never power/mount or start Wi-Fi here.
+  // Original build-only profile remains denied. The new bench profile is V003-only.
   bool sfStarted=false;
-  if(thesisStudySfConfigured() && VesselIdentity::ready() && pmu.setBLDO1Voltage(3300)) {
+  if(thesisStudySfConfigured() && VesselIdentity::ready() &&
+#if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_SYNC_V003 == 1
+     VesselIdentity::nodeId()==3U &&
+#endif
+     pmu.setBLDO1Voltage(3300)) {
     pmu.enableBLDO1();delay(200);
     if(pmu.isEnableBLDO1()) {pinMode(34,OUTPUT);digitalWrite(34,HIGH);sfStarted=thesisStudySfStart(VesselIdentity::nodeId());}
   }
+#if THESIS_STUDY_SF_OFFLINE_V003 == 1
+  Serial.printf("[STUDY-SF] started=%u; V003 OFFLINE STORAGE BENCH; WIFI=DISABLED\n",unsigned(sfStarted));
+#elif THESIS_STUDY_SF_SYNC_V003 == 1
+  Serial.printf("[STUDY-SF] started=%u; V003 LOCAL HTTPS SYNC BENCH\n",unsigned(sfStarted));
+#else
   Serial.printf("[STUDY-SF] started=%u; build-only; no hardware grant\n",unsigned(sfStarted));
+#endif
+  Serial.println("[STUDY-SF] RECORD_MODE=SOS_ARMED; VOLATILE=1; ROUTINE=OFF");
 #endif
 
   // Each boot receives a different first telemetry slot. Subsequent intervals
@@ -2100,9 +2115,15 @@ void handleOLEDButton() {
         // Mode submenu: TAP moves, HOLD confirms. BACK returns to SD menu.
         if (duration >= BUTTON_LONG_PRESS_MS) {
           if (sdHybridMenuCursor < 2) {
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+            thesisStudySfSetContinuous(sdHybridMenuCursor == 1);
+            Serial.printf("[STUDY-SF] RECORD_MODE=%s; VOLATILE=1\n",
+                thesisStudySfIsContinuous() ? "CONTINUOUS" : "SOS_ARMED");
+#else
             ThesisSDLogger::hybridSetContinuous(sdHybridMenuCursor == 1);
             Serial.printf("[OLED-SD] MODE_CONFIRMED=%s\n",
                 sdHybridMenuCursor == 1 ? "CONTINUOUS" : "SOS_ARMED");
+#endif
             sdOLEDSubview = 0;
           } else {
             sdStorageMenuOpen = true;
@@ -2131,7 +2152,11 @@ void handleOLEDButton() {
             case 2:
               sdStorageMenuOpen = false;
               sdHybridMenuOpen = true;
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+              sdHybridMenuCursor = thesisStudySfIsContinuous() ? 1 : 0;
+#else
               sdHybridMenuCursor = ThesisSDLogger::hybridIsContinuous() ? 1 : 0;
+#endif
               Serial.println("[OLED-SD] MODE_MENU_OPEN");
               break;
             default:
@@ -3363,6 +3388,13 @@ void oledSDStoragePage() {
   if (sdOLEDSubview == 0) {
     u8g2.drawStr(0, 9, "SD STORAGE 8/8");
 #if THESIS_F06_SD_HYBRID == 1
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    const bool ready=thesisStudySfStorageReady();
+    u8g2.drawStr(0,20,ready ? "CARD: MOUNTED" : "CARD: NOT READY");
+    u8g2.drawStr(0,30,thesisStudySfIsContinuous() ? "MODE: CONTINUOUS" : "MODE: SOS ARMED");
+    u8g2.drawStr(0,41,!ready ? "REC: UNAVAILABLE" : thesisStudySfIsContinuous() ? "REC: CONTINUOUS" : "REC: SOS/CANCEL");
+    u8g2.drawStr(0,52,"FOLDER: STUDY_SF");
+#else
     u8g2.drawStr(0, 20, ThesisSDLogger::ready ? "CARD: MOUNTED" : "CARD: NOT READY");
     u8g2.drawStr(0, 30, ThesisSDLogger::hybridIsContinuous()
         ? "MODE: CONTINUOUS" : "MODE: SOS ARMED");
@@ -3373,6 +3405,7 @@ void oledSDStoragePage() {
     const char* slash = strrchr(ThesisSDLogger::DIRECTORY, '/');
     snprintf(line, sizeof(line), "FOLDER: %.12s", slash ? slash + 1 : "UNKNOWN");
     u8g2.drawStr(0, 52, line);
+#endif
 #else
     u8g2.drawStr(0, 20, ThesisSDLogger::ready ? "CARD: LOGGING" : "CARD: NOT READY");
 #if THESIS_F06_SD_SANDBOX == 1
@@ -3396,6 +3429,12 @@ void oledSDStoragePage() {
 #endif
   } else if (sdOLEDSubview == 1) {
     u8g2.drawStr(0, 9, "SD JOURNALS 8/8");
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    u8g2.drawStr(0,21,"STUDY JSONL FILES");
+    u8g2.drawStr(0,33,thesisStudySfStorageReady() ? "STORAGE READY" : "STORAGE NOT READY");
+    u8g2.drawStr(0,44,"NO LEGACY COUNTERS");
+    u8g2.drawStr(0,55,"NO FILE DELETION");
+#else
     if (ThesisSDLogger::oledAuditValid) {
       snprintf(line, sizeof(line), "TLM: %llu B",
         (unsigned long long)ThesisSDLogger::oledTelemetryBytes);
@@ -3420,6 +3459,7 @@ void oledSDStoragePage() {
       (unsigned long)ThesisSDLogger::lostUrgent,
       (unsigned long)ThesisSDLogger::lostTelemetry);
     u8g2.drawStr(0, 55, line);
+#endif
 #if THESIS_F06_SD_HYBRID == 1
     u8g2.drawStr(0, 64, "HOLD:MENU TAP:NEXT");
 #else
@@ -3427,7 +3467,11 @@ void oledSDStoragePage() {
 #endif
   } else {
     u8g2.drawStr(0, 9, "SD USB READBACK 8/8");
-#if THESIS_V003_F16_SD_OLED_HYBRID == 1
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    u8g2.drawStr(0,21,"STUDY JSONL");
+    u8g2.drawStr(0,33,"USB READBACK OFF");
+    u8g2.drawStr(0,45,"SYNC PROFILE: CSV");
+#elif THESIS_V003_F16_SD_OLED_HYBRID == 1
     // F19R2 adds bounded V003 history, while F16 retains the old
     // active-session-only export view.
 #if THESIS_V003_F19_DUAL_DISPLAY == 1

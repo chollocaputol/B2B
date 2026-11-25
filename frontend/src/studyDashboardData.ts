@@ -29,3 +29,27 @@ export function studyCsv(rows:Row[]):string {
  const quote=(v:unknown)=>'"'+String(v??'').replace(/"/g,'""')+'"';
  return ['recorder_node_id,record_id,kind,captured_at_utc,synced_at_utc,uptime_ms,record_json',...rows.map(r=>[r.recorder_node_id,r.record_id,r.record_json.kind,r.record_json.captured_at,r.synced_at,r.record_json.uptime_ms,JSON.stringify(r.record_json)].map(quote).join(','))].join('\n');
 }
+
+// Exact fixture identities from the six accepted request fixtures (local lab only).
+// This is exclusion of known fixtures, not authentication of every other record.
+const knownFixtureIds = new Set([
+ ...Array.from({length:40},(_,i)=>`3/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:${i+1}`),
+ ...Array.from({length:8},(_,i)=>`3/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:${i+1}`),
+]);
+export function excludeKnownFixtures(rows:Row[]) {
+ const verified=projectStudy(rows).records;
+ const records=verified.filter(r=>!knownFixtureIds.has(`${r.recorder_node_id}/${r.record_id}`));
+ return {records,excluded:verified.length-records.length};
+}
+// Newest known capture first; unknown times last. Receipt time is only a
+// secondary display ordering, never an invented capture time.
+export function orderStudyHistory(rows:Row[]):Row[] {
+ return [...rows].sort((a,b)=>{
+  const ta=capture(a),tb=capture(b),ka=Number.isFinite(ta),kb=Number.isFinite(tb);
+  if(ka!==kb)return ka?-1:1;
+  if(ka&&kb&&ta!==tb)return tb-ta;
+  const ra=Date.parse(a.synced_at),rb=Date.parse(b.synced_at);
+  if(Number.isFinite(ra)&&Number.isFinite(rb)&&ra!==rb)return rb-ra;
+  return a.recorder_node_id-b.recorder_node_id||a.record_id.localeCompare(b.record_id);
+ });
+}

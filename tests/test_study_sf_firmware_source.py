@@ -8,7 +8,8 @@ cfg=configparser.ConfigParser(interpolation=None);cfg.read_string(read('firmware
  '-D THESIS_STUDY_SF_BUILD_ONLY=1' in env['build_flags'],
  'const StudyConfig studyConfig{false,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr}' in t,
  'if(!thesisStudySfConfigured()||studyQueue' in t,
- 'if(!config||!usable(*config))' in t,
+ 'if(!config||!storageUsable(*config))' in t,
+ 'return usable(c);' in t and '#if THESIS_STUDY_SF_OFFLINE_V003 == 1\n return true;' in t,
  'thesisStudySfConfigured() && VesselIdentity::ready()' in m,
  'static EspMount mount;static StudySF::Journal journal;' in t,
  'kSdHost=SPI3_HOST' in b,
@@ -28,6 +29,14 @@ cfg=configparser.ConfigParser(interpolation=None);cfg.read_string(read('firmware
  all(x not in j for x in ['remove(', 'unlink(', 'rename(', 'truncate(']),
  'thesis_study_sf_link_anchor' in t,
  'setInsecure' not in t and 'service_role' not in t,
+ '-D THESIS_STUDY_SF_OFFLINE_V003=1' in cfg['env:tbeam-supreme-study-sf-v003-offline-bench']['build_flags'],
+ '-D THESIS_STUDY_SF_SYNC_V003=1' in cfg['env:tbeam-supreme-study-sf-v003-sync-bench']['build_flags'],
+ '#include "study_sf_local_config.generated.h"' in t and 'if(node!=3U)return false;' in t,
+ 'std::atomic<bool> studyContinuous{false};' in t,
+ all('if(!thesisStudySfIsContinuous())return false;' in t.split('bool thesisStudySf'+name+'(',1)[1].split('}',1)[0] for name in ('Weather','Gps')),
+ 'thesisStudySfIsContinuous' not in t.split('bool thesisStudySfControl(',1)[1],
+ 'cfg.buffer_size_tx=4096' in t,
+ 'thesisStudySfSetContinuous(sdHybridMenuCursor == 1)' in m,
  ]
 for i,c in enumerate(checks,1): assert c,f'Study SF source check {i}'
-print(f'STUDY SF firmware source PASS: {len(checks)} checks; build-only, hardware not authorized')
+print(f'STUDY SF firmware source PASS: {len(checks)} checks; source contracts only, not deployment authorization')

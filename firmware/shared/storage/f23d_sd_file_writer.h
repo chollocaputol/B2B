@@ -1,6 +1,17 @@
 #pragma once
 // Included inside ThesisSDLogger: reuses its authorized, mounted F06 owner.
 // Actual implementation is also compiled against a mock SD/File API.
+// F24Q names this writer's four SD volume entrypoints through the owning
+// logger facade; ordinary/F23D-only host builds retain the SD default.
+// File-handle methods are NOT globally interposed by this macro.
+#ifndef F23D_SD_FILE_TYPE
+#define F23D_SD_FILE_TYPE File
+#define F23D_SD_FILE_TYPE_DEFAULTED 1
+#endif
+#ifndef F23D_SD_ACCESS
+#define F23D_SD_ACCESS SD
+#define F23D_SD_ACCESS_DEFAULTED 1
+#endif
 class F23DSDFileWriter {
 public:
  bool begin(const char* directory,uint32_t local) {
@@ -9,10 +20,10 @@ public:
   const size_t prefix=strlen(root);
   if(strncmp(directory,root,prefix) || !F23DSD::sessionValid(directory+prefix))return false;
   const int n=snprintf(path_,sizeof(path_),"%s/f23d_multihop.jsonl",directory);
-  if(n<=0 || size_t(n)>=sizeof(path_) || SD.exists(path_))return false;
+  if(n<=0 || size_t(n)>=sizeof(path_) || F23D_SD_ACCESS.exists(path_))return false;
   // This file belongs exclusively to the newly allocated boot session.
   // Never reopen an existing file for writing, truncate, repair or retry.
-  file_=SD.open(path_,FILE_APPEND);
+  file_=F23D_SD_ACCESS.open(path_,FILE_APPEND);
   if(!file_ || file_.size()!=0){if(file_)file_.close();return false;}
   return true;
  }
@@ -20,7 +31,7 @@ public:
   if(!file_ || length>F23DSD::Journal::kLine || verifying_)return false;
   if(file_.write(reinterpret_cast<const uint8_t*>(bytes),length)!=length)return false;
   file_.flush();if(file_.getWriteError())return false;
-  File readback=SD.open(path_,FILE_READ);
+  F23D_SD_FILE_TYPE readback=F23D_SD_ACCESS.open(path_,FILE_READ);
   if(!readback || readback.size()!=written_+length || !readback.seek(written_)){if(readback)readback.close();return false;}
   char chunk[64];size_t at=0;
   while(at<length){
@@ -36,7 +47,7 @@ public:
   if(!verifying_){
    if(!file_)return F23DSD::Finish::Failed;
    file_.flush();if(file_.getWriteError())return F23DSD::Finish::Failed;
-   file_.close();verification_=SD.open(path_,FILE_READ);verifying_=true;
+   file_.close();verification_=F23D_SD_ACCESS.open(path_,FILE_READ);verifying_=true;
    if(!verification_ || verification_.size()!=written_)return F23DSD::Finish::Failed;
   }
   uint8_t chunk[64];size_t n=written_-checked_;if(n>sizeof(chunk))n=sizeof(chunk);
@@ -50,8 +61,18 @@ public:
  }
  const char* path()const{return path_;}
 private:
- File file_,verification_;
+ F23D_SD_FILE_TYPE file_,verification_;
  char path_[F23DSD::Journal::kPath]{};
  uint32_t written_=0,checked_=0,expectedHash_=2166136261UL,actualHash_=2166136261UL;
  bool verifying_=false;
 };
+
+#ifdef F23D_SD_ACCESS_DEFAULTED
+#undef F23D_SD_ACCESS
+#undef F23D_SD_ACCESS_DEFAULTED
+#endif
+
+#ifdef F23D_SD_FILE_TYPE_DEFAULTED
+#undef F23D_SD_FILE_TYPE
+#undef F23D_SD_FILE_TYPE_DEFAULTED
+#endif

@@ -1,0 +1,26 @@
+// Run only against the fresh isolated loopback lab, never hosted Supabase.
+import assert from 'node:assert/strict';import {readFileSync,writeFileSync} from 'node:fs';import {join} from 'node:path';import {randomUUID} from 'node:crypto';import {projectStudy} from '../frontend/src/studySf.ts';
+const base='http://127.0.0.1:54321',anon=process.env.SF_LOCAL_ANON,admin=process.env.SF_LOCAL_SERVICE,root=process.env.SF_FIXTURES,loginFile=process.env.SF_REVIEW_LOGIN;
+assert.ok(anon&&admin&&root&&loginFile&&process.env.SF_LOCAL_ONLY==='1');
+async function req(path,method='GET',token=anon,body,apikey=anon){const r=await fetch(base+path,{method,redirect:'error',signal:AbortSignal.timeout(30000),headers:{apikey,authorization:`Bearer ${token}`,'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});let data;try{data=await r.json()}catch{data=null}return {status:r.status,data};}
+function status(r,want,tag){if(!want.includes(r.status)){const known=['study_lab_disabled','auth_unavailable','store_unavailable','invalid_storage_confirmation','device_not_authorized','invalid_batch','record_identity_conflict','device_auth_required'];const code=known.includes(r.data?.error)?r.data.error:'unclassified';throw Error(`${tag}: HTTP ${r.status}, expected ${want.join('/')} CLASS=${code}`);}return r.data;}
+async function account(role,app_metadata,user_metadata={}){const email=`sf-${role}-${randomUUID()}@example.test`,password=`Sf!${randomUUID()}9`;
+ status(await req('/auth/v1/admin/users','POST',admin,{email,password,email_confirm:true,app_metadata,user_metadata},admin),[200,201],`create ${role}`);
+ const data=status(await req('/auth/v1/token?grant_type=password','POST',anon,{email,password}),[200],`sign in ${role}`);assert.ok(data.access_token);return {email,password,token:data.access_token};}
+async function main(){
+ const d=await account('device',{thesis_study_device:true,thesis_node_id:3}),r=await account('reviewer',{thesis_study_reviewer:true}),u=await account('untrusted',{}, {thesis_study_device:true,thesis_node_id:3,thesis_study_reviewer:true});console.log('PASS real Auth sign-ins: device, reviewer, untrusted user');
+ const batches=Array.from({length:6},(_,i)=>JSON.parse(readFileSync(join(root,`request${i}.json`),'utf8'))),expected=batches.flatMap(x=>x.records),edge='/functions/v1/ingest-study-sf',table='/rest/v1/study_sf_records?select=recorder_node_id,record_id,record_json,synced_at&order=recorder_node_id,record_id';
+ const upload=(token,b)=>req(edge,'POST',token,b);
+ status(await upload('invalid',batches[0]),[401,403],'invalid JWT');status(await upload(u.token,batches[0]),[403],'user metadata spoof');status(await upload(r.token,batches[0]),[403],'reviewer upload');const wrong=structuredClone(batches[0]);wrong.records[0].recorder_node_id=2;status(await upload(d.token,wrong),[422],'wrong recorder');console.log('PASS auth and recorder rejection');
+ // Reverse each first submission so CANCEL is received before SOS; verify ordered confirmations.
+ for(const batch of batches){batch.records.reverse();for(const retry of [false,true]){const a=status(await upload(d.token,batch),[200],retry?'duplicate':'new batch');assert.equal(a.batch_id,batch.batch_id);assert.equal(a.recorder_node_id,3);assert.deepEqual(a.records,batch.records.map(x=>({record_id:x.record_id,status:retry?'duplicate':'accepted'})));}}
+ console.log('PASS actual Edge + database: 48 accepted, 48 identical duplicates');
+ const conflict=structuredClone(batches[0]);conflict.records=[{...expected[0],record_id:`${randomUUID()}:1`},{...expected[0],payload:{...expected[0].payload,temperature_c:30}}];status(await upload(d.token,conflict),[409],'conflict rollback');
+ const rows=status(await req(table,'GET',r.token),[200],'reviewer read');assert.equal(rows.length,48);for(const x of expected){const found=rows.find(y=>y.record_id===x.record_id&&y.recorder_node_id===x.recorder_node_id);assert.deepEqual(found?.record_json,x)}
+ for(const token of [d.token,u.token])assert.deepEqual(status(await req(table,'GET',token),[200],'RLS denied read'),[]);
+ status(await req(table,'GET',anon),[401,403],'anonymous read');status(await req('/rest/v1/study_sf_records','POST',r.token,{recorder_node_id:3,record_id:expected[0].record_id,record_json:expected[0]}),[401,403],'reviewer direct write');status(await req('/rest/v1/rpc/study_sf_ingest','POST',d.token,{p_recorder:3,p_records:[expected[0]]}),[401,403,404],'direct RPC');
+ const projected=projectStudy(rows);assert.equal(projected.weather.length,12);assert.equal(projected.gps.length,12);assert.equal(projected.events.length,10);assert.ok(projected.events.every(e=>e.state==='Cancellation observed'));console.log('PASS real read/RLS: exact 48 rows; 12 weather, 12 GPS, 12 SOS + 12 CANCEL across 10 events; cancellation dominance; conflict rollback');
+ // Separate local login file. Never print credentials or include it in evidence.
+ writeFileSync(loginFile,JSON.stringify({email:r.email,password:r.password},null,2),{flag:'wx'});console.log('STUDY SF ACTUAL LOCAL EDGE AUTH RLS PROJECTION PASS; SYNTHETIC RECORDS ONLY');
+}
+main().catch(e=>{console.error('STOP: local integration failed ('+(e instanceof Error?e.name:'unknown')+'). '+(e instanceof Error&&e.message.includes(': HTTP ')?e.message:'Assertion or connection failed; no secrets printed.'));process.exitCode=1});

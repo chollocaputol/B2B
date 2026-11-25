@@ -9,6 +9,94 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+// F24D build-only bridge; default-disabled, never schedules SD access.
+#ifndef THESIS_DTN_F24D_BUILD_ONLY
+#define THESIS_DTN_F24D_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24D_BUILD_ONLY != 0 && THESIS_DTN_F24D_BUILD_ONLY != 1
+#error "F24D preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24D_BUILD_ONLY == 1
+#include "dtn_f24d_arduino_read_port.h"
+#endif
+// F24E: no physical grant and no new SD access in the build-only preview.
+#ifndef THESIS_DTN_F24E_BUILD_ONLY
+#define THESIS_DTN_F24E_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24E_BUILD_ONLY != 0 && THESIS_DTN_F24E_BUILD_ONLY != 1
+#error "F24E build-only flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24E_BUILD_ONLY == 1
+#if THESIS_DTN_F24D_BUILD_ONLY != 1
+#error "F24E preview requires F24D build-only dependency"
+#endif
+#include "dtn_f24e_sd_owner_scheduler.h"
+#endif
+// F24F: compile-only SOS close lease. The default is never authorized.
+#ifndef THESIS_DTN_F24F_BUILD_ONLY
+#define THESIS_DTN_F24F_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24F_BUILD_ONLY != 0 && THESIS_DTN_F24F_BUILD_ONLY != 1
+#error "F24F preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24F_BUILD_ONLY == 1
+#if THESIS_DTN_F24E_BUILD_ONLY != 1
+#error "F24F preview requires F24E build-only scheduler"
+#endif
+#include "dtn_f24f_sos_closed_lease.h"
+#endif
+// F24G: compile-only SOS seal candidate; all physical operations are denied.
+#ifndef THESIS_DTN_F24G_BUILD_ONLY
+#define THESIS_DTN_F24G_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24G_BUILD_ONLY != 0 && THESIS_DTN_F24G_BUILD_ONLY != 1
+#error "F24G preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24G_BUILD_ONLY == 1
+#if THESIS_DTN_F24F_BUILD_ONLY != 1
+#error "F24G preview requires F24F build-only gate"
+#endif
+#include "dtn_f24g_sos_seal.h"
+#endif
+// F24H: writer retirement state model; no real SD-owner port is authorized.
+#ifndef THESIS_DTN_F24H_BUILD_ONLY
+#define THESIS_DTN_F24H_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24H_BUILD_ONLY != 0 && THESIS_DTN_F24H_BUILD_ONLY != 1
+#error "F24H preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24H_BUILD_ONLY == 1
+#if THESIS_DTN_F24G_BUILD_ONLY != 1
+#error "F24H preview requires F24G build-only contract"
+#endif
+#include "dtn_f24h_writer_retirement.h"
+#endif
+// F24I: independent-witness bridge, physical owner absent, deny by default.
+#ifndef THESIS_DTN_F24I_BUILD_ONLY
+#define THESIS_DTN_F24I_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24I_BUILD_ONLY != 0 && THESIS_DTN_F24I_BUILD_ONLY != 1
+#error "F24I preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24I_BUILD_ONLY == 1
+#if THESIS_DTN_F24H_BUILD_ONLY != 1
+#error "F24I preview requires F24H build-only retirement model"
+#endif
+#include "dtn_f24i_sd_owner_bridge.h"
+#endif
+// F24J: host-only arbiter; all existing physical SD paths remain unclaimed.
+#ifndef THESIS_DTN_F24J_BUILD_ONLY
+#define THESIS_DTN_F24J_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24J_BUILD_ONLY != 0 && THESIS_DTN_F24J_BUILD_ONLY != 1
+#error "F24J preview flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24J_BUILD_ONLY == 1
+#if THESIS_DTN_F24I_BUILD_ONLY != 1
+#error "F24J requires F24I deny-only bridge"
+#endif
+#include "dtn_f24j_owner_coordinator.h"
+#endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
 #ifndef THESIS_F22R3C_FAILCLOSED_LOGGER_CONTRACT
@@ -89,14 +177,298 @@
 #endif
 #endif
 
+// F24K: actual ThesisSDLogger SD entrypoints pass through one named facade.
+// Legacy profiles alias SD byte-for-byte. Only the F24K build-only profile
+// selects the permanently denied implementation; other SD owners not covered.
+#ifndef THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY
+#define THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 0 && THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
+#error "Invalid F24K build-only flag"
+#endif
+// F24V: core-aware close ordering and installed-framework source-bound
+// negative tests. NO physical owner and NO implicit destructor guarantee.
+#ifndef THESIS_DTN_F24V_BUILD_ONLY
+#define THESIS_DTN_F24V_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24V_BUILD_ONLY != 0 && THESIS_DTN_F24V_BUILD_ONLY != 1
+#error "Invalid F24V build-only flag"
+#endif
+#if THESIS_DTN_F24V_BUILD_ONLY == 1
+#if THESIS_DTN_F24U_BUILD_ONLY != 1 || THESIS_DTN_F24T_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24S_BUILD_ONLY != 1 || THESIS_DTN_F24R_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24Q_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F06_SD_SANDBOX != 1 || THESIS_F23D_SD_EVIDENCE != 0 || \
+    THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24V requires permanent F24U/T/S/R/Q/K DENY and F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24v_core_close_policy.h"
+static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physical SD");
+#endif
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
+#if THESIS_DTN_F24J_BUILD_ONLY != 1 || THESIS_DTN_F24I_BUILD_ONLY != 1 || THESIS_DTN_F24H_BUILD_ONLY != 1
+#error "F24K requires F24J/I/H build-only model chain"
+#endif
+#if THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0
+#error "F24K forbids physical pilot, F23D independent writer, and fleet SD activation"
+#endif
+#if THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24K requires legacy relay/GPIO outputs off"
+#endif
+#include "dtn_f24k_sd_interposition.h"
+#endif
+// F24M: real firmware SOS packet capture seams, but no authorized SD owner.
+// Only the permanently denied F24K SD profile may activate this build-only
+// preview. Never enable on an operational or F23D physical SD profile.
+#ifndef THESIS_DTN_F24M_BUILD_ONLY
+#define THESIS_DTN_F24M_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24M_BUILD_ONLY != 0 && THESIS_DTN_F24M_BUILD_ONLY != 1
+#error "F24M build-only flag must be zero or one"
+#endif
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_SD_LOGGER != 1
+#error "F24M requires F24K DENY SD, logger enabled, independent F23D writer OFF"
+#endif
+#include "dtn_f24m_sos_packet_store.h"
+#endif
+// F24N: incremental full-frame cold-restart reconstruction in the actual
+// logger main-loop path. Reuses permanently denied F24K/F24M build profile.
+#ifndef THESIS_DTN_F24N_BUILD_ONLY
+#define THESIS_DTN_F24N_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24N_BUILD_ONLY != 0 && THESIS_DTN_F24N_BUILD_ONLY != 1
+#error "F24N build-only flag must be zero or one"
+#endif
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+#if THESIS_DTN_F24M_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F06_SD_SANDBOX != 1
+#error "F24N requires F24M/F24K permanently denied F06 sandbox, F23D OFF"
+#endif
+#include "dtn_f24n_sos_restart_recovery.h"
+#endif
+// F24O: owner-bound packet/recovery adapter, host-executable and firmware
+// typechecked against a DENY witness; no physical SD permission is installed.
+#ifndef THESIS_DTN_F24O_BUILD_ONLY
+#define THESIS_DTN_F24O_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24O_BUILD_ONLY != 0 && THESIS_DTN_F24O_BUILD_ONLY != 1
+#error "F24O build-only flag must be zero or one"
+#endif
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+#if THESIS_DTN_F24N_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0
+#error "F24O only extends F24N/F24K SD denial; F23D and fleet storage must be OFF"
+#endif
+#include "dtn_f24o_owned_sos_port.h"
+#endif
+// F24Q: source-only cross-writer arbitration model + F23D volume entrypoint
+// naming. NO physical observer or File handle interception is provided.
+#ifndef THESIS_DTN_F24Q_BUILD_ONLY
+#define THESIS_DTN_F24Q_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24Q_BUILD_ONLY != 0 && THESIS_DTN_F24Q_BUILD_ONLY != 1
+#error "Invalid F24Q build-only flag"
+#endif
+#if THESIS_DTN_F24Q_BUILD_ONLY == 1
+#if THESIS_DTN_F24P_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24Q requires F24P/K DENY; F23D, fleet, legacy relay and GPIO OFF"
+#endif
+#include "dtn_f24q_cross_writer_arbiter.h"
+#endif
+// F24R: guard actual retained export/history File methods with an UNGRANTABLE
+// cross-writer lease in this build-only profile. F23D alternate File adapter
+// is host-tested but F23D remains compiled OFF in firmware. No physical grant.
+#ifndef THESIS_DTN_F24R_BUILD_ONLY
+#define THESIS_DTN_F24R_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY != 0 && THESIS_DTN_F24R_BUILD_ONLY != 1
+#error "Invalid F24R build-only flag"
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+#if THESIS_DTN_F24Q_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24R requires F24Q/F24K DENY; F23D, fleet, relay and physical GPIO OFF"
+#endif
+#include "dtn_f24r_guarded_file_port.h"
+#endif
+// F24S: source-scoped guarded short-lived F06 logger File operations.
+// This preview is permanently denied by F24K and F24Q DenyWitness.
+#ifndef THESIS_DTN_F24S_BUILD_ONLY
+#define THESIS_DTN_F24S_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24S_BUILD_ONLY != 0 && THESIS_DTN_F24S_BUILD_ONLY != 1
+#error "Invalid F24S build-only flag"
+#endif
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+#if THESIS_DTN_F24R_BUILD_ONLY != 1 || THESIS_DTN_F24Q_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || \
+    THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_F06_SD_SANDBOX != 1 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24S requires F24R/Q/K DENY + F06 sandbox; F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24s_temporary_logger_files.h"
+#endif
+// F24P: integrate F24N root discovery with the SAME owner-bound F24O port.
+// This is still NOT global physical all-file-handle ownership; the legacy
+// logger and F23D remain separate and the F24K facade permanently denies SD.
+#ifndef THESIS_DTN_F24P_BUILD_ONLY
+#define THESIS_DTN_F24P_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24P_BUILD_ONLY != 0 && THESIS_DTN_F24P_BUILD_ONLY != 1
+#error "Invalid F24P build-only flag"
+#endif
+#if THESIS_DTN_F24P_BUILD_ONLY == 1
+#if THESIS_DTN_F24O_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24P requires F24O/K DENY, F23D/fleet/legacy relay/physical GPIO OFF"
+#endif
+#endif
+// F24T: deny-only, bounded F06 history directory iteration. No real SD grant.
+#ifndef THESIS_DTN_F24T_BUILD_ONLY
+#define THESIS_DTN_F24T_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24T_BUILD_ONLY != 0 && THESIS_DTN_F24T_BUILD_ONLY != 1
+#error "F24T build-only flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24T_BUILD_ONLY == 1
+#if THESIS_DTN_F24S_BUILD_ONLY != 1 || THESIS_DTN_F24R_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24Q_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || \
+    THESIS_F06_SD_SANDBOX != 1 || THESIS_F23D_SD_EVIDENCE != 0 || \
+    THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_LAB_RELAY_TX != 0 || \
+    THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24T requires F24S/R/Q/K deny-only F06, F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24t_history_directory.h"
+#endif
+// F24U: pre-revocation drain is a DENY-only software preview. Its typechecked
+// runtime instance cannot obtain an SD lease or open a physical Arduino File.
+#ifndef THESIS_DTN_F24U_BUILD_ONLY
+#define THESIS_DTN_F24U_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY != 0 && THESIS_DTN_F24U_BUILD_ONLY != 1
+#error "F24U build-only flag must be 0 or 1"
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY == 1
+#if THESIS_DTN_F24T_BUILD_ONLY != 1 || THESIS_DTN_F24S_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24R_BUILD_ONLY != 1 || THESIS_DTN_F24Q_BUILD_ONLY != 1 || \
+    THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F06_SD_SANDBOX != 1 || \
+    THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || \
+    THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24U requires F24T/S/R/Q/K permanent deny and F23D/fleet/relay/GPIO OFF"
+#endif
+#include "dtn_f24u_teardown_coordinator.h"
+#endif
+// F24W: owner-held slot lifecycle preview. No physical backend exists.
+#ifndef THESIS_DTN_F24W_BUILD_ONLY
+#define THESIS_DTN_F24W_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24W_BUILD_ONLY != 0 && THESIS_DTN_F24W_BUILD_ONLY != 1
+#error "Invalid F24W build-only flag"
+#endif
+#if THESIS_DTN_F24W_BUILD_ONLY == 1
+#if THESIS_DTN_F24V_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0 || THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
+#error "F24W requires F24V/K DENY, F23D/fleet/relay/GPIO OFF"
+#endif
+#if defined(THESIS_SD_PROBE) && THESIS_SD_PROBE != 0
+#error "F24W forbids independent SD probe"
+#endif
+#include "dtn_f24w_mount_owner.h"
+#endif
+// F24X: compile the actual SOS writer/replay against the owner-held port.
+#ifndef THESIS_DTN_F24X_BUILD_ONLY
+#define THESIS_DTN_F24X_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24X_BUILD_ONLY != 0 && THESIS_DTN_F24X_BUILD_ONLY != 1
+#error "Invalid F24X build-only flag"
+#endif
+#if THESIS_DTN_F24X_BUILD_ONLY == 1
+#if THESIS_DTN_F24W_BUILD_ONLY != 1 || THESIS_DTN_F24O_BUILD_ONLY != 1 || THESIS_DTN_F24P_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
+#error "F24X requires F24W/O/P/K DENY"
+#endif
+#include "dtn_f24x_owner_sos_port.h"
+#endif
 namespace ThesisSDLogger {
+#if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
+// This object has NO SD backend: no mount, open or physical File handle.
+#if THESIS_DTN_F24W_BUILD_ONLY == 1
+static DTNF24W::DenyMountFacade<File> interposedSD;
+#else
+static DTNF24K::DenySdFacade<File> interposedSD;
+#endif
+#if THESIS_DTN_F24O_BUILD_ONLY == 1 && THESIS_DTN_F25A_BUILD_ONLY != 1
+// Denial is permanent even if the outer port is accidentally requested.
+static const DTNF24O::DenyWitness f24oNoPhysicalWitness{};
+#if THESIS_DTN_F24X_BUILD_ONLY == 1
+static DTNF24X::Port<DTNF24W::DenyMountFacade<File>::OwnerType,DTNF24O::DenyWitness>
+    f24oSosPort(interposedSD.ownerForSos(),f24oNoPhysicalWitness);
+#else
+static DTNF24O::Port<decltype(interposedSD),DTNF24O::DenyWitness>
+    f24oSosPort(interposedSD,f24oNoPhysicalWitness);
+#endif
+static bool f24oBindAttempted=false;
+inline void f24oBindOnce(uint32_t vessel,const char* dir){
+  if(f24oBindAttempted)return;
+  f24oBindAttempted=true;
+  (void)f24oSosPort.bind(vessel,dir); // MUST deny; never retries
+}
+#endif
+#else
+// Preserve existing physical logger behavior for every non-F24K profile.
+// This alias is NOT an exclusive owner, a lease or a replay permission.
+static auto& interposedSD = SD;
+#endif
+#if THESIS_DTN_F24D_BUILD_ONLY == 1
+// Compiler-only seam. Gate always rejects; NO SD.open and no runtime caller.
+struct F24DNoPhysicalPermission {
+  bool allowClosedJournal(const DTNAckLedger::Stream&, const char*) const {return false;}
+};
+using F24DBuildOnlyJob=DTNF24D::Job<DTNF24DArduino::ReadFile,DTNF24DArduino::ReadVolume>;
+inline DTNF24D::Result f24dBuildOnlyDeny(const DTNAckLedger::Stream& stream){
+  DTNF24DArduino::ReadVolume volume;
+  F24DBuildOnlyJob job;
+  F24DNoPhysicalPermission deny;
+  const auto first=job.begin(volume,stream,deny);
+  (void)job.step(deny,true,DTNF24D::kChunkBytes);
+  return first;
+}
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+// This is a real named File-method adapter at the export/history call sites,
+// but a default-denied, zero-owner-lease firmware instance. No File opens.
+static const DTNF24Q::DenyWitness f24rNoPhysicalWitness{};
+static DTNF24Q::Arbiter<DTNF24Q::DenyWitness> f24rNoPhysicalArbiter(f24rNoPhysicalWitness);
+static const DTNF24Q::Lease f24rNoLease{};
+static DTNF24R::GuardedVolume<decltype(interposedSD),DTNF24Q::DenyWitness>
+    f24rLegacyFiles(interposedSD,f24rNoPhysicalArbiter,f24rNoLease);
+using F24RRetainedFile=decltype(f24rLegacyFiles.open((const char*)nullptr,(const char*)nullptr));
+#endif
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+// Independent path allowlisting layered on F24R method checks.
+// This instance has NO physical grant: lease is zero and F24K denies mount.
+static DTNF24S::TemporaryLoggerFiles<decltype(f24rLegacyFiles)> f24sTemporaryFiles(f24rLegacyFiles);
+using F24STemporaryFile=decltype(f24sTemporaryFiles.open((const char*)nullptr,(const char*)nullptr));
+#endif
+#if THESIS_DTN_F24T_BUILD_ONLY == 1
+static DTNF24T::HistoryDirectory<decltype(f24rLegacyFiles)> f24tHistoryDirectory(f24rLegacyFiles);
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY == 1
+// Permanent DenyWitness and zero lease: even begin() must refuse.
+// No physical FileHandle is ever constructed by this instance.
+static DTNF24U::Teardown<decltype(f24rLegacyFiles)> f24uNoGrantTeardown(f24rLegacyFiles);
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
 inline bool f23dStorageFrozen();
 #endif
 // F23D SD end
 
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
 static SPIClass sdSPI(HSPI);
+#endif
 static bool ready = false;
 static uint32_t lastHeartbeat = 0;
 static uint32_t vesselId = 0;
@@ -110,6 +482,147 @@ static char DIAGNOSTICS[64] = "/THESIS/VESSEL_002/diagnostics.jsonl";
 inline bool appendRecord(const char* path, const char* record);
 static char TELEMETRY[64] = "/THESIS/VESSEL_002/telemetry.jsonl";
 static char SOS_EVENTS[64] = "/THESIS/VESSEL_002/sos_events.jsonl";
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+// Actual radio packet ingress -> bounded RAM queue; NO storage in RX/TX path.
+// F24K facade is denied, therefore the preview cannot mount or write a card.
+static DTNF24M::PendingQueue<8> f24mSosCapture;
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
+static DTNF24M::SessionWriter f24mSosJournal;
+#endif
+inline void pollF24MOne(){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
+  if(!ready || !f24mSosCapture.pending() || f24mSosCapture.faulted())return;
+  const DTNF24M::PacketEntry* item=f24mSosCapture.front();
+  if(!item)return;
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+  f24oBindOnce(vesselId,DIRECTORY);
+  auto& selectedSosPort=f24oSosPort;
+#else
+  auto& selectedSosPort=interposedSD;
+#endif
+  if(!f24mSosJournal.appendChecked(selectedSosPort,DIRECTORY,vesselId,*item,
+                                   FILE_APPEND,FILE_READ)){
+    f24mSosCapture.latchStorageFault();
+    Serial.println("[F24M] SOS_PACKET_STORE_UNCONFIRMED; RAM_PENDING; SD_OWNER_DENIED");
+    return;
+  }
+  (void)f24mSosCapture.acknowledgeDurableAppend();
+#endif // F25A legacy path excluded
+}
+#endif
+
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+// A real code path, but unreachable in the only permitted F24N image:
+// F24K's SD.begin() always rejects, hence 'ready' never becomes true.
+// Host tests prove the same Replay object against real disposable files.
+// This is NOT independent media proof, an approved reader lease or RF replay.
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
+static DTNF24N::Replay<32,12> f24nClosedReplay;
+static bool f24nDiscoveryTried=false;
+static bool f24nDiscoveryFailed=false;
+#endif
+inline bool f24nDiscoverClosedSessions(){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return false;
+#else
+  if(f24nDiscoveryTried || !ready)return false;
+  f24nDiscoveryTried=true;
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+  // F24O cannot promote the legacy root directory scanner into an owner.
+  // Until its directory handles are fully interposed, fail closed before
+  // even attempting discovery through interposedSD.
+  f24oBindOnce(vesselId,DIRECTORY);
+  if(!f24oSosPort.bound())return false;
+#endif
+  if(!f24nClosedReplay.begin(vesselId,DIRECTORY))return false;
+  char root[48]{};
+  const int n=snprintf(root,sizeof(root),"/THESIS/F06TEST/V%03lu",
+                       (unsigned long)vesselId);
+  if(n<=0 || size_t(n)>=sizeof(root))return false;
+#if THESIS_DTN_F24P_BUILD_ONLY == 1
+  // F24P uses F24O's same single owner port, not the raw logger File.
+  // DenyWitness makes this unreachable on the board; host tests inject
+  // a synthetic witness and inspect the bounded, read-only traversal.
+  return f24oSosPort.scanClosedSessions(root,FILE_READ,
+    [](const char* session){return f24nClosedReplay.addClosed(session);}) &&
+    f24nClosedReplay.lock();
+#else
+  File folder=interposedSD.open(root,FILE_READ);
+  if(!folder || !folder.isDirectory()){
+    if(folder)folder.close();return false;
+  }
+  bool healthy=true;
+  bool exhausted=false;
+  for(unsigned visited=0;visited<64;++visited){
+    File child=folder.openNextFile();
+    if(!child){exhausted=true;break;}
+    // FS::File.name() can be full path or basename; accept only a complete
+    // eight-character SXXXXXXX session name after extracting the basename.
+    const char* raw=child.name();
+    const char* last=raw?strrchr(raw,'/'):nullptr;
+    const char* name=last?last+1:raw;
+    char candidate[64]{};
+    const bool isDir=child.isDirectory();
+    const bool isSession=isDir && DTNF24M::validSession(name);
+    if(isDir && !isSession)healthy=false; // no silently omitted session dirs
+    if(isSession){
+      const int length=snprintf(candidate,sizeof(candidate),"%s/%s",root,name);
+      if(length<=0 || size_t(length)>=sizeof(candidate))healthy=false;
+    }
+    child.close();
+    if(!healthy)break;
+    if(!isSession)continue; // other F06 research files are not SOS sessions
+    if(strcmp(candidate,DIRECTORY)==0)continue;
+    if(!f24nClosedReplay.addClosed(candidate)){healthy=false;break;}
+  }
+  folder.close();
+  // Never silently omit a 65th directory entry or a prior journal.
+  return exhausted && healthy && f24nClosedReplay.lock();
+#endif // F24P owner-bound session directory traversal
+#endif // F25A legacy path excluded
+}
+// Defined after EventQueue and urgentQueue below; keep urgent SOS priority.
+inline bool f24nUrgentQueuePending();
+inline void pollF24NOne(){
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
+  if(!ready || f24nDiscoveryFailed || f24nClosedReplay.completed() ||
+     f24mSosCapture.pending() || f24nUrgentQueuePending())return;
+  if(!f24nDiscoveryTried){
+    if(!f24nDiscoverClosedSessions()){
+      f24nDiscoveryFailed=true;
+      Serial.println("[F24N] CLOSED_SOS_RECOVERY_DENIED; OWNER_OR_SCAN_UNKNOWN");
+      return;
+    }
+  }
+  // ONE 88-byte SOS frame or 40-byte receipt per poll. All reader handles
+  // close before returning. Without a trusted shore verifier, EVERY stored
+  // receipt remains UNVERIFIED and cannot promote an SOS to delivered.
+#if THESIS_DTN_F24O_BUILD_ONLY == 1
+  f24oBindOnce(vesselId,DIRECTORY);
+  auto& replayPort=f24oSosPort;
+#else
+  auto& replayPort=interposedSD;
+#endif
+  const auto result=f24nClosedReplay.poll(replayPort,FILE_READ,
+                                         DTNF24N::DenyReceiptVerifier{},
+                                         DTNF24N::DenyReadAuthority{});
+  if(result==DTNF24N::Poll::Failed){
+    f24nDiscoveryFailed=true;
+    Serial.println("[F24N] SOURCE_CORRUPT_OR_UNKNOWN; REPLAY_DENIED");
+  }else if(result==DTNF24N::Poll::Completed){
+    Serial.printf("[F24N] HOST-REVIEW-ONLY recovered=%u pending=%u delivered=%u unverified_receipts=%lu physical_permission=NO\n",
+      unsigned(f24nClosedReplay.ledger().count()),
+      unsigned(f24nClosedReplay.ledger().pending()),
+      unsigned(f24nClosedReplay.ledger().delivered()),
+      (unsigned long)f24nClosedReplay.unverified());
+  }
+#endif // F25A legacy path excluded
+}
+#endif
 
 inline bool isAuthorizedVessel(uint32_t id) {
 #if THESIS_F22R3D_FLEET_SD_DRYRUN == 1
@@ -148,6 +661,10 @@ struct EventQueue {
 };
 static EventQueue urgentQueue;
 static EventQueue telemetryQueue;
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+// F24N poll is declared above the queues; inspect only after full declaration.
+inline bool f24nUrgentQueuePending(){ return urgentQueue.count != 0; }
+#endif
 static uint32_t bootToken = 0;
 static uint32_t eventCounter = 0;
 static uint32_t lostUrgent = 0, lostTelemetry = 0;
@@ -428,6 +945,9 @@ inline bool queueMicroOutlook(uint32_t uptimeMs, bool inputValid, uint8_t histor
 #endif // THESIS_F07_WEATHER_LOG
 
 inline void pollEvents() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -453,10 +973,14 @@ inline void pollEvents() {
         Serial.printf("[SD-EVENT] DROPPED urgent=%lu telemetry=%lu\n",
           (unsigned long)lostUrgent, (unsigned long)lostTelemetry);
     }
+#endif // F25A legacy path excluded
 }
 
 
 inline bool appendRecord(const char* path, const char* record) {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    (void)path; (void)record; return false;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return false;
@@ -464,7 +988,11 @@ inline bool appendRecord(const char* path, const char* record) {
 // F23D SD end
     if (!ready) return false;
 
-    File file = SD.open(path, FILE_APPEND);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile file = f24sTemporaryFiles.open(path, FILE_APPEND);
+#else
+    File file = interposedSD.open(path, FILE_APPEND);
+#endif
 
     if (!file) {
         Serial.println("[SD-LOG] OPEN_FAIL");
@@ -483,9 +1011,13 @@ inline bool appendRecord(const char* path, const char* record) {
     }
 
     return true;
+#endif // F25A legacy path excluded
 }
 
 inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    (void)pmu; (void)id; return false;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return false;
@@ -530,17 +1062,17 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     sdSPI.begin(36, 37, 35, 47);
 
     // Last argument false: do not format on mount failure.
-    if (!SD.begin(47, sdSPI, 1000000, "/sd", 5, false)) {
+    if (!interposedSD.begin(47, sdSPI, 1000000, "/sd", 5, false)) {
         Serial.println("[SD-LOG] MOUNT_FAIL");
         return false;
     }
 
     Serial.printf(
         "[SD-LOG] MOUNT_OK capacity_mib=%llu\n",
-        (unsigned long long)(SD.cardSize() / 1048576ULL)
+        (unsigned long long)(interposedSD.cardSize() / 1048576ULL)
     );
 
-    if (!SD.exists("/THESIS") && !SD.mkdir("/THESIS")) {
+    if (!interposedSD.exists("/THESIS") && !interposedSD.mkdir("/THESIS")) {
         Serial.println("[SD-LOG] ROOT_CREATE_FAIL");
         return false;
     }
@@ -549,14 +1081,14 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     // Do not touch /THESIS/VESSEL_XXX journals. Every boot creates its own
     // empty session directory. Collisions are skipped, never reopened.
     const char* f06Root = "/THESIS/F06TEST";
-    if (!SD.exists(f06Root) && !SD.mkdir(f06Root)) {
+    if (!interposedSD.exists(f06Root) && !interposedSD.mkdir(f06Root)) {
         Serial.println("[SD-F06] TEST_ROOT_CREATE_FAIL; NO JOURNAL WRITES");
         return false;
     }
     char f06VesselRoot[40];
     snprintf(f06VesselRoot, sizeof(f06VesselRoot), "%s/V%03lu",
              f06Root, (unsigned long)vesselId);
-    if (!SD.exists(f06VesselRoot) && !SD.mkdir(f06VesselRoot)) {
+    if (!interposedSD.exists(f06VesselRoot) && !interposedSD.mkdir(f06VesselRoot)) {
         Serial.println("[SD-F06] VESSEL_TEST_ROOT_CREATE_FAIL; NO JOURNAL WRITES");
         return false;
     }
@@ -570,8 +1102,8 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
             Serial.println("[SD-F06] SESSION_PATH_TOO_LONG; NO JOURNAL WRITES");
             return false;
         }
-        if (SD.exists(candidate)) continue;
-        if (!SD.mkdir(candidate)) {
+        if (interposedSD.exists(candidate)) continue;
+        if (!interposedSD.mkdir(candidate)) {
             Serial.println("[SD-F06] SESSION_DIR_CREATE_FAIL; NO JOURNAL WRITES");
             return false;
         }
@@ -589,12 +1121,16 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     Serial.printf("[SD-F06] SANDBOX_READY path=%s legacy_journals=UNTOUCHED\n", DIRECTORY);
 #endif
 
-    if (!SD.exists(DIRECTORY) && !SD.mkdir(DIRECTORY)) {
+    if (!interposedSD.exists(DIRECTORY) && !interposedSD.mkdir(DIRECTORY)) {
         Serial.println("[SD-LOG] VESSEL_DIR_CREATE_FAIL");
         return false;
     }
 
-    File dir = SD.open(DIRECTORY, FILE_READ);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile dir = f24sTemporaryFiles.open(DIRECTORY, FILE_READ);
+#else
+    File dir = interposedSD.open(DIRECTORY, FILE_READ);
+#endif
 
     if (!dir || !dir.isDirectory()) {
         Serial.println("[SD-LOG] VESSEL_DIR_INVALID");
@@ -610,8 +1146,12 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     uint32_t priorLines = 0;
     bool lastLineComplete = false;
 
-    if (SD.exists(DIAGNOSTICS)) {
-        File previous = SD.open(DIAGNOSTICS, FILE_READ);
+    if (interposedSD.exists(DIAGNOSTICS)) {
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile previous = f24sTemporaryFiles.open(DIAGNOSTICS, FILE_READ);
+#else
+        File previous = interposedSD.open(DIAGNOSTICS, FILE_READ);
+#endif
 
         if (!previous) {
             Serial.println("[SD-VERIFY] PRIOR_OPEN_FAIL");
@@ -697,7 +1237,11 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
         return false;
     }
 
-    File verification = SD.open(DIAGNOSTICS, FILE_READ);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile verification = f24sTemporaryFiles.open(DIAGNOSTICS, FILE_READ);
+#else
+    File verification = interposedSD.open(DIAGNOSTICS, FILE_READ);
+#endif
 
     if (!verification) {
         ready = false;
@@ -729,6 +1273,7 @@ inline bool begin(XPowersAXP2101& pmu, uint32_t id) {
     Serial.printf("[SD-LOG] READY path=%s\n", DIRECTORY);
 
     return true;
+#endif // F25A legacy path excluded
 }
 
 
@@ -741,9 +1286,16 @@ static uint8_t exportIndex = 0;
 static uint32_t exportOffset = 0;
 static uint32_t exportLimit = 0;
 static uint32_t exportChecksum = 2166136261UL; // FNV-1a for transfer check
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+static F24RRetainedFile exportFile;
+#else
 static File exportFile;
+#endif
 
 inline void requestExport() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    Serial.println("[F25A] LEGACY_EXPORT_DENIED"); return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -767,9 +1319,13 @@ inline void requestExport() {
     exportChecksum = 2166136261UL;
     exportActive = true;
     Serial.println("[SDX] SESSION_START files=3 encoding=HEX checksum=FNV1A32");
+#endif // F25A legacy path excluded
 }
 
 inline void pollExport() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -788,10 +1344,14 @@ inline void pollExport() {
             exportActive = false;
             return;
         }
-        exportFile = SD.open(exportPaths[exportIndex], FILE_READ);
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+        exportFile = f24rLegacyFiles.open(exportPaths[exportIndex], FILE_READ);
+#else
+        exportFile = interposedSD.open(exportPaths[exportIndex], FILE_READ);
+#endif
         if (!exportFile) {
             // A missing file is valid only when it does not exist.
-            if (SD.exists(exportPaths[exportIndex])) {
+            if (interposedSD.exists(exportPaths[exportIndex])) {
                 Serial.printf("[SDX] ERROR OPEN_FAILED index=%u\n", (unsigned)exportIndex);
                 exportActive = false;
                 return;
@@ -843,17 +1403,96 @@ inline void pollExport() {
     Serial.printf("[SDX] DATA %u %lu %s\n", (unsigned)exportIndex,
                   (unsigned long)exportOffset, encoded);
     exportOffset += (uint32_t)actual;
+#endif // F25A legacy path excluded
 }
 
 inline void poll() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
+#if THESIS_DTN_F24Q_BUILD_ONLY == 1
+    // Compile the real main-loop seam against an UNGRANTABLE witness.
+    // No SD/FS/SPI/relay action, no ledger credit, and no simulated owner
+    // state is installed into any physical File lifetime.
+    static const DTNF24Q::DenyWitness noPhysicalOwner{};
+    static DTNF24Q::Arbiter<DTNF24Q::DenyWitness> noGrant(noPhysicalOwner);
+    (void)noGrant.acquire(vesselId,DTNF24Q::Lane::Sos);
+#endif
+#if THESIS_DTN_F24U_BUILD_ONLY == 1
+    (void)f24uNoGrantTeardown.begin(); // ungrantable, no SD operation
+#endif
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+    // Extra compile-only actual File adapter entry; no witness or lease.
+    // Refuses before even forwarding interposedSD.open().
+    (void)f24rLegacyFiles.open("/THESIS/F06TEST/V002/S0000001/sos_events.jsonl",FILE_READ);
+#endif
+#if THESIS_DTN_F24E_BUILD_ONLY == 1
+    // This does NOT queue a session or touch the SD bus; the grant is always denied.
+    // Compiles the actual main-loop owner hook without enabling replay or RF.
+    static DTNF24E::Scheduler<DTNF24DArduino::ReadFile,DTNF24DArduino::ReadVolume> preview;
+    const F24DNoPhysicalPermission deny{};
+    (void)preview.poll(deny,false,true);
+#endif
+#if THESIS_DTN_F24F_BUILD_ONLY == 1
+    // Typecheck only: no proof, no open, no SD access and no new transmissions.
+    static DTNF24F::SosClosedLease alwaysDeny;
+    const DTNAckLedger::Stream noStream{};
+    (void)alwaysDeny.allowClosedJournal(noStream,"");
+#endif
+#if THESIS_DTN_F24G_BUILD_ONLY == 1
+    // Compiler-only candidate check. ALWAYS denied; no seal writing or SD I/O.
+    const DTNF24G::CloseFacts noClose{};
+    const DTNF24F::OwnerNow noOwner{};
+    DTNF24G::Seal unapproved{};
+    (void)DTNF24G::prepare(DTNAckLedger::Stream{},noClose,noOwner,
+                            DTNF24D::Result::Denied,0U,unapproved);
+#endif
+#if THESIS_DTN_F24H_BUILD_ONLY == 1
+    // Observe actual RAM queue counts ONLY; no owner evidence, no Port, no
+    // retire/flush/close/SD access, and NO grant. Existing logging unchanged.
+    static DTNF24H::Controller denyPreview;
+    DTNF24H::Snapshot noAuthority{};
+    noAuthority.urgentQueued = urgentQueue.count;
+    noAuthority.researchQueued = telemetryQueue.count;
+    (void)denyPreview.stillCandidate(noAuthority);
+#endif
+#if THESIS_DTN_F24I_BUILD_ONLY == 1
+    // RAM-only bridge typecheck. Permanently denied: no physical owner, no
+    // actual SD Port, no session identity and absolutely no SD I/O.
+    static DTNF24I::NoPhysicalPort noPhysicalPort;
+    static const DTNF24I::NoPhysicalObserver noPhysicalWitness{};
+    static DTNF24I::GuardedPort<DTNF24I::NoPhysicalPort,
+                                DTNF24I::NoPhysicalObserver> denyBridge(
+                                    noPhysicalPort,noPhysicalWitness);
+    noPhysicalPort.observedUrgent = urgentQueue.count;
+    noPhysicalPort.observedResearch = telemetryQueue.count;
+    (void)denyBridge.arm(DTNF24H::SessionKey{});
+#if THESIS_DTN_F24J_BUILD_ONLY == 1
+    // F24J never handles SD; no unreviewed runtime authority exists.
+    static DTNF24J::Coordinator<decltype(denyBridge),
+                                DTNF24I::NoPhysicalObserver> denyCoordinator(
+                                    denyBridge,noPhysicalWitness);
+    (void)denyCoordinator.bind(DTNF24H::SessionKey{});
+#endif
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
 #endif
 // F23D SD end
     if (!ready) return;
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+    // Only main-loop owner path may access SD; one SOS frame per iteration.
+    // This compile-only profile inherits the F24K permanently denied facade.
+    pollF24MOne();
+#endif
     pollEvents();
     if (!ready) return;
+#if THESIS_DTN_F24N_BUILD_ONLY == 1
+    // SOS log write path retains priority; no replay or SD activity during
+    // pending urgent capture. Physical F24N SD owner remains hard-denied.
+    pollF24NOne();
+#endif
 
     // Read-only storage audit, once every 30 seconds.
     static uint32_t lastAuditMs = 0;
@@ -863,13 +1502,21 @@ inline void poll() {
         uint64_t telemetryBytes = 0;
         uint64_t sosBytes = 0;
 
-        File telemetryFile = SD.open(TELEMETRY, FILE_READ);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile telemetryFile = f24sTemporaryFiles.open(TELEMETRY, FILE_READ);
+#else
+        File telemetryFile = interposedSD.open(TELEMETRY, FILE_READ);
+#endif
         if (telemetryFile) {
             telemetryBytes = telemetryFile.size();
             telemetryFile.close();
         }
 
-        File sosFile = SD.open(SOS_EVENTS, FILE_READ);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile sosFile = f24sTemporaryFiles.open(SOS_EVENTS, FILE_READ);
+#else
+        File sosFile = interposedSD.open(SOS_EVENTS, FILE_READ);
+#endif
         if (sosFile) {
             sosBytes = sosFile.size();
             sosFile.close();
@@ -923,12 +1570,13 @@ inline void poll() {
         ready = false;
         Serial.println("[SD-LOG] DISABLED_AFTER_WRITE_FAIL");
     }
+#endif // F25A legacy path excluded
 }
 
 #if THESIS_F06_SD_SANDBOX == 1
 // F06 historical inspection: USB-only, allowlisted and read-only.
 // F19R2 additionally allows V003 F06 sessions when compiled with dual-display.
-// No caller-supplied path or filename is ever sent to SD.open().
+// No caller-supplied path or filename is ever sent to interposedSD.open().
 // Exactly two selectors are allowed: LEGACY or S + 7 uppercase hex digits.
 // These routines NEVER use FILE_APPEND, FILE_WRITE, mkdir, remove or rename.
 static constexpr uint32_t HISTORY_MAX_FILE_BYTES = 1048576UL;
@@ -942,7 +1590,11 @@ static uint32_t historyOffset = 0;
 static uint32_t historySizes[3] = {};
 static uint32_t historyChecksum = 2166136261UL;
 static char historyRoot[72] = {};
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+static F24RRetainedFile historyFile;
+#else
 static File historyFile;
+#endif
 
 inline bool historyReadActive() { return historyActive; }
 
@@ -974,6 +1626,9 @@ inline void historyStop(const char* reason) {
 }
 
 inline void listHistory() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    Serial.println("[F25A] LEGACY_HISTORY_DENIED"); return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -993,7 +1648,29 @@ inline void listHistory() {
     }
     char root[48];
     snprintf(root, sizeof(root), "/THESIS/F06TEST/V%03lu", (unsigned long)vesselId);
-    File directory = SD.open(root, FILE_READ);
+#if THESIS_DTN_F24T_BUILD_ONLY == 1
+    // Purely diagnostic listing, NOT a source of trusted closed SOS sessions.
+    // DenyWitness prevents any physical File from being opened on this image.
+    char entries[DTNF24T::kMaxShown][9]{};
+    unsigned recorded=0;
+    auto outcome = f24tHistoryDirectory.scan(root,vesselId,[&](const char* session){
+        if(recorded<DTNF24T::kMaxShown){
+            memcpy(entries[recorded],session,9U);
+            ++recorded;
+        }
+    });
+    if(!outcome.opened){
+        Serial.println("[SDH] ERROR SESSION_DIRECTORY_MISSING_OR_OWNER_DENIED"); return;
+    }
+    Serial.printf("[SDH] LIST_BEGIN scope=V%03lu sessions_only=1\n",
+                  (unsigned long)vesselId);
+    if(vesselId==2U) Serial.println("[SDH] TARGET LEGACY");
+    for(unsigned i=0;i<recorded;++i)Serial.printf("[SDH] TARGET %s\n",entries[i]);
+    Serial.printf("[SDH] LIST_END shown=%u truncated=%u complete=%u fault=%u\n",
+                  outcome.shown,(unsigned)outcome.truncated,
+                  (unsigned)outcome.complete,(unsigned)outcome.faulted);
+#else
+    File directory = interposedSD.open(root, FILE_READ);
     if (!directory || !directory.isDirectory()) {
         if (directory) directory.close();
         Serial.println("[SDH] ERROR SESSION_DIRECTORY_MISSING"); return;
@@ -1031,9 +1708,14 @@ inline void listHistory() {
     directory.close();
     Serial.printf("[SDH] LIST_END shown=%u truncated=%u\n",
                   (unsigned)shown, (unsigned)truncated);
+#endif // F24T guarded history iterator
+#endif // F25A legacy path excluded
 }
 
 inline void requestHistory(const char* selector) {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    (void)selector; Serial.println("[F25A] LEGACY_HISTORY_DENIED"); return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1078,7 +1760,11 @@ inline void requestHistory(const char* selector) {
     } else {
         Serial.println("[SDH] ERROR SELECTOR_REJECTED"); return;
     }
-    File root = SD.open(historyRoot, FILE_READ);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+    F24STemporaryFile root = f24sTemporaryFiles.open(historyRoot, FILE_READ);
+#else
+    File root = interposedSD.open(historyRoot, FILE_READ);
+#endif
     if (!root || !root.isDirectory()) {
         if (root) root.close();
         Serial.println("[SDH] ERROR TARGET_DIRECTORY_MISSING"); return;
@@ -1091,9 +1777,13 @@ inline void requestHistory(const char* selector) {
         if (!historyPath(path, sizeof(path), i)) {
             Serial.println("[SDH] ERROR PATH_TOO_LONG"); return;
         }
-        File file = SD.open(path, FILE_READ);
+#if THESIS_DTN_F24S_BUILD_ONLY == 1
+        F24STemporaryFile file = f24sTemporaryFiles.open(path, FILE_READ);
+#else
+        File file = interposedSD.open(path, FILE_READ);
+#endif
         if (!file) {
-            if (SD.exists(path)) {
+            if (interposedSD.exists(path)) {
                 Serial.println("[SDH] ERROR FILE_OPEN_FAILED"); return;
             }
             historySizes[i] = 0; // Missing SOS file is valid: zero bytes.
@@ -1111,9 +1801,13 @@ inline void requestHistory(const char* selector) {
     historyChecksum = 2166136261UL;
     historyActive = true;
     Serial.printf("[SDH] SESSION_START target=%s files=3\n", selector);
+#endif // F25A legacy path excluded
 }
 
 inline void pollHistory() {
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+    return;
+#else
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
     if(f23dStorageFrozen())return;
@@ -1151,7 +1845,11 @@ inline void pollHistory() {
         if (!historyPath(path, sizeof(path), i)) {
             historyStop("PATH_TOO_LONG"); return;
         }
-        historyFile = SD.open(path, FILE_READ);
+#if THESIS_DTN_F24R_BUILD_ONLY == 1
+        historyFile = f24rLegacyFiles.open(path, FILE_READ);
+#else
+        historyFile = interposedSD.open(path, FILE_READ);
+#endif
         if (!historyFile || historyFile.isDirectory() ||
             historyFile.size() != historySizes[i]) {
             historyStop("FILE_CHANGED_OR_OPEN_FAILED"); return;
@@ -1182,11 +1880,16 @@ inline void pollHistory() {
     Serial.printf("[SDH] DATA %u %lu %s\n", (unsigned)i,
                   (unsigned long)historyOffset, hex);
     historyOffset += static_cast<uint32_t>(wanted);
+#endif // F25A legacy path excluded
 }
 #endif // THESIS_F06_SD_SANDBOX
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
+// The named facade is SD for ordinary profiles, DENY for F24K.
+// F23D still retains long-lived File handles: no global lease asserted.
+#define F23D_SD_ACCESS interposedSD
 #include "f23d_sd_file_writer.h"
+#undef F23D_SD_ACCESS
 static F23DSD::Journal f23dJournal;
 static F23DSDFileWriter f23dWriter;
 static bool f23dInitialized=false;

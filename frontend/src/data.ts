@@ -6,12 +6,12 @@ export interface Reading {
  humidity: number | null;
  pressure: number | null;
  pressureTrend: number | null;
- signal: number;
+ signal: number | null;
  latitude: number | null;
  longitude: number | null;
  gpsFix: boolean;
- battery: number;
- shoreDistance: number;
+ battery: number | null;
+ shoreDistance: number | null;
  weatherState: number;
 }
 export interface SosEvent { deviceId: string; timestamp: number; latitude: number; longitude: number }
@@ -75,5 +75,5 @@ export function getDemoData(now: number): { devices: Device[]; readings: Reading
 export function getVesselSnapshot(readings: Reading[],deviceId:string,now:number) {
  const latest=getLatestReading(readings,deviceId,now);
  const position=getLastPosition(readings,deviceId,now);
- return {latest,position,shoreDistance:position && Number.isFinite(position.shoreDistance) && position.shoreDistance>=0 ? position.shoreDistance : null};
+ return {latest,position,shoreDistance:position && position.shoreDistance!==null && Number.isFinite(position.shoreDistance) && position.shoreDistance>=0 ? position.shoreDistance : null};
 }

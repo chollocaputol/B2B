@@ -24,11 +24,16 @@ extern void f23dPollEvidence();
 #endif
 #include "../../shared/hardware/tbeam_pins.h"
 #include "../../shared/hardware/vessel_identity.h"
+#include "../../shared/hardware/fleet_home_title.h"
 #include "../../shared/hardware/oled_button_debounce.h"
 #include "../../shared/hardware/tbeam_hardware_service.h"
 #include "../../shared/hardware/gps_service.h"
+#include "../../shared/hardware/gnss_pht_clock.h"
 #include <Arduino.h>
 #include "sos_controls.h"
+#ifndef THESIS_MULTIHOP_DEV_TEST
+#define THESIS_MULTIHOP_DEV_TEST 0
+#endif
 #include "physical_indicators.h"
 // USB-only fleet enrollment; excluded from every accepted V003 profile.
 #ifndef THESIS_FLEET_USB_ENROLLMENT
@@ -412,6 +417,18 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #include "v003_f21r4_ui_policy.h"
 #endif
 #include "weather_manager.h"
+#include "study_sf_target.h"
+#ifndef THESIS_STUDY_SF_UNIVERSAL_OFFLINE
+#define THESIS_STUDY_SF_UNIVERSAL_OFFLINE 0
+#endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 0 && THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1
+#error "Invalid SF7 universal offline flag"
+#endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+#if THESIS_STUDY_SF_BUILD_ONLY != 1 || THESIS_DTN_F25A_BUILD_ONLY != 1 || THESIS_STUDY_SF_OFFLINE_V003 || THESIS_STUDY_SF_SYNC_V003 || THESIS_V003_F09_SHARED_SENSOR_BUS != 1 || THESIS_V003_F10_MICRO_NOWCAST != 1 || THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1 || WEATHER_FAST_TEST != 0
+#error "SF7 needs the offline study architecture and field weather settings"
+#endif
+#endif
 #if THESIS_V003_F10_MICRO_NOWCAST == 1
 #include "v003_f10_micro_nowcast.h"
 static_assert(!PhysicalIndicators::kOutputsEnabled &&
@@ -478,6 +495,22 @@ static_assert(!PhysicalIndicators::kOutputsEnabled &&
 #ifndef THESIS_SD_PROBE
 #define THESIS_SD_PROBE 0
 #endif
+#ifndef THESIS_DTN_F25A_BUILD_ONLY
+#define THESIS_DTN_F25A_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F25A_BUILD_ONLY != 0 && THESIS_DTN_F25A_BUILD_ONLY != 1
+#error "Invalid F25A flag"
+#endif
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+#if THESIS_DTN_F24Z_BUILD_ONLY != 1 || THESIS_DTN_F24M_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_SD_LOGGER != 1 || THESIS_SD_PROBE != 0 || THESIS_F23D_SD_EVIDENCE || THESIS_F23D_PHYSICAL_CANDIDATE || THESIS_F23D_CANDIDATE || THESIS_MULTIHOP_DEV_TEST || THESIS_MULTIHOP_BENCH_RF || THESIS_LAB_RELAY_TX || THESIS_FLEET_USB_ENROLLMENT || THESIS_F22_FLEET_OPERATIONAL || THESIS_V003_F15_SD_PILOT_ARMED || THESIS_V003_F13_LIVE_OUTPUTS
+#error "F25A requires F24Z/M/K and all competing physical paths OFF"
+#endif
+static_assert(!PhysicalIndicators::kOutputsEnabled,"F25A outputs must stay OFF");
+extern bool thesisF25ABindLoop();
+extern DTNF24M::CaptureResult thesisF25ACapture(DTNF24M::PendingQueue<8>&,const VesselPacket&,uint8_t);
+extern void thesisF25APoll(DTNF24M::PendingQueue<8>&,bool);
+extern bool thesisF25ARadioBusy();
+#endif
 #if THESIS_SD_PROBE == 1
 #include "../../shared/storage/sd_probe.h"
 #endif
@@ -512,6 +545,9 @@ static uint32_t nextTelemetryIntervalMs() {
 // DEVELOPMENT ONLY: set to 0 for real 10-minute sampling before field use.
 #ifndef WEATHER_FAST_TEST
 #define WEATHER_FAST_TEST 1
+#endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1 && WEATHER_FAST_TEST != 0
+#error "SF7 requires actual ten-minute weather history"
 #endif
 const unsigned long WEATHER_INTERVAL = WEATHER_FAST_TEST ? 5000UL : 600000UL;
 const unsigned long GPS_STATUS_INTERVAL = 5000UL;
@@ -840,6 +876,44 @@ bool thesisLogEvent(bool urgent, const char* kind, uint32_t origin,
 }
 #endif
 
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+// Capture the actual acquisition time; no synthetic UTC or upload timestamp.
+static const char* studyUtc(char (&out)[21]) {
+  if(gps.date.isValid() && gps.time.isValid() && gps.date.age()<=10000UL && gps.time.age()<=10000UL &&
+     snprintf(out,sizeof(out),"%04u-%02u-%02uT%02u:%02u:%02uZ",(unsigned)gps.date.year(),(unsigned)gps.date.month(),(unsigned)gps.date.day(),(unsigned)gps.time.hour(),(unsigned)gps.time.minute(),(unsigned)gps.time.second())==20) return out;
+  return nullptr;
+}
+static void studyMacroCapture(){char utc[21]{};const auto& w=weatherMeasurement;
+  (void)thesisStudySfWeather(w.uptimeMs,studyUtc(utc),w.selectedTempC,w.selectedRH,w.stationPressureHpa,w.pressureDeltaHpa,w.weatherState);
+}
+#endif
+
+// F24M: the actual LoRa SOS call sites only copy exact packet bytes into RAM.
+// No SD File operation or forwarding permission exists in this bridge.
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+#if THESIS_SD_LOGGER != 1
+#error "F24M capture requires enabled logger in DENY-only preview"
+#endif
+bool thesisF24MObserveSOSPacket(const VesselPacket& packet,uint8_t source){
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+  char utc[21]{};return thesisStudySfControl(millis(),studyUtc(utc),packet,source);
+#else
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  const auto result=thesisF25ACapture(ThesisSDLogger::f24mSosCapture,packet,source);
+#else
+  const auto result=ThesisSDLogger::f24mSosCapture.capture(packet,source);
+#endif
+  return result==DTNF24M::CaptureResult::Queued ||
+         result==DTNF24M::CaptureResult::Duplicate;
+#endif
+}
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+bool thesisF25CObserveCancelPacket(const VesselPacket& packet,uint8_t source){
+  return packet.packetType==PACKET_SOS_CANCEL && thesisF24MObserveSOSPacket(packet,source);
+}
+#endif
+#endif
+
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
 extern bool f23dSDRadioBusy();
@@ -873,6 +947,9 @@ bool pollSDExportCommand() {
     int c = Serial.read();
     if (c == '\n' || c == '\r') {
       command[used] = '\0';
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+      Serial.println("[STUDY-SF] LEGACY_SD_COMMAND_DISABLED");
+#else
       if (strcmp(command, "SD EXPORT") == 0) {
 #if THESIS_F06_SD_SANDBOX == 1
         if (ThesisSDLogger::historyReadActive())
@@ -888,6 +965,7 @@ bool pollSDExportCommand() {
         ThesisSDLogger::requestHistory(command + 8);
 #endif
       else Serial.println("[SDX] ERROR UNKNOWN_COMMAND");
+#endif
       used = 0;
       return true;
     }
@@ -984,6 +1062,10 @@ static void f19r3CaptureResearch30s() {
 
 void setup() {
   Serial.begin(115200);
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  const bool f25aBound=thesisF25ABindLoop();
+  Serial.printf("[F25A] loop_bound=%u physical=DENIED legacy=OFF\n",unsigned(f25aBound));
+#endif
   delay(1200);
   Serial.println();
   Serial.println("=== UNIVERSAL VESSEL: SCHEDULED TX + RX ===");
@@ -1029,6 +1111,11 @@ void setup() {
   f09SensorAuthorized = F22UniversalCapability::validIdentity(
       VesselIdentity::ready(), VesselIdentity::nodeId());
 #endif
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+  // SF7: explicitly selected shared-wiring profile, same NVS policy for all IDs.
+  f09SensorAuthorized = F22UniversalCapability::validIdentity(
+      VesselIdentity::ready(), VesselIdentity::nodeId());
+#endif
 #if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
   // Override the legacy ID3-only rule in the separate BUILD-ONLY preview.
   // Operator MUST confirm physical SDA21/SCL48 standard wiring before flashing.
@@ -1043,7 +1130,9 @@ void setup() {
   } else {
     weatherInputsValid = false;
     weatherState = WEATHER_CALIBRATING;
-#if THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
+#if THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+    Serial.println("[SF7] SENSOR ACCESS BLOCKED: invalid/unprovisioned identity");
+#elif THESIS_F22R3A_STANDARD_FLEET_PREVIEW == 1
     Serial.println("[F22R3A-PREVIEW] SENSOR ACCESS BLOCKED: invalid/unprovisioned identity");
 #else
     Serial.println("[F09-I2C] SENSOR ACCESS BLOCKED: requires Vessel-003");
@@ -1141,6 +1230,10 @@ void setup() {
   setupLoRa();
   setupEmergencyIdentity();
   startReceive();
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+  // No legacy SD initialization, including power, pins, SPI or mount.
+  Serial.println("[F25A] LEGACY_SD_INIT_BYPASSED; NO_SESSION_AUTHORITY");
+#else
 #if THESIS_SD_LOGGER == 1
 #if THESIS_V003_F15_MACRO_SD_SANDBOX == 1
 #if THESIS_V003_F15_SD_PILOT_ARMED == 1
@@ -1168,6 +1261,7 @@ void setup() {
   ThesisSDLogger::begin(pmu, VesselIdentity::nodeId());
 #endif
 #endif
+#endif
 
 #if THESIS_F07_WEATHER_LOG == 1 && THESIS_V003_F11_MACRO_FIVE_MEDIAN != 1
   // One REAL reading at boot for immediate OLED fault detection.
@@ -1175,6 +1269,31 @@ void setup() {
   processWeather();
   if (!ThesisSDLogger::queueWeatherSample(weatherMeasurement))
     Serial.println("[WX-LOG] BOOT_SAMPLE_QUEUE_FAILED (not recorded)");
+#endif
+
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+  // Original build-only profile remains denied. The new bench profile is V003-only.
+  bool sfStarted=false;
+  if(thesisStudySfConfigured() && VesselIdentity::ready() &&
+#if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_SYNC_V003 == 1
+     VesselIdentity::nodeId()==3U &&
+#elif THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+     f09SensorAuthorized &&
+#endif
+     pmu.setBLDO1Voltage(3300)) {
+    pmu.enableBLDO1();delay(200);
+    if(pmu.isEnableBLDO1()) {pinMode(34,OUTPUT);digitalWrite(34,HIGH);sfStarted=thesisStudySfStart(VesselIdentity::nodeId());}
+  }
+#if THESIS_STUDY_SF_OFFLINE_V003 == 1
+  Serial.printf("[STUDY-SF] started=%u; V003 OFFLINE STORAGE BENCH; WIFI=DISABLED\n",unsigned(sfStarted));
+#elif THESIS_STUDY_SF_SYNC_V003 == 1
+  Serial.printf("[STUDY-SF] started=%u; V003 LOCAL HTTPS SYNC BENCH\n",unsigned(sfStarted));
+#elif THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
+  Serial.printf("[STUDY-SF] started=%u; UNIVERSAL OFFLINE node=%lu; WIFI=DISABLED\n",unsigned(sfStarted),(unsigned long)VesselIdentity::nodeId());
+#else
+  Serial.printf("[STUDY-SF] started=%u; build-only; no hardware grant\n",unsigned(sfStarted));
+#endif
+  Serial.println("[STUDY-SF] RECORD_MODE=SOS_ARMED; VOLATILE=1; ROUTINE=OFF");
 #endif
 
   // Each boot receives a different first telemetry slot. Subsequent intervals
@@ -1188,7 +1307,7 @@ void setup() {
 
   lastWeatherTime = millis();
 #if THESIS_V003_F12_INDICATOR_PREVIEW == 1
-#if THESIS_F22_FLEET_OPERATIONAL == 1
+#if THESIS_F22_FLEET_OPERATIONAL == 1 || THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
   f12IndicatorPreview.begin(f09SensorAuthorized &&
       F22UniversalCapability::validIdentity(VesselIdentity::ready(),VesselIdentity::nodeId()));
 #else
@@ -1205,7 +1324,7 @@ void setup() {
   // software-only; physical outputs need a dedicated explicit LIVE profile.
   f13RailEnableBitCached = pmu.isEnableBLDO2();
   f13LastRailPollMs = millis();
-#if THESIS_F22_FLEET_OPERATIONAL == 1
+#if THESIS_F22_FLEET_OPERATIONAL == 1 || THESIS_STUDY_SF_UNIVERSAL_OFFLINE == 1
   f13Indicators.begin(f09SensorAuthorized &&
       F22UniversalCapability::validIdentity(VesselIdentity::ready(),VesselIdentity::nodeId()),
       f13RailEnableBitCached);
@@ -1293,7 +1412,7 @@ void setup() {
 // MAIN LOOP
 // ============================================================
 void loop() {
-#if THESIS_SD_LOGGER == 1
+#if THESIS_SD_LOGGER == 1 && THESIS_DTN_F25A_BUILD_ONLY != 1
 #if THESIS_F06_SD_HYBRID == 1
   // Assess authoritative local and received SOS state before SD poll.
   // An unresolved SOS keeps recording regardless of manual mode.
@@ -1304,11 +1423,21 @@ void loop() {
 #if !THESIS_F23D_SD_EVIDENCE
 // F23D SD end
   ThesisSDLogger::poll();
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+  // Read-only preview diagnostics; never a durability or end-to-end ACK claim.
+  static uint32_t f24mReportAt=0;
+  if(uint32_t(millis()-f24mReportAt)>=30000UL){
+    f24mReportAt=millis();
+    Serial.printf("[F24M-PREVIEW] pending=%u full_drop=%lu owner=DENIED durable=NO\n",
+      unsigned(ThesisSDLogger::f24mSosCapture.pending()),
+      (unsigned long)ThesisSDLogger::f24mSosCapture.lost());
+  }
+#endif
 // F23D SD begin
 #endif
 // F23D SD end
 #endif
-#if THESIS_F06_SD_SANDBOX == 1
+#if THESIS_F06_SD_SANDBOX == 1 && THESIS_DTN_F25A_BUILD_ONLY != 1
 // F23D SD begin
 #if !THESIS_F23D_SD_EVIDENCE
 // F23D SD end
@@ -1318,6 +1447,11 @@ void loop() {
 // F23D SD end
 #endif
   updateGPS();
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+  static uint32_t studyLastGps=0;
+  if(uint32_t(millis()-studyLastGps)>=30000UL){studyLastGps=millis();char utc[21]{};
+    (void)thesisStudySfGps(studyLastGps,studyUtc(utc),gpsHasFix && gps.location.isValid() && gps.location.age()<=10000UL,latitude,longitude);}
+#endif
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
   f21r4PollBattery(); // 15-second cached PMU reading, no OLED I2C reads
 #endif
@@ -1333,7 +1467,9 @@ void loop() {
 // F23D SD begin
 #if !THESIS_F23D_SD_EVIDENCE
 // F23D SD end
+#if THESIS_DTN_F25A_BUILD_ONLY != 1
   ThesisSDLogger::pollExport();
+#endif
 // F23D SD begin
 #endif
 // F23D SD end
@@ -1380,6 +1516,9 @@ void loop() {
   }
   processSOSRetries();
   processCancelRetries();
+#if THESIS_DTN_F25A_BUILD_ONLY == 1 && THESIS_STUDY_SF_BUILD_ONLY != 1
+  thesisF25APoll(ThesisSDLogger::f24mSosCapture,thesisF25ARadioBusy());
+#endif
 // F23D readiness begin
 // F23D physical begin
 // F23D physical restore: #if THESIS_F23D_READINESS_ACTIVE
@@ -1424,6 +1563,9 @@ void loop() {
         const auto median = f11MacroBatch.result();
         processWeatherFromF11Median(batchOK, median.temperatureC,
                                      median.humidityPercent, median.stationPressureHpa);
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+        studyMacroCapture();
+#endif
         f11MacroSampleForMicro = true; // one fresh, accepted batch; no sixth read
         Serial.printf("[F11-MACRO] samples=5/5 valid=%u Tmed=%.2f RHmed=%.2f "
                       "Pmed=%.2f history=%u/%u dP100=%+.2f Z=%u state=%s\n",
@@ -1520,6 +1662,10 @@ void loop() {
     } else {
       f10Forecaster.invalidate();
     }
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    char studyMicroUtc[21]{};
+    (void)thesisStudySfWeather(lastF10MicroTime,studyUtc(studyMicroUtc),valid?sample.temperatureC:NAN,valid?sample.humidityPercent:NAN,valid?sample.stationPressureHpa:NAN,NAN,weatherState,V003F10Micro::stateName(f10Forecaster.state()),V003F10Micro::patternName(f10Forecaster.pattern()),valid);
+#endif
     Serial.printf("[F10-MICRO] valid=%u count=%u/11 state=%s pattern=%s "
                   "dT10=%+.2fC dRH10=%+.2fpp dP10=%+.2fhPa dewGap=%.2fC "
                   "horizon=EXPERIMENTAL_10_30_MIN OUTPUTS=OFF source=%s\n",
@@ -1776,6 +1922,9 @@ bool detectOLED() {
 // ============================================================
 // GPS
 // ============================================================
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+static GnssPhtClock::Tracker f21PhtClock;
+#endif
 void setupGPS() {
   GPSService::begin(GPSSerial, "A");
 }
@@ -1783,6 +1932,20 @@ void setupGPS() {
 void updateGPS() {
   gpsHasFix = GPSService::poll(GPSSerial, gps, latitude, longitude);
   if (gpsHasFix) haveLastKnownPosition = true;
+#if THESIS_V003_F19_DUAL_DISPLAY == 1
+  // A stationary startup UTC 00:00 is not reliable synchronized GNSS time.
+  GnssPhtClock::Utc observed{};
+  observed.year=static_cast<uint16_t>(gps.date.year());
+  observed.month=static_cast<uint8_t>(gps.date.month());
+  observed.day=static_cast<uint8_t>(gps.date.day());
+  observed.hour=static_cast<uint8_t>(gps.time.hour());
+  observed.minute=static_cast<uint8_t>(gps.time.minute());
+  observed.second=static_cast<uint8_t>(gps.time.second());
+  observed.fresh=gps.date.isValid() && gps.time.isValid() &&
+    gps.date.age()<=GnssPhtClock::kMaxFreshMs &&
+    gps.time.age()<=GnssPhtClock::kMaxFreshMs;
+  f21PhtClock.observe(observed,millis());
+#endif
 }
 
 void printGPSStatus() {
@@ -1953,9 +2116,15 @@ void handleOLEDButton() {
         // Mode submenu: TAP moves, HOLD confirms. BACK returns to SD menu.
         if (duration >= BUTTON_LONG_PRESS_MS) {
           if (sdHybridMenuCursor < 2) {
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+            thesisStudySfSetContinuous(sdHybridMenuCursor == 1);
+            Serial.printf("[STUDY-SF] RECORD_MODE=%s; VOLATILE=1\n",
+                thesisStudySfIsContinuous() ? "CONTINUOUS" : "SOS_ARMED");
+#else
             ThesisSDLogger::hybridSetContinuous(sdHybridMenuCursor == 1);
             Serial.printf("[OLED-SD] MODE_CONFIRMED=%s\n",
                 sdHybridMenuCursor == 1 ? "CONTINUOUS" : "SOS_ARMED");
+#endif
             sdOLEDSubview = 0;
           } else {
             sdStorageMenuOpen = true;
@@ -1984,7 +2153,11 @@ void handleOLEDButton() {
             case 2:
               sdStorageMenuOpen = false;
               sdHybridMenuOpen = true;
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+              sdHybridMenuCursor = thesisStudySfIsContinuous() ? 1 : 0;
+#else
               sdHybridMenuCursor = ThesisSDLogger::hybridIsContinuous() ? 1 : 0;
+#endif
               Serial.println("[OLED-SD] MODE_MENU_OPEN");
               break;
             default:
@@ -2061,12 +2234,10 @@ void oledF19GPSPage() {
              (unsigned long)VesselIdentity::nodeId());
   else strcpy(line,"V--- BAT:-- OP1/4");
   u8g2.drawStr(0,9,line);
-  // GNSS UTC date/time must be fresh; only time-of-day converted to PHT (+8).
-  if (gps.date.isValid() && gps.time.isValid() &&
-      gps.date.age() <= 10000UL && gps.time.age() <= 10000UL)
-    snprintf(line,sizeof(line),"TIME:%02u:%02u PHT",
-        unsigned((gps.time.hour()+8U)%24U),unsigned(gps.time.minute()));
-  else strcpy(line,"TIME: --:-- NO SYNC");
+  // Apply the same GNSS trust gate to the F19 fallback screen.
+  char pht[8];f21PhtClock.phtText(millis(),pht,sizeof(pht));
+  if(strcmp(pht,"--:--")==0)strcpy(line,"TIME: --:-- NO SYNC");
+  else snprintf(line,sizeof(line),"TIME:%s PHT",pht);
   u8g2.drawStr(0,19,line);
   char uptime[40]; formatUptime(uptime,sizeof(uptime));
   snprintf(line,sizeof(line),"UP:%.17s",uptime);
@@ -2313,12 +2484,12 @@ F21Icon::Kind oledF21HeaderIcon(const char* title) {
   if(strstr(title,"PEER")||strstr(title,"NEARBY"))return F21Icon::Radio;
   return F21Icon::Boat;
 }
-void oledF21PortraitTop(const char* title,bool alert=false) {
+void oledF21PortraitTop(const char* title,bool alert=false,bool vesselHome=false) {
   u8g2.clearBuffer();u8g2.setFont(u8g2_font_5x8_tf);
   u8g2.drawBox(0,0,64,13);u8g2.setDrawColor(0);
-  // F21R4.1: give portrait HOME its entire 64px status header. Other
-  // portrait pages retain their pictograms and original title offset.
-  if(strcmp(title,"V003")==0)oledF21P(3,10,title);
+  // Keep the full-width portrait HOME title (no boat icon) for EVERY
+  // provisioned vessel, not just the original hardcoded V003.
+  if(vesselHome)oledF21P(3,10,title);
   else{oledF21Icon(oledF21HeaderIcon(title),2,1);oledF21P(13,10,title);}
   u8g2.setDrawColor(1);
   if(alert)u8g2.drawFrame(0,14,64,102);
@@ -2395,18 +2566,22 @@ void oledF21HomeLabel(char* dst,size_t n) {
 }
 void oledF21PortraitGPSPage(){
   if(f19Display.homeMenuOpen()){oledF21PortraitHomeMenu();return;}
-  char b[42];oledF21PortraitTop("V003");
-  // V003 text replaces the boat icon; preserve a 2px battery-label gap.
-  // Pixel fit: V003 x3..23, battery x26..36, 100% x38..62 (64px width).
-  u8g2.setDrawColor(0);oledF21Icon(F21Icon::Battery,26,2);
+  const uint32_t vesselId=VesselIdentity::nodeId();
+  const bool vesselReady=VesselIdentity::ready();
+  char vesselTitle[8];FleetHomeTitle::shortTitle(vesselId,vesselReady,
+                                                vesselTitle,sizeof(vesselTitle));
+  char b[42];oledF21PortraitTop(vesselTitle,false,true);
+  // For V001..V999, preserve the V003 portrait layout exactly:
+  // title x3, battery icon x26, percentage x38. V1000+ or NO ID gets
+  // the full title and the percentage without an overlapping icon.
+  u8g2.setDrawColor(0);
+  if(FleetHomeTitle::portraitBatteryIconFits(vesselId,vesselReady))
+    oledF21Icon(F21Icon::Battery,26,2);
   oledF21BatteryLabel(38,11,true);u8g2.setDrawColor(1);
   u8g2.drawFrame(1,16,62,35);
   u8g2.setFont(u8g2_font_5x8_tf);oledF21P(5,26,"TIME / PHT");
-  const bool utcFresh=gps.date.isValid()&&gps.time.isValid()&&
-    gps.date.age()<=10000UL&&gps.time.age()<=10000UL;
-  if(utcFresh)snprintf(b,sizeof(b),"%02u:%02u",unsigned((gps.time.hour()+8U)%24U),
-                       unsigned(gps.time.minute()));
-  else strcpy(b,"--:--");
+  // Display valid advancing GNSS time only; never invent a startup clock.
+  f21PhtClock.phtText(millis(),b,sizeof(b));
   u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(10,45,b);
   u8g2.setFont(u8g2_font_5x8_tf);
   u8g2.drawHLine(2,55,60);
@@ -2424,16 +2599,16 @@ void oledF21PortraitGPSPage(){
 }
 void oledF21LandscapeGPSPage(){
   if(f19Display.homeMenuOpen()){oledF21LandscapeHomeMenu();return;}
-  char b[42];oledF21LandscapeTop("V003 HOME");
+  char vesselTitle[16];FleetHomeTitle::landscapeTitle(
+      VesselIdentity::nodeId(),VesselIdentity::ready(),
+      vesselTitle,sizeof(vesselTitle));
+  char b[42];oledF21LandscapeTop(vesselTitle);
   u8g2.setDrawColor(0);oledF21Icon(F21Icon::Battery,91,2);
   oledF21BatteryLabel(104,10,false);u8g2.setDrawColor(1);
   u8g2.drawFrame(1,15,62,39);u8g2.drawFrame(66,15,61,39);
   u8g2.setFont(u8g2_font_5x8_tf);oledF21P(6,23,"TIME PHT");
-  const bool utcFresh=gps.date.isValid()&&gps.time.isValid()&&
-    gps.date.age()<=10000UL&&gps.time.age()<=10000UL;
-  if(utcFresh)snprintf(b,sizeof(b),"%02u:%02u",unsigned((gps.time.hour()+8U)%24U),
-                       unsigned(gps.time.minute()));
-  else strcpy(b,"--:--");
+  // Display valid advancing GNSS time only; never invent a startup clock.
+  f21PhtClock.phtText(millis(),b,sizeof(b));
   u8g2.setFont(u8g2_font_7x14B_tf);u8g2.drawStr(6,41,b);
   u8g2.setFont(u8g2_font_5x8_tf);
   oledF21HomeLabel(b,sizeof(b));
@@ -3192,6 +3367,13 @@ void oledSDStoragePage() {
   if (sdOLEDSubview == 0) {
     u8g2.drawStr(0, 9, "SD STORAGE 8/8");
 #if THESIS_F06_SD_HYBRID == 1
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    const bool ready=thesisStudySfStorageReady();
+    u8g2.drawStr(0,20,ready ? "CARD: MOUNTED" : "CARD: NOT READY");
+    u8g2.drawStr(0,30,thesisStudySfIsContinuous() ? "MODE: CONTINUOUS" : "MODE: SOS ARMED");
+    u8g2.drawStr(0,41,!ready ? "REC: UNAVAILABLE" : thesisStudySfIsContinuous() ? "REC: CONTINUOUS" : "REC: SOS/CANCEL");
+    u8g2.drawStr(0,52,"FOLDER: STUDY_SF");
+#else
     u8g2.drawStr(0, 20, ThesisSDLogger::ready ? "CARD: MOUNTED" : "CARD: NOT READY");
     u8g2.drawStr(0, 30, ThesisSDLogger::hybridIsContinuous()
         ? "MODE: CONTINUOUS" : "MODE: SOS ARMED");
@@ -3202,6 +3384,7 @@ void oledSDStoragePage() {
     const char* slash = strrchr(ThesisSDLogger::DIRECTORY, '/');
     snprintf(line, sizeof(line), "FOLDER: %.12s", slash ? slash + 1 : "UNKNOWN");
     u8g2.drawStr(0, 52, line);
+#endif
 #else
     u8g2.drawStr(0, 20, ThesisSDLogger::ready ? "CARD: LOGGING" : "CARD: NOT READY");
 #if THESIS_F06_SD_SANDBOX == 1
@@ -3225,6 +3408,12 @@ void oledSDStoragePage() {
 #endif
   } else if (sdOLEDSubview == 1) {
     u8g2.drawStr(0, 9, "SD JOURNALS 8/8");
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    u8g2.drawStr(0,21,"STUDY JSONL FILES");
+    u8g2.drawStr(0,33,thesisStudySfStorageReady() ? "STORAGE READY" : "STORAGE NOT READY");
+    u8g2.drawStr(0,44,"NO LEGACY COUNTERS");
+    u8g2.drawStr(0,55,"NO FILE DELETION");
+#else
     if (ThesisSDLogger::oledAuditValid) {
       snprintf(line, sizeof(line), "TLM: %llu B",
         (unsigned long long)ThesisSDLogger::oledTelemetryBytes);
@@ -3249,6 +3438,7 @@ void oledSDStoragePage() {
       (unsigned long)ThesisSDLogger::lostUrgent,
       (unsigned long)ThesisSDLogger::lostTelemetry);
     u8g2.drawStr(0, 55, line);
+#endif
 #if THESIS_F06_SD_HYBRID == 1
     u8g2.drawStr(0, 64, "HOLD:MENU TAP:NEXT");
 #else
@@ -3256,7 +3446,11 @@ void oledSDStoragePage() {
 #endif
   } else {
     u8g2.drawStr(0, 9, "SD USB READBACK 8/8");
-#if THESIS_V003_F16_SD_OLED_HYBRID == 1
+#if THESIS_STUDY_SF_BUILD_ONLY == 1
+    u8g2.drawStr(0,21,"STUDY JSONL");
+    u8g2.drawStr(0,33,"USB READBACK OFF");
+    u8g2.drawStr(0,45,"SYNC PROFILE: CSV");
+#elif THESIS_V003_F16_SD_OLED_HYBRID == 1
     // F19R2 adds bounded V003 history, while F16 retains the old
     // active-session-only export view.
 #if THESIS_V003_F19_DUAL_DISPLAY == 1

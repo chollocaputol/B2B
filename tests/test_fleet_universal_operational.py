@@ -28,9 +28,14 @@ def test():
     # Real logger uses NVS identity, never formats card, creates unique F06 sessions.
     assert 'return VesselIdentity::ready() && VesselIdentity::nodeId()==id &&' in LOGGER
     assert 'F22UniversalCapability::validIdentity(true,id)' in LOGGER
-    assert 'SD.begin(47, sdSPI, 1000000, "/sd", 5, false)' in LOGGER
-    assert 'if (SD.exists(candidate)) continue;' in LOGGER
-    assert 'if (!SD.mkdir(candidate)) {' in LOGGER
+    # Verify the actual mount through the interposition facade and legacy alias.
+    assert 'if (!interposedSD.begin(47, sdSPI, 1000000, "/sd", 5, false)) {' in LOGGER
+    assert 'static auto& interposedSD = SD;' in LOGGER
+    assert 'static DTNF24K::DenySdFacade<File> interposedSD;' in LOGGER
+    assert 'static DTNF24W::DenyMountFacade<File> interposedSD;' in LOGGER
+    assert 'if (interposedSD.exists(candidate)) continue;' in LOGGER
+    assert 'if (!interposedSD.mkdir(candidate)) {' in LOGGER
+    assert LOGGER.index('if (interposedSD.exists(candidate)) continue;') < LOGGER.index('if (!interposedSD.mkdir(candidate)) {') < LOGGER.index('strcpy(DIRECTORY, candidate);')
     assert '"/THESIS/F06TEST"' in LOGGER and '"%s/V%03lu"' in LOGGER
     assert 'if (!ready || !isAuthorizedVessel(vesselId) || !hybridState.continuous) return false;' in LOGGER
     assert 'if (!ready || !isAuthorizedVessel(vesselId)) return false;' in LOGGER

@@ -9,7 +9,9 @@ m=(R/'firmware/universal/src/main.cpp').read_text(encoding='utf-8')
 h=R/'firmware/universal/include/v003_f19_display_modes.h'
 w=R/'firmware/universal/include/v003_f21r3_weather_display.h'
 r4=R/'firmware/universal/include/v003_f21r4_ui_policy.h'
-assert h.exists() and w.exists() and r4.exists()
+title=R/'firmware/shared/hardware/fleet_home_title.h'
+clock=R/'firmware/shared/hardware/gnss_pht_clock.h'
+assert h.exists() and w.exists() and r4.exists() and title.exists() and clock.exists()
 assert 'U8G2_SH1106_128X64_NONAME_F_HW_I2C' in m
 assert 'u8g2.setDisplayRotation(f21WantPortrait?U8G2_R1:U8G2_R0)' in m
 assert 'const bool f21WantPortrait=(f19Display.operational() || f19SOS) && f19Display.portrait()' in m
@@ -128,6 +130,9 @@ stubs=r'''
 #include "v003_f19_display_modes.h"
 #include "v003_f21r3_weather_display.h"
 #include "v003_f21r4_ui_policy.h"
+#include "fleet_home_title.h"
+#include "gnss_pht_clock.h"
+static GnssPhtClock::Tracker f21PhtClock;
 const uint8_t u8g2_font_4x6_tf[]={0};
 const uint8_t u8g2_font_5x8_tf[]={0};
 const uint8_t u8g2_font_6x10_tf[]={0};
@@ -199,7 +204,7 @@ bool displaySOSRecord(SOSRecordSnapshot &v){return getSOSRecordByIndex(0,v);}
 '''
 with tempfile.TemporaryDirectory(prefix='thesis_f21r3_cpp_') as tmp:
  d=Path(tmp)
- for name,source in ((h.name,h.read_text()),(w.name,w.read_text()),(r4.name,r4.read_text())):
+ for name,source in ((h.name,h.read_text()),(w.name,w.read_text()),(r4.name,r4.read_text()),(title.name,title.read_text()),(clock.name,clock.read_text())):
   (d/name).write_text(source,encoding='utf-8')
  def compile_run(code,name):
   p=d/(name+'.cpp');p.write_text(code,encoding='utf-8')
@@ -215,6 +220,15 @@ with tempfile.TemporaryDirectory(prefix='thesis_f21r3_cpp_') as tmp:
  code=stubs+'\n// F21R3: OLED-only icon/phone-style OP presentation.'+p+'''
 int main(){
  u8g2.portrait=true;
+ char clockText[8];
+ f21PhtClock.phtText(millis(),clockText,sizeof(clockText));
+ if(strcmp(clockText,"--:--"))return 5;
+ oledF21PortraitGPSPage();
+ GnssPhtClock::Utc utc{};
+ utc.year=2026;utc.month=11;utc.day=26;utc.hour=6;utc.minute=42;utc.second=0;utc.fresh=true;
+ f21PhtClock.observe(utc,14000);utc.second=1;f21PhtClock.observe(utc,15000);
+ f21PhtClock.phtText(millis(),clockText,sizeof(clockText));
+ if(strcmp(clockText,"14:42"))return 6;
  oledF21PortraitGPSPage();oledF21PortraitWeatherPage();
  oledF21PortraitNearbyPage();oledF21PortraitSOSPage();
  oledF21PortraitHomeMenu();oledF21PortraitPeerMenu();

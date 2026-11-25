@@ -54,6 +54,16 @@ static void f23dQueueRunEvidence(const char*,int,const VesselPacket*);
 #include "../../shared/relay/relay_authorization_contract.h"
 #include "../../shared/relay/lab_relay_gate.h"
 #include "lora_manager.h"
+// Exact 62-byte SOS payload ingress; no SD or RF action in this function.
+#ifndef THESIS_DTN_F24M_BUILD_ONLY
+#define THESIS_DTN_F24M_BUILD_ONLY 0
+#endif
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+extern bool thesisF24MObserveSOSPacket(const VesselPacket&,uint8_t);
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+extern bool thesisF25CObserveCancelPacket(const VesselPacket&,uint8_t);
+#endif
+#endif
 #include "../../shared/communication/control_retry_schedule.h"
 #include "weather_manager.h"
 #include "../../shared/communication/compact_position_v2.h"
@@ -1471,6 +1481,10 @@ void transmitSOS() {
   pendingSOS.packetType = PACKET_SOS;
   strncpy(pendingSOS.message, "SOS", sizeof(pendingSOS.message) - 1);
   pendingSOS.message[sizeof(pendingSOS.message) - 1] = '\0';
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+  // Capture original complete SOS bytes, before any RF attempt; never SD I/O.
+  (void)thesisF24MObserveSOSPacket(pendingSOS,0U);
+#endif
   sosPending = true;
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
@@ -1569,6 +1583,11 @@ void cancelActiveSOS() {
   const uint32_t origin = NODE_ID;
   memcpy(pendingCancel.message + 4, &origin, 4);
   cancelPending = true;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+  // Capture only the newly constructed original intent, not reconstructed NVS
+  // retry metadata. The existing guarded bridge is shared with SOS.
+  (void)thesisF25CObserveCancelPacket(pendingCancel,0U);
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
   f23dSDPacket("LOCAL_CANCEL",pendingCancel);
@@ -1749,6 +1768,9 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
     Serial.printf("[PEER-SOS] CANCEL origin=%lu event=%lu result=%s\n",
       (unsigned long)p.originNodeId,(unsigned long)cancelId,MultiPeerSOS::name(result));
     if (result!=MultiPeerSOS::Result::Cancelled && result!=MultiPeerSOS::Result::CancelDuplicate)return;
+#if THESIS_DTN_F25C_BUILD_ONLY == 1
+    if(result==MultiPeerSOS::Result::Cancelled)(void)thesisF25CObserveCancelPacket(p,1U);
+#endif
     if (incomingBSOS.known && incomingBSOS.originId==p.originNodeId &&
         incomingBSOS.eventId==cancelId)incomingBSOS.cancelled=true;
     VesselPacket ack={};ack.magic=PACKET_MAGIC;ack.version=PACKET_VERSION;
@@ -1781,6 +1803,11 @@ static void processReceivedPacket(const uint8_t *buffer, size_t length,
       (unsigned long)p.originNodeId,(unsigned long)p.sequenceNumber,MultiPeerSOS::name(result));
     if(result==MultiPeerSOS::Result::Stale||result==MultiPeerSOS::Result::Full)return;
     if(result==MultiPeerSOS::Result::New){
+#if THESIS_DTN_F24M_BUILD_ONLY == 1
+      // Only after existing RX validation and accepted NEW SOS admission.
+      // Neighbor acknowledgement logic and LoRa behavior remain unchanged.
+      (void)thesisF24MObserveSOSPacket(p,1U);
+#endif
       bool validPosition = (p.flags & FLAG_GPS_FIX)!=0;
       const double latitudeSOS=p.latitude_e7/1e7;
       const double longitudeSOS=p.longitude_e7/1e7;
@@ -1954,6 +1981,14 @@ static void calculateBSequencePDR() {
   missingFromB = expected > uniqueFromB ? static_cast<uint32_t>(expected - uniqueFromB) : 0;
 }
 
+#if THESIS_DTN_F25A_BUILD_ONLY == 1
+// Conservative cooperative snapshot; not proof of RF silence or absence of
+// an in-flight preamble. No new SPI/IRQ clear/read operation is introduced.
+bool thesisF25ARadioBusy() {
+  return activeEmergency || sosPending || cancelPending || macCadScanActive ||
+         getActiveSOSCount()>0 || digitalRead(LORA_DIO1)==HIGH;
+}
+#endif
 // F23D SD begin
 #if THESIS_F23D_SD_EVIDENCE
 bool f23dSDRadioBusy() {

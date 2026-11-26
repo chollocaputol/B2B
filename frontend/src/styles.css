@@ -32,3 +32,9 @@
 .study-status-slot::before{content:"10000 synchronized non-fixture records; 10000 known synthetic records excluded from this view and export.";visibility:hidden}
 @media(max-width:680px){.study-topbar{padding-inline:12px}.study-topbar .public-label{display:none}.study-header-controls{gap:6px}.study-header-controls .button:first-child{width:94px}.study-header-controls .button:last-child{width:72px}.study-header-controls .button{padding-inline:8px}.study-refresh-banner{min-height:108px}}
 @media(max-width:380px){.study-topbar .breadcrumb{display:none}.study-topbar{justify-content:flex-end}.study-refresh-banner{min-height:132px}}
+
+/* FE8C: dedicated views; shared shell and startup authorization gate. */
+.section-single{grid-template-columns:minmax(0,1fr)!important}
+.section-single .vessel-detail-strip{grid-column:1/-1}
+.operator-startup{position:fixed;inset:0;z-index:9999;background:#fff;display:grid;place-items:center;color:#657982;font-size:13px}
+.startup-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}

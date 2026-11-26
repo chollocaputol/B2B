@@ -21,3 +21,23 @@
   from = "/dashboard"
   to = "/index.html"
   status = 200
+
+[[redirects]]
+  from = "/dashboard/vessels"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/weather"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/sos"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/records"
+  to = "/index.html"
+  status = 200

@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import StudyAccess from './StudyAccess';
-import {entryRoute} from './routes';
+import {entryRoute,operatorDestination} from './routes';
 import './styles.css';
 
 function Landing({missing=false}:{missing?:boolean}) {
@@ -16,7 +16,7 @@ function Landing({missing=false}:{missing?:boolean}) {
  </main>;
 }
 const entry=entryRoute(location.pathname,location.search,location.hostname,import.meta.env.DEV);
-if(entry==='legacy') history.replaceState(null,'','/dashboard');
+if(entry==='legacy') history.replaceState(null,'',operatorDestination('/dashboard',location.hash));
 // Revalidate a restored document instead of reusing a cached protected screen.
 window.addEventListener('pageshow',e=>{if(e.persisted && (entry==='operator'||entry==='legacy')) location.reload();});
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode>{entry==='operator'||entry==='legacy'?<StudyAccess/>:entry==='demo'?<App/>:<Landing missing={entry==='not-found'}/>}</React.StrictMode>);

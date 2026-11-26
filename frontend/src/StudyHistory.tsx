@@ -1,10 +1,49 @@
-import {useState} from 'react';
-import {ArrowDownToLine,ChevronLeft,ChevronRight,Search} from 'lucide-react';
-import {identity,type Row} from './studySf';
-import {describeRecord,studyCsv,orderStudyHistory} from './studyDashboardData';
-import {dateTime} from './data';
+import {useMemo,useRef,useState,type ReactNode} from 'react';
+import {ArrowDownToLine,ChevronLeft,ChevronRight,Search,X,AlertCircle,Inbox,LoaderCircle} from 'lucide-react';
+import type {Device,Reading,SosEvent} from './data';
+import type {Row} from './studySf';
+import {studyCsv} from './studyDashboardData';
+import {hostedLogs,demoLogs,filterLogs,fullTime,EMPTY_FILTERS,type LogFilters,type LogEntry} from './logsModel';
+import {NO_VIEWS,type ViewSnapshot} from './relationalViews';
 import type {SnapshotPhase} from './refreshState';
-export function exportStudy(rows:Row[]){const url=URL.createObjectURL(new Blob([studyCsv(rows)],{type:'text/csv;charset=utf-8;'}));const a=document.createElement('a');a.href=url;a.download='acmac-non-fixture-records.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-export default function StudyHistory({rows,phase='ready'}:{rows:Row[];phase?:SnapshotPhase}){const [query,setQuery]=useState(''),[page,setPage]=useState(0);const matched=orderStudyHistory(rows).filter(r=>`${r.record_json.kind} ${r.recorder_node_id} ${describeRecord(r)} ${r.record_json.captured_at??'Unknown UTC'}`.toLowerCase().includes(query.toLowerCase()));const pages=Math.max(1,Math.ceil(matched.length/6)),current=Math.min(page,pages-1);
- return <section className="panel readings-panel" id="readings"><div className="readings-heading"><div><h2>Logs <span className="number-badge" aria-label={phase==='loading'?'Loading record count':phase==='error'?'Record count unavailable':undefined}>{phase==='loading'||phase==='error'?'—':rows.length}</span></h2><p>Selected vessel records, newest known capture first. Unknown capture times last. Not restricted by chart range.</p></div><div className="table-actions"><label className="search-wrap"><Search size={16}/><input aria-label="Search readings" placeholder="Search readings…" value={query} onChange={e=>{setQuery(e.target.value);setPage(0)}}/></label><button className="icon-button table-export" aria-label="Export filtered synchronized records" disabled={phase!=='ready'||!matched.length} onClick={()=>exportStudy(matched)}><ArrowDownToLine size={17}/></button></div></div><div className="table-scroll"><table><thead><tr><th>Capture time (PHT)</th><th>Vessel</th><th>Type</th><th>Observation</th><th>Backend receipt (PHT)</th></tr></thead><tbody>{matched.slice(current*6,current*6+6).map(r=><tr key={identity(r)}><td>{r.record_json.captured_at?dateTime(Date.parse(r.record_json.captured_at)):'Unknown UTC'}</td><td>Vessel {r.recorder_node_id}</td><td>{r.record_json.kind.toUpperCase()}</td><td>{describeRecord(r)}</td><td>{dateTime(Date.parse(r.synced_at))}</td></tr>)}{!matched.length&&<tr><td colSpan={5} className="empty-state" role="status">{phase==='loading'?'Loading synchronized records…':phase==='error'?'Unable to load synchronized records.':'No matching synchronized records.'}</td></tr>}</tbody></table></div><div className="table-footer"><span>{phase==='loading'?'Loading records…':phase==='error'?'Record count unavailable':`${matched.length} matching records`}</span><div className="pagination"><button disabled={current===0} onClick={()=>setPage(current-1)} aria-label="Previous page"><ChevronLeft size={15}/></button><span>Page {current+1} of {pages}</span><button disabled={current+1>=pages} onClick={()=>setPage(current+1)} aria-label="Next page"><ChevronRight size={15}/></button></div></div></section>;
+const PAGE_SIZE=6;
+function download(csv:string,name:string){const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+export function exportStudy(rows:Row[]){download(studyCsv(rows),'acmac-non-fixture-records.csv');}
+function exportDemo(rows:LogEntry[]){const quote=(v:unknown)=>'"'+String(v??'').replace(/"/g,'""')+'"';download(['sample_capture_utc,node,vessel,type,observation,source',...rows.map(r=>[r.capture===null?'':new Date(r.capture).toISOString(),r.node,r.vessel,r.kind,r.description,'Sample'].map(quote).join(','))].join('\n'),'acmac-fictional-logs.csv');}
+export function TableState({phase,empty,filtered=false}:{phase:SnapshotPhase;empty:boolean;filtered?:boolean}){
+ const loading=phase==='loading',error=phase==='error',nomatch=!empty&&filtered;
+ const Icon=loading?LoaderCircle:error?AlertCircle:nomatch?Search:Inbox;
+ return <div className={'record-table-state'+(loading?' is-loading':'')} role="status"><Icon size={23}/><strong>{loading?'Loading records…':error?'Unable to load records':nomatch?'No matching records':'No records available'}</strong><span>{loading?'Retrieving synchronized observations.':error?'Use Refresh or Retry to retrieve records again.':nomatch?'Try changing the search or filters.':'No observations are available in this dataset.'}</span></div>;
+}
+export function TablePagination({page,count,onPage,disabled=false}:{page:number;count:number;onPage:(p:number)=>void;disabled?:boolean}){
+ const pages=Math.max(1,Math.ceil(count/PAGE_SIZE)),current=Math.min(page,pages-1);
+ return <div className="table-footer"><span aria-live="polite">{disabled?'—':count?`Showing ${current*PAGE_SIZE+1}–${Math.min((current+1)*PAGE_SIZE,count)} of ${count} records`:'0 matching records'}</span><div className="pagination"><button disabled={disabled||current===0} onClick={()=>onPage(current-1)} aria-label="Previous page"><ChevronLeft size={15}/></button><span>Page {current+1} of {pages}</span><button disabled={disabled||current+1>=pages} onClick={()=>onPage(current+1)} aria-label="Next page"><ChevronRight size={15}/></button></div></div>;
+}
+export function RecordTableBody({children,columns,count,phase,empty,filtered=false}:{children:ReactNode;columns:number;count:number;phase:SnapshotPhase;empty:boolean;filtered?:boolean}){
+ return <tbody>{phase==='loading'||phase==='error'||count===0?<tr className="record-state-row"><td colSpan={columns}><TableState phase={phase} empty={empty} filtered={filtered}/></td></tr>:<>{children}{Array.from({length:PAGE_SIZE-count},(_,i)=><tr className="record-spacer-row" key={`spacer-${i}`} aria-hidden="true"><td colSpan={columns}/></tr>)}</>}</tbody>;
+}
+type Props={rows?:Row[];readings:Reading[];samples:SosEvent[];devices:Device[];phase?:SnapshotPhase;views?:ViewSnapshot};
+export default function StudyHistory({rows,readings,samples,devices,phase='ready',views=NO_VIEWS}:Props){
+ const hosted=rows!==undefined;
+ const [filters,setFilters]=useState<LogFilters>(EMPTY_FILTERS),[page,setPage]=useState(0);
+ const searchRef=useRef<HTMLInputElement>(null);
+ const entries=useMemo(()=>rows===undefined?demoLogs(readings,samples,devices):hostedLogs(rows,devices,views),[rows,readings,samples,devices,views]);
+ const pending=phase==='loading'||phase==='error';
+ const matched=pending?[]:filterLogs(entries,filters),current=Math.min(page,Math.max(0,Math.ceil(matched.length/PAGE_SIZE)-1));
+ const visible=matched.slice(current*PAGE_SIZE,current*PAGE_SIZE+PAGE_SIZE),active=Object.values(filters).some(Boolean);
+ const update=(field:keyof LogFilters,val:string)=>{setFilters(old=>({...old,[field]:val}));setPage(0);};
+ const clear=()=>{update('query','');searchRef.current?.focus();};
+ const doExport=()=>hosted?exportStudy(matched.flatMap(r=>r.raw?[r.raw]:[])):exportDemo(matched);
+ return <section className="panel readings-panel package-b-records" id="readings" aria-busy={phase==='loading'}>
+  <div className="readings-heading"><div><h2>Logs <span className="number-badge">{pending?'—':entries.length}</span></h2><p>{hosted?'All synchronized non-fixture observations, newest known capture first.':'Fictional GPS, weather and SOS observations.'} · Philippine Standard Time (UTC+8).</p></div>
+   <div className="table-actions"><div className="log-search"><Search size={16}/><input ref={searchRef} type="text" aria-label="Search logs" placeholder="Search logs…" value={filters.query} onChange={e=>update('query',e.target.value)}/><button type="button" className={'log-clear'+(!filters.query?' invisible':'')} disabled={!filters.query} aria-label="Clear search" onClick={clear}><X size={15}/></button></div><button type="button" className="icon-button table-export" aria-label="Export all matching logs" title="Export all matching logs (all pages)" disabled={pending||!matched.length} onClick={doExport}><ArrowDownToLine size={17}/></button></div>
+  </div>
+  <div className="log-filters"><label>Vessel<select value={filters.node} onChange={e=>update('node',e.target.value)}><option value="">All vessels</option>{devices.map(d=><option value={d.id} key={d.id}>{d.name}{d.registeredName?' · '+d.registeredName:''}</option>)}</select></label><label>Type<select value={filters.kind} onChange={e=>update('kind',e.target.value)}><option value="">All types</option><option value="gps">GPS</option><option value="weather">Weather</option><option value="sos">SOS</option><option value="cancel">CANCEL</option></select></label><label>Capture from (PHT)<input type="date" value={filters.from} max={filters.to||undefined} onChange={e=>update('from',e.target.value)}/></label><label>Capture through (PHT)<input type="date" value={filters.to} min={filters.from||undefined} onChange={e=>update('to',e.target.value)}/></label><button className="button" type="button" disabled={!active} onClick={()=>{setFilters(EMPTY_FILTERS);setPage(0)}}>Reset filters</button></div>
+  <p className="log-help">Search vessel name, node ID, registration number, record ID, type, observation, source or time. Date filters exclude unknown capture times. Export includes every matching page.</p>
+  <div className="table-scroll record-table-scroll"><table className="record-table"><colgroup>{[19,18,9,29,10,15].map((w,i)=><col key={i} style={{width:`${w}%`}}/>)}</colgroup><thead><tr><th>Capture time (PHT)</th><th>Vessel / recorder</th><th>Type</th><th>Observation</th><th>Source</th><th>Backend receipt (PHT)</th></tr></thead>
+   <RecordTableBody columns={6} count={visible.length} phase={phase} empty={!entries.length} filtered={active}>{visible.map(r=><tr className="record-data-row" key={r.key}><td>{fullTime(r.capture)}</td><td><div className="record-cell-text" title={r.vessel}>{r.vessel}</div>{r.registration&&<small title={r.registration}>{r.registration}</small>}</td><td>{r.kind.toUpperCase()}</td><td><div className="record-cell-text" title={r.description}>{r.description}</div></td><td>{r.source}</td><td>{hosted?fullTime(r.receipt):'Not applicable'}</td></tr>)}</RecordTableBody>
+  </table></div>
+  <TablePagination page={current} count={matched.length} onPage={setPage} disabled={pending}/>
+  {hosted&&!pending&&<p className="log-help">{views.status==='ready'?`${entries.filter(r=>r.projected).length} of ${entries.length} records matched the relational projections; all authorized non-fixture raw observations are retained.`:views.status==='unavailable'?'Relational projections unavailable; displaying authorized raw DTN records.':'Raw DTN records · local historical review.'}</p>}
+ </section>;
 }

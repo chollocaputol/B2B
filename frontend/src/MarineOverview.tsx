@@ -1,4 +1,6 @@
 import type { MouseEvent } from 'react';
+import EmergencyHistory from './EmergencyHistory';
+import type {ViewSnapshot} from './relationalViews';
 import { Anchor, ArrowRight, BatteryMedium, CloudSun, Compass, Droplets, Gauge, MapPin, ShieldAlert, Thermometer } from 'lucide-react';
 import { ageLabel, dateTime, getVesselSnapshot, weatherLabel, type Device, type Reading, type SosEvent } from './data';
 import type {studyDashboard} from './studyDashboardData';
@@ -8,7 +10,7 @@ import {sectionPath,type Section} from './routes';
 import {emergencyReports,summarizeEmergencyReports,reportTime} from './vesselPopup';
 import {distanceToShore,distanceText,vesselContext} from './geolocation';
 
-type Props = {devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>;mapSession?:MapSession;tilesEnabled:boolean;studyPhase?:SnapshotPhase;section?:Exclude<Section,'records'>;onViewSos:(event:MouseEvent<HTMLAnchorElement>)=>void};
+type Props = {views?:ViewSnapshot;devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>;mapSession?:MapSession;tilesEnabled:boolean;studyPhase?:SnapshotPhase;section?:Exclude<Section,'records'>;onViewSos:(event:MouseEvent<HTMLAnchorElement>)=>void};
 function OverviewSos(props:Props) {
  const {study,studyPhase,now,sosEvents,devices,onViewSos}=props;
  const pending=!!study&&studyPhase==='loading',failed=!!study&&studyPhase==='error';
@@ -52,11 +54,7 @@ export default function MarineOverview(props:Props) {
     <div className="weather-note">{latest?`${props.study?'Captured':'Last packet'} ${ageLabel(latest.timestamp,now)} · `:''}Sensor state only; not an official forecast.</div>
    </section>}
    {overview&&<OverviewSos {...props}/>}
-   {section==='sos'&&<section className="panel sos-panel" id="alerts"><div className="panel-heading"><div><h2><ShieldAlert size={17}/> SOS activity <span className="scenario-badge">{props.study?'SYNCED':'DEMO'}</span></h2><p>{props.study?'Recorded emergency observations (all recording vessels)':'Read-only sample events'}</p></div></div>
-    {props.study&&props.study.events.length===0&&<p className="sos-footnote" role="status">{loading?'Loading emergency observations…':failed?'Unable to load emergency observations.':'No synchronized emergency observations in this dataset.'}</p>}
-    {props.study?props.study.events.map(e=><div className="sos-event" key={`${e.origin}/${e.event}`}><strong>Origin {e.origin}, event {e.event}</strong><p>{e.state} · SOS {e.sos}, CANCEL {e.cancel}</p></div>):sosEvents.map(event=><div className="sos-event" key={`${event.deviceId}-${event.timestamp}`}><div className="sos-event-title"><span className="sos-dot"/><strong>Sample SOS received</strong><span>{ageLabel(event.timestamp,now)}</span></div><p>{devices.find(d=>d.id===event.deviceId)?.name} · {dateTime(event.timestamp)} PHT</p><div className="sos-coordinates"><MapPin size={13}/>{event.latitude.toFixed(5)}° N, {event.longitude.toFixed(5)}° E</div><small>Coordinates at the SOS event; current position may differ.</small><button className="sos-select" onClick={()=>onSelect(event.deviceId)}>View vessel details <Compass size={14}/></button></div>)}
-    <p className="sos-footnote">{props.study?'Cancellation observed is not proof of rescue completion or radio source authentication. No rescue request is sent.':'Demonstration only. No distress message or rescue request is being sent.'}</p>
-   </section>}
+   {section==='sos'&&<EmergencyHistory rows={props.study?.records} samples={sosEvents} devices={devices} now={now} phase={props.studyPhase} views={props.views}/>}
   </div>}
   {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':distanceText(shoreDistance)}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div></section>}
   {section==='vessels'&&<section className="panel vessel-context-panel" aria-label="Vessel observation details">

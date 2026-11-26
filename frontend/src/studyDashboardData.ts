@@ -1,14 +1,15 @@
 import { latestTimed, projectStudy, type Row } from './studySf.ts';
 import type { Device, Reading } from './data.ts';
+import {registryDevices,type RegistryRow,type RegistryState} from './geolocation.ts';
 const numberOrNull = (x: unknown): number | null => typeof x === 'number' && Number.isFinite(x) ? x : null;
 const capture = (r:Row) => r.record_json.captured_at === null ? NaN : Date.parse(r.record_json.captured_at);
 function reading(r:Row): Reading {
  const p=r.record_json.payload, weather=r.record_json.kind==='weather';
  return {deviceId:String(r.recorder_node_id),timestamp:capture(r),temperature:weather?numberOrNull(p.temperature_c):null,humidity:weather?numberOrNull(p.humidity_percent):null,pressure:weather?numberOrNull(p.pressure_hpa):null,pressureTrend:weather?numberOrNull(p.pressure_trend_hpa):null,weatherState:weather?(numberOrNull(p.weather_state)??-1):-1,latitude:weather?null:numberOrNull(p.latitude),longitude:weather?null:numberOrNull(p.longitude),gpsFix:!weather&&p.gps_fix===true,signal:null,battery:null,shoreDistance:null};
 }
-export function studyDashboard(rows:Row[], now:number) {
+export function studyDashboard(rows:Row[], now:number, registry:RegistryRow[]=[], registryStatus:RegistryState='not-configured') {
  const p=projectStudy(rows);
- const devices:Device[]=p.nodes.map(n=>({id:String(n),name:`Vessel ${n}`,location:'Recording vessel · synchronized history'}));
+ const devices:Device[]=registryDevices(p.nodes.map(n=>({id:String(n),name:`Vessel ${n}`,location:'Recording vessel · synchronized history'})),registry);
  const readings:Reading[]=[], latestWeather:Record<string,Reading|undefined>={}, positions:Reading[]=[];
  for(const d of devices){
   const weather=p.weather.filter(r=>String(r.recorder_node_id)===d.id&&capture(r)<=now);
@@ -17,7 +18,7 @@ export function studyDashboard(rows:Row[], now:number) {
   const w=latestTimed(weather);if(w)latestWeather[d.id]=reading(w);
   const g=latestTimed(p.gps.filter(r=>{const q=r.record_json.payload,lat=numberOrNull(q.latitude),lon=numberOrNull(q.longitude);return String(r.recorder_node_id)===d.id&&capture(r)<=now&&q.gps_fix===true&&lat!==null&&lon!==null&&Math.abs(lat)<=90&&Math.abs(lon)<=180;}));if(g)positions.push(reading(g));
  }
- return {...p,devices,readings,latestWeather,positions,sosEvents:[]};
+ return {...p,devices,readings,latestWeather,positions,sosEvents:[],registryStatus};
 }
 export function describeRecord(r:Row):string {
  const p=r.record_json.payload, val=(x:unknown)=>numberOrNull(x)??'Unavailable';

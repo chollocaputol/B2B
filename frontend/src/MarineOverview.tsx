@@ -6,6 +6,7 @@ import VesselMap, {type MapSession} from './VesselMap';
 import type {SnapshotPhase} from './refreshState';
 import {sectionPath,type Section} from './routes';
 import {emergencyReports,summarizeEmergencyReports,reportTime} from './vesselPopup';
+import {distanceToShore,distanceText,vesselContext} from './geolocation';
 
 type Props = {devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>;mapSession?:MapSession;tilesEnabled:boolean;studyPhase?:SnapshotPhase;section?:Exclude<Section,'records'>;onViewSos:(event:MouseEvent<HTMLAnchorElement>)=>void};
 function OverviewSos(props:Props) {
@@ -35,7 +36,9 @@ export default function MarineOverview(props:Props) {
  const loading=!!props.study&&props.studyPhase==='loading';
  const failed=!!props.study&&props.studyPhase==='error';
  const snapshot = getVesselSnapshot(props.study?.positions??readings,selectedId,now);
- const {position,shoreDistance}=snapshot; const latest=props.study?props.study.latestWeather[selectedId]:snapshot.latest;
+ const {position}=snapshot;const shoreDistance=distanceToShore(position,!!props.study);
+ const context=props.study&&vessel?vesselContext(props.study.records,vessel.id,now):null;
+ const stamp=(t:number|null|undefined)=>t==null?'Unavailable':dateTime(t)+' PHT'; const latest=props.study?props.study.latestWeather[selectedId]:snapshot.latest;
  const weather = latest?.weatherState ?? -1;
  const hasWeather = latest?.temperature !== null && latest?.temperature !== undefined;
  const section=props.section??'overview';
@@ -55,6 +58,18 @@ export default function MarineOverview(props:Props) {
     <p className="sos-footnote">{props.study?'Cancellation observed is not proof of rescue completion or radio source authentication. No rescue request is sent.':'Demonstration only. No distress message or rescue request is being sent.'}</p>
    </section>}
   </div>}
-  {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':shoreDistance!=null?`${(shoreDistance/1000).toFixed(1)} km`:'Unavailable'}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div></section>}
+  {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':distanceText(shoreDistance)}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div></section>}
+  {section==='vessels'&&<section className="panel vessel-context-panel" aria-label="Vessel observation details">
+   <div className="panel-heading"><div><h2>Vessel information</h2><p>{props.study?'Registry and recorded observation context':'Fictional sample context'}</p></div></div>
+   {loading||failed?<p className="data-state-note" role="status">{loading?'Loading vessel information…':'Vessel information unavailable.'}</p>:!vessel?<p className="data-state-note">No vessel selected.</p>:<>
+    {props.study?.registryStatus!=='ready'&&props.study&&<p className="data-state-note" role="status">{props.study.registryStatus==='unavailable'?'Registry could not be retrieved. Observation history remains available.':'Registry is not configured in this local review.'}</p>}
+    <dl className="vessel-context-grid">
+     <div><dt>Node ID</dt><dd>{vessel.id}</dd></div><div><dt>Vessel name</dt><dd>{vessel.registeredName??(props.study?'Unavailable':vessel.name)}</dd></div><div><dt>Registration no.</dt><dd>{vessel.registrationSerialNo??'Unavailable'}</dd></div>
+     <div><dt>Last valid GPS fix</dt><dd>{stamp(position?.timestamp)}</dd></div><div><dt>Last valid coordinates</dt><dd>{position?position.latitude!.toFixed(5)+', '+position.longitude!.toFixed(5):'Unavailable'}</dd></div><div><dt>Shore reference distance</dt><dd>{distanceText(shoreDistance)}</dd></div>
+     {props.study&&<><div><dt>Latest timed GPS attempt</dt><dd>{stamp(context?.attemptAt)}{context?.attemptFix!=null?' · '+(context.attemptFix?'Fix reported':'No fix'):''}</dd></div><div><dt>Latest timed capture</dt><dd>{stamp(context?.captureAt)}</dd></div><div><dt>Latest backend receipt</dt><dd>{stamp(context?.receiptAt)}</dd></div></>}
+    </dl>
+    <p className="data-state-note">{props.study?'Recorded observations only. Receipt is not capture time; unknown or ambiguous capture times are not inferred.':'Sample values only.'}</p>
+   </>}
+  </section>}
  </div>;
 }

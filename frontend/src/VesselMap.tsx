@@ -7,6 +7,7 @@ import { LocateFixed, MapPin, Navigation } from 'lucide-react';
 import { ageLabel, dateTime, getLastPosition, getLatestReading, weatherLabel, type Device, type Reading, type SosEvent } from './data';
 import type { studyDashboard } from './studyDashboardData';
 import { popupEmergencyFromReports, emergencyReports, popupBattery, type PopupEmergency } from './vesselPopup';
+import { SHORE, shoreReference, distanceToShore, distanceText, distanceLayout } from './geolocation';
 
 // In-memory view state owned by the authenticated dashboard, never browser storage.
 export type MapSession = { viewport?: {center:[number,number];zoom:number}; selectedId?:string; tilesEnabled?:boolean };
@@ -29,7 +30,7 @@ function popupContent(device:Device, position:Reading, weather:Reading|null|unde
  heading.append(title,close);card.append(heading);
  const list=document.createElement('dl');
  const attention=sos.status==='Needs attention';
- const fields=[['Registration no.','Unavailable'],['SOS status',sos.status],['Weather state',weatherLabel(weather?.weatherState??-1)],['Battery',popupBattery(weather)],[attention?'SOS observed at':'Last GPS fix',attention?(sos.observedAt===null?'Unknown':dateTime(sos.observedAt)+' PHT'):dateTime(position.timestamp)+' PHT']];
+ const fields=[['Vessel name',device.registeredName??(synchronized?'Unavailable':device.name)],['Registration no.',device.registrationSerialNo??'Unavailable'],['SOS status',sos.status],['Weather state',weatherLabel(weather?.weatherState??-1)],['Battery',popupBattery(weather)],[attention?'SOS observed at':'Last GPS fix',attention?(sos.observedAt===null?'Unknown':dateTime(sos.observedAt)+' PHT'):dateTime(position.timestamp)+' PHT']];
  for(const [label,value] of fields){const term=document.createElement('dt');term.textContent=label;const detail=document.createElement('dd');detail.textContent=value;list.append(term,detail);}
  card.append(list);
  const note=document.createElement('small');note.textContent=synchronized?(attention?'Recorded SOS observation; marker is last GPS fix, not distress location.':'Synchronized observations; not live position.'):'Fictional sample observations.';card.append(note);
@@ -43,6 +44,7 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
  const map = useRef<L.Map | null>(null);
  const markers = useRef<Record<string,L.Marker>>({});
  const activeInfo=useRef<OpenInfo|null>(null);
+ const clearTapForSelection=useRef<(id:string)=>void>(()=>{});
  const [tileError,setTileError] = useState(false);
  const mode = studyAccessMode(location.hostname,location.protocol,import.meta.env.VITE_SUPABASE_URL);
  const showTiles = externalBasemapEnabled(synchronized,mode,tilesEnabled);
@@ -68,12 +70,35 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
   const instance = map.current;
   if (!instance) return;
   const observations = L.layerGroup().addTo(instance);
-  const dismiss=()=>dismissInfo(instance,activeInfo);
-  const onEscape=(event:KeyboardEvent)=>{if(event.key==='Escape'&&activeInfo.current){event.preventDefault();event.stopPropagation();dismissInfo(instance,activeInfo,true);}};
+  const distanceLayer=L.layerGroup().addTo(observations);
+  const shore=shoreReference(synchronized),shorePoint=L.latLng(shore.latitude,shore.longitude);
+  type DistanceTarget={id:string;point:L.LatLng;metres:number;attention:boolean};
+  let hovered:DistanceTarget|null=null,focused:DistanceTarget|null=null,tapped:DistanceTarget|null=null,touchInteraction=false;
+  const redrawDistance=()=>{
+   distanceLayer.clearLayers();
+   const target=tapped??hovered??focused;
+   if(!target)return;
+   const label=distanceText(target.metres),width=Math.max(48,label.length*8+10);
+   const layout=distanceLayout(instance.latLngToLayerPoint(target.point),instance.latLngToLayerPoint(shorePoint),width);
+   const color=target.attention?'#b91c1c':'#385665';
+   const asLatLng=(p:{x:number;y:number})=>instance.layerPointToLatLng(L.point(p.x,p.y));
+   for(const segment of layout.segments)L.polyline(segment.map(asLatLng),{color,weight:2,dashArray:'5 5',interactive:false}).addTo(distanceLayer);
+   const text=document.createElement('span');text.textContent=label;
+   L.marker(asLatLng(layout.center),{icon:L.divIcon({className:'shore-distance-label'+(target.attention?' distance-sos':''),html:text,iconSize:[width,20],iconAnchor:[width/2,10]}),interactive:false,keyboard:false,zIndexOffset:-1000}).addTo(distanceLayer);
+  };
+  const dismiss=()=>{tapped=null;dismissInfo(instance,activeInfo);redrawDistance();};
+  const keyboardInteraction=(event:KeyboardEvent)=>{if(event.key==='Tab'||event.key==='Enter'||event.key===' ')touchInteraction=false;};
+  clearTapForSelection.current=(id:string)=>{if(tapped&&tapped.id!==id){tapped=null;redrawDistance();}};
+  instance.on('moveend zoomend resize',redrawDistance);
+  const onEscape=(event:KeyboardEvent)=>{keyboardInteraction(event);if(event.key==='Escape'&&activeInfo.current){event.preventDefault();event.stopPropagation();tapped=null;dismissInfo(instance,activeInfo,true);redrawDistance();}};
   const host=instance.getContainer();
   instance.on('click',dismiss);host.addEventListener('keydown',onEscape,true);
   const reference = document.createElement('span'); reference.textContent=synchronized?'Acmac · designated sync shore':'Acmac · area reference';
-  L.circleMarker(synchronized?[8.275292,124.262623]:[8.274,124.2649],{radius:5,color:'#526c7e',fillColor:'#fff',fillOpacity:1,weight:2}).bindTooltip(reference,{permanent:true,direction:'right',className:'shore-label'}).addTo(observations);
+  if(synchronized){
+   L.circle(shorePoint,{radius:SHORE.exitM,color:'#617b85',weight:1.5,dashArray:'5 4',fill:false,interactive:false}).addTo(observations);
+   L.circle(shorePoint,{radius:SHORE.enterM,color:'#16877e',weight:1.5,fill:false,interactive:false}).addTo(observations);
+  }
+  L.circleMarker(shorePoint,{radius:5,color:'#526c7e',fillColor:'#fff',fillOpacity:1,weight:2}).bindTooltip(reference,{permanent:true,direction:'right',className:'shore-label'}).addTo(observations);
   const reports=studyPhase==='ready'&&(!synchronized||study)?emergencyReports(now,synchronized?(study?.records??[]):undefined,sosEvents):[];
   for (const device of devices) {
    const position = getLastPosition(readings,device.id,now);
@@ -85,6 +110,16 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
     icon:L.divIcon({className:attention?'vessel-marker has-sos':'vessel-marker',html:icon,iconSize:[44,44],iconAnchor:[22,22]}), alt:`${device.name} last reported ${synchronized?'GPS fix':'sample GPS position'}`, keyboard:true,zIndexOffset:attention?1000:0,
    }).addTo(observations);
    marker.getElement()?.setAttribute('aria-label',`Select ${device.name} ${synchronized?'last timed GPS fix':'sample position'}${attention?' · SOS needs attention':''}`);
+   const elementForDistance=marker.getElement(),metres=distanceToShore(position,synchronized);
+   const target=metres===null?null:{id:device.id,point:marker.getLatLng(),metres,attention};
+   if(elementForDistance&&target){
+    elementForDistance.setAttribute('aria-label',elementForDistance.getAttribute('aria-label')+' · '+distanceText(metres)+' to shore reference at last fix');
+    elementForDistance.addEventListener('pointerdown',e=>{touchInteraction=e.pointerType==='touch';if(touchInteraction){hovered=null;focused=null;redrawDistance();}});
+    elementForDistance.addEventListener('pointerenter',e=>{if(e.pointerType!=='touch'){hovered=target;redrawDistance();}});
+    elementForDistance.addEventListener('pointerleave',()=>{if(hovered?.id===device.id)hovered=null;redrawDistance();});
+    elementForDistance.addEventListener('focus',()=>{if(elementForDistance.matches(':focus-visible')){touchInteraction=false;focused=target;redrawDistance();}});
+    elementForDistance.addEventListener('blur',()=>{if(focused?.id===device.id)focused=null;redrawDistance();});
+   }
    marker.getElement()?.setAttribute('aria-haspopup','dialog');
    marker.getElement()?.setAttribute('aria-expanded','false');
    marker.on('click',()=>{
@@ -93,7 +128,8 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
     if(studyPhase!=='ready'||(synchronized&&!study))return;
     // Hosted GPS rows and weather rows are intentionally separate projections.
     const weather=synchronized?study?.latestWeather[device.id]:getLatestReading(readings,device.id,now);
-    const {card,close}=popupContent(device,position,weather,sos,synchronized,()=>dismissInfo(instance,activeInfo,true));
+    const {card,close}=popupContent(device,position,weather,sos,synchronized,()=>{tapped=null;dismissInfo(instance,activeInfo,true);redrawDistance();});
+    if(touchInteraction){tapped=target;redrawDistance();}
     card.style.width=Math.min(246,Math.max(120,Math.floor((instance.getSize().x-40)/2)))+'px';
     const layer=L.tooltip({direction:'auto',offset:[14,0],permanent:true,interactive:true,opacity:1,className:'vessel-info-popup'}).setLatLng(marker.getLatLng()).setContent(card).addTo(instance);
     activeInfo.current={id:device.id,layer,marker};
@@ -102,10 +138,11 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
     close.focus({preventScroll:true});
    }); markers.current[device.id]=marker;
   }
-  return () => { dismiss(); instance.off('click',dismiss);host.removeEventListener('keydown',onEscape,true);if(instance.hasLayer(observations))instance.removeLayer(observations);markers.current={}; };
+  return () => { clearTapForSelection.current=()=>{};hovered=null;focused=null;tapped=null;dismiss();instance.off('moveend zoomend resize',redrawDistance);instance.off('click',dismiss);host.removeEventListener('keydown',onEscape,true);if(instance.hasLayer(observations))instance.removeLayer(observations);markers.current={}; };
  },[devices,readings,sosEvents,now,onSelect,synchronized,mapSession,study,studyPhase]);
  useLayoutEffect(() => {
   Object.entries(markers.current).forEach(([id,marker]) => marker.getElement()?.classList.toggle('is-selected',id===selectedId));
+  clearTapForSelection.current(selectedId);
   if(activeInfo.current&&activeInfo.current.id!==selectedId)dismissInfo(map.current,activeInfo);
   // Selection changes highlight only. Explicit map reset remains available.
  },[selectedId,devices,readings,sosEvents,now,onSelect,synchronized,mapSession,study,studyPhase]);
@@ -130,6 +167,7 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
   <div className="map-container" ref={container} role="region" aria-label={synchronized?'Last timed synchronized vessel GPS fixes':'Interactive map of fictional sample vessel positions near Acmac'}/>
   {showTiles&&tileError&&<div className="map-error" role="status">Some basemap tiles could not load. Vessel markers and available coordinates remain visible.</div>}
   <div className="map-location"><MapPin size={15}/><div><strong>{devices.find(d => d.id===selectedId)?.name??'Vessel positions'} · {studyPhase==='loading'?'Loading':studyPhase==='error'?'Unavailable':selected?'last reported GPS fix':'GPS unavailable'}</strong><span>{studyPhase==='loading'?'Refreshing synchronized vessel positions…':studyPhase==='error'?'Unable to load vessel positions.':studyPhase==='empty'?'No synchronized vessel positions available.':selected?`${selected.latitude!.toFixed(5)}° N, ${selected.longitude!.toFixed(5)}° E · ${ageLabel(selected.timestamp,now)}`:synchronized?'No unambiguous timed valid fix. No marker is shown for this vessel.':'No valid coordinates received. No marker is shown for this vessel.'}</span></div></div>
+  {synchronized&&<div className="shore-proximity-note"><span><i className="shore-enter-key"/>100 m sync entry</span><span><i className="shore-exit-key"/>150 m sync exit</span><small>Provisional firmware proximity thresholds, not coverage or legal boundaries. Hover or focus a vessel for straight-line distance to the shore reference.</small></div>}
   <div className="map-caption"><span><i className="legend-vessel"/> {synchronized?'Last timed vessel fix':'Sample vessel'} <i className="legend-attention"/> {synchronized?'SOS needs attention · last GPS fix':'Sample SOS · vessel position'}</span><small>{synchronized?(showTiles?'External basemap enabled':mode==='hosted'?'External basemap off · About':'Local review: external basemap disabled'):'Illustrative positions only'}</small></div>
  </section>;
 }

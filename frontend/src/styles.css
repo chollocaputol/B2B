@@ -84,3 +84,17 @@
 .sos-summary-event.needs-attention .sos-summary-dot{background:#b91c1c}
 .sos-summary-event>p,.sos-summary-event>small{color:#536773}
 .sos-summary-link{margin-top:auto}
+/* Package A: shore-reference distance, provisional proximity and registry context. */
+.shore-distance-label{background:transparent!important;border:0!important;box-shadow:none!important;pointer-events:none!important;text-align:center;white-space:nowrap;color:#385665;font-size:12px;font-weight:700;line-height:20px;text-shadow:0 1px 2px #fff,0 -1px 2px #fff,1px 0 2px #fff,-1px 0 2px #fff;}
+.shore-distance-label.distance-sos{color:#b91c1c;}
+.shore-proximity-note{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:9px 16px;color:#627683;font-size:11px;border-top:1px solid #e5ecef;}
+.shore-proximity-note span{display:inline-flex;gap:5px;align-items:center;white-space:nowrap;}
+.shore-proximity-note small{flex:1 1 240px;font-size:11px;}
+.shore-enter-key,.shore-exit-key{display:inline-block;width:16px;border-top:2px solid #16877e;}
+.shore-exit-key{border-top:2px dashed #617b85;}
+.vessel-context-panel{grid-column:1/-1;min-width:0;}
+.vessel-context-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:0;margin:0;padding:0 18px;}
+.vessel-context-grid>div{min-width:0;padding:14px 8px;border-bottom:1px solid #e5ecef;}
+.vessel-context-grid dt{font-size:12px;color:#627683;margin-bottom:4px;}
+.vessel-context-grid dd{margin:0;font-weight:600;font-size:13px;overflow-wrap:anywhere;}
+.vessel-context-panel .data-state-note{padding:12px 18px;margin:0;}

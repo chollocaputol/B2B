@@ -4,3 +4,8 @@ export function studyAccessMode(hostname: string, protocol: string, url: string 
   if (hostname === 'bayanihan-b2b.netlify.app' && protocol === 'https:' && url?.trim() === 'https://twqumqiplqqfhixjvxeo.supabase.co') return 'hosted';
   return null;
 }
+
+// Preserve the fictional demo; synchronized data require approved hosted mode and explicit opt-in.
+export function externalBasemapEnabled(synchronized: boolean, mode: ReturnType<typeof studyAccessMode>, optedIn: boolean): boolean {
+  return !synchronized || (mode === 'hosted' && optedIn);
+}

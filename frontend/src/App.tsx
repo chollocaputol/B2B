@@ -1,19 +1,21 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, BellRing, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Cpu, Database, Droplets, FlaskConical, LayoutDashboard, Radio, Search, Signal, Thermometer, Gauge, Anchor, CloudSun, Wifi, WifiOff, X } from 'lucide-react';
 import { filterReadings, getDemoData, getDeviceStatus, getLatestReading, metrics, metricKeys, dateTime, type Metric } from './data';
 import TrendChart from './TrendChart';
 import InfoDialog from './InfoDialog';
 import MarineOverview from './MarineOverview';
+import type {MapSession} from './VesselMap';
 
 import {studyDashboard} from './studyDashboardData';
 import type {Row} from './studySf';
 import StudyHistory,{exportStudy} from './StudyHistory';
 import {studyAccessMode} from './studyAccessMode';
-export default function App({studyRows,studyControls,excludedFixtures=0}:{studyRows?:Row[];studyControls?:ReactNode;excludedFixtures?:number} = {}) {
+export default function App({studyRows,studyControls,excludedFixtures=0,mapSession}:{studyRows?:Row[];studyControls?:ReactNode;excludedFixtures?:number;mapSession?:MapSession} = {}) {
  const [now] = useState(() => Date.now());
  const study = useMemo(()=>studyRows ? studyDashboard(studyRows,now) : null,[studyRows,now]);
  const data = useMemo(()=>study ?? getDemoData(now),[study,now]);
- const [deviceId, setDeviceId] = useState(data.devices[0].id);
+ const [deviceId, setDeviceId] = useState(() => data.devices.find(d=>d.id===mapSession?.selectedId)?.id ?? data.devices[0].id);
+ useEffect(()=>{if(mapSession)mapSession.selectedId=deviceId;},[mapSession,deviceId]);
  const [hours, setHours] = useState(24);
  const [metric, setMetric] = useState<Metric>('temperature');
  const [query, setQuery] = useState('');
@@ -52,7 +54,7 @@ export default function App({studyRows,studyControls,excludedFixtures=0}:{studyR
      {(['temperature','humidity','pressure'] as Metric[]).map(key => { const Icon = key==='temperature'?Thermometer:key==='humidity'?Droplets:Gauge; return <article className={`stat-card ${key}`} key={key}><div className="stat-top"><span>{metrics[key].label}</span><span className="stat-icon"><Icon size={18}/></span></div><div className="stat-value">{latest?.[key]!=null ? latest[key]!.toFixed(1) : '—'}<span>{metrics[key].unit}</span></div><div className="stat-foot"><span className="tiny-dot"/> {study?'Last unambiguous timed sample':'Latest sensor sample'} <Activity size={39} strokeWidth={1.3}/></div></article> })}
      <article className="stat-card"><div className="stat-top"><span>LoRa link status</span><span className={`stat-icon ${!study&&online?'':'muted-icon'}`}>{!study&&online?<Wifi size={18}/>:<WifiOff size={18}/>}</span></div><div className="status-value"><span className={`status-dot ${!study&&online?'':'offline'}`}/>{study?'Unknown':online?'Online':'Offline'}</div><div className="stat-foot">{study?'Delayed upload is not link evidence':online?'Packet received in demo':'Last packet over 15 min ago'}<span className="device-code">{device.id}</span></div></article>
     </section>
-    <MarineOverview devices={data.devices} readings={data.readings} sosEvents={data.sosEvents} selectedId={deviceId} now={now} onSelect={selectDevice} study={study??undefined}/>
+    <MarineOverview devices={data.devices} readings={data.readings} sosEvents={data.sosEvents} selectedId={deviceId} now={now} onSelect={selectDevice} study={study??undefined} mapSession={mapSession}/>
     <div className="middle-grid">
      <section className="panel trends"><div className="panel-heading"><div><h2>Reading trends <span className="live-label">{study?'SYNCED':'SAMPLE'}</span></h2><p>Explore the selected vessel’s sensor history.</p></div><span className="chart-range">{hours===24?'24-hour':'7-day'} view</span></div><div className="metric-tabs" aria-label="Chart metric">{metricKeys.filter(key=>!study||key!=='signal').map(key => <button key={key} className={metric===key?'selected':''} aria-pressed={metric===key} onClick={() => setMetric(key)}><span style={{background:metrics[key].color}}/>{metrics[key].label}</button>)}</div><div className="chart-unit">{metrics[metric].label} ({metrics[metric].unit})</div><TrendChart readings={readings} metric={metric} synchronized={!!study}/><div className="chart-footer"><span><span className="legend-line" style={{background:metrics[metric].color}}/>{device.name}</span><span>{readings.length.toLocaleString()} {study?'timed weather points':'sample packets'} · PHT</span></div></section>
      <section className="panel device-panel" id="devices"><div className="panel-heading"><div><h2>Vessel nodes <span className="number-badge">{data.devices.length}</span></h2><p>{study?`${data.devices.length} recording vessels; link unknown`:`${onlineCount} reporting in this demo snapshot`}</p></div><Cpu size={18} className="muted"/></div><div className="device-list">{data.devices.map(d => { const isOnline=getDeviceStatus(data.readings,d.id,now)==='online'; return <button key={d.id} className={`device-row ${deviceId===d.id?'current':''}`} onClick={() => selectDevice(d.id)} aria-pressed={deviceId===d.id}><span className={`device-symbol ${!study&&isOnline?'':'is-offline'}`}><Cpu size={21}/></span><span className="device-detail"><strong>{d.name}</strong><small>{d.id} <span>·</span> {study?'Link unknown':isOnline?'Online':'Offline'}</small></span><span className={`status-dot ${!study&&isOnline?'':'offline'}`}/></button> })}</div><div className="device-note"><Radio size={16}/><p>GPS + weather over LoRa.<br/><span>{study?'Recorded observations, not live links.':'All vessel nodes shown here are examples.'}</span></p></div><a className="panel-link" href="#readings">Explore vessel telemetry <ArrowRight size={15}/></a></section>

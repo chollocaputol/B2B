@@ -1,9 +1,9 @@
 import { Anchor, BatteryMedium, CloudSun, Compass, Droplets, Gauge, MapPin, Radio, ShieldAlert, Thermometer } from 'lucide-react';
 import { ageLabel, dateTime, getVesselSnapshot, weatherLabel, type Device, type Reading, type SosEvent } from './data';
 import type {studyDashboard} from './studyDashboardData';
-import VesselMap from './VesselMap';
+import VesselMap, {type MapSession} from './VesselMap';
 
-type Props = {devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>};
+type Props = {devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>;mapSession?:MapSession};
 export default function MarineOverview(props:Props) {
  const {devices,readings,sosEvents,selectedId,now,onSelect}=props;
  const vessel = devices.find(d=>d.id===selectedId)!;

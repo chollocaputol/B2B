@@ -5,8 +5,11 @@ import { studyAccessMode, externalBasemapEnabled } from './studyAccessMode';
 import { LocateFixed, MapPin, Navigation } from 'lucide-react';
 import { ageLabel, getLastPosition, type Device, type Reading, type SosEvent } from './data';
 
-type Props = { devices: Device[]; readings: Reading[]; sosEvents: SosEvent[]; selectedId: string; now: number; onSelect: (id: string) => void; synchronized?:boolean };
-export default function VesselMap({ devices, readings, sosEvents, selectedId, now, onSelect, synchronized=false }: Props) {
+// In-memory view state owned by the authenticated dashboard, never browser storage.
+export type MapSession = { viewport?: {center:[number,number];zoom:number}; selectedId?:string };
+
+type Props = { devices: Device[]; readings: Reading[]; sosEvents: SosEvent[]; selectedId: string; now: number; onSelect: (id: string) => void; synchronized?:boolean; mapSession?:MapSession };
+export default function VesselMap({ devices, readings, sosEvents, selectedId, now, onSelect, synchronized=false, mapSession }: Props) {
  const container = useRef<HTMLDivElement>(null);
  const map = useRef<L.Map | null>(null);
  const markers = useRef<Record<string,L.Marker>>({});
@@ -17,10 +20,28 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
  const showTiles = externalBasemapEnabled(synchronized,mode,tilesOptIn);
  useEffect(() => {
   if (!container.current) return;
-  const instance = L.map(container.current,{scrollWheelZoom:false}).setView([8.283,124.245],13);
+  const initialFix = getLastPosition(readings,selectedId,now);
+  const center: L.LatLngExpression = mapSession?.viewport?.center ?? (initialFix ? [initialFix.latitude!,initialFix.longitude!] : [8.283,124.245]);
+  const instance = L.map(container.current,{scrollWheelZoom:false,maxZoom:18}).setView(center,mapSession?.viewport?.zoom ?? 13);
   map.current = instance;
+  const rememberView = () => {
+   if (!mapSession) return;
+   const c = instance.getCenter();
+   mapSession.viewport = {center:[c.lat,c.lng],zoom:instance.getZoom()};
+  };
+  rememberView();
+  instance.on('moveend',rememberView);
+  const observer = new ResizeObserver(() => instance.invalidateSize({animate:false,pan:true}));
+  observer.observe(container.current);
+  return () => { observer.disconnect(); instance.off('moveend',rememberView); instance.remove(); map.current=null; markers.current={}; };
+ // Only a different dashboard session may replace the map instance.
+ },[mapSession]);
+ useEffect(() => {
+  const instance = map.current;
+  if (!instance) return;
+  const observations = L.layerGroup().addTo(instance);
   const reference = document.createElement('span'); reference.textContent=synchronized?'Acmac · designated sync shore':'Acmac · area reference';
-  L.circleMarker(synchronized?[8.275292,124.262623]:[8.274,124.2649],{radius:5,color:'#526c7e',fillColor:'#fff',fillOpacity:1,weight:2}).bindTooltip(reference,{permanent:true,direction:'right',className:'shore-label'}).addTo(instance);
+  L.circleMarker(synchronized?[8.275292,124.262623]:[8.274,124.2649],{radius:5,color:'#526c7e',fillColor:'#fff',fillOpacity:1,weight:2}).bindTooltip(reference,{permanent:true,direction:'right',className:'shore-label'}).addTo(observations);
   for (const device of devices) {
    const position = getLastPosition(readings,device.id,now);
    if (!position) continue;
@@ -28,24 +49,22 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
    const tooltip = document.createElement('span'); tooltip.textContent=`${device.name} · ${synchronized?'last timed GPS fix':'sample position'}`;
    const marker = L.marker([position.latitude!,position.longitude!],{
     icon:L.divIcon({className:'vessel-marker',html:icon,iconSize:[44,44],iconAnchor:[22,22]}), title:`Select ${device.name} ${synchronized?'last timed GPS fix':'sample position'}`, alt:`${device.name} last reported ${synchronized?'GPS fix':'sample GPS position'}`, keyboard:true,
-   }).addTo(instance).bindTooltip(tooltip,{direction:'top',offset:[0,-12]});
+   }).addTo(observations).bindTooltip(tooltip,{direction:'top',offset:[0,-12]});
    marker.getElement()?.setAttribute('aria-label',`Select ${device.name} ${synchronized?'last timed GPS fix':'sample position'}`);
    marker.on('click',() => onSelect(device.id)); markers.current[device.id]=marker;
   }
   for (const event of sosEvents) {
    const label = document.createElement('span'); label.textContent=`Sample SOS · ${event.deviceId} · event location, not current position`;
-   L.circleMarker([event.latitude,event.longitude],{radius:18,color:'#d07153',fillColor:'#f3ad89',fillOpacity:0.15,weight:2,dashArray:'4 4'}).bindTooltip(label).addTo(instance);
+   L.circleMarker([event.latitude,event.longitude],{radius:18,color:'#d07153',fillColor:'#f3ad89',fillOpacity:0.15,weight:2,dashArray:'4 4'}).bindTooltip(label).addTo(observations);
   }
-  const observer = new ResizeObserver(() => instance.invalidateSize()); observer.observe(container.current);
-  return () => { observer.disconnect(); instance.remove(); map.current=null; markers.current={}; };
- },[devices,readings,sosEvents,now,onSelect,synchronized]);
+  return () => { if (instance.hasLayer(observations)) instance.removeLayer(observations); markers.current={}; };
+ },[devices,readings,sosEvents,now,onSelect,synchronized,mapSession]);
  useEffect(() => {
   Object.entries(markers.current).forEach(([id,marker]) => marker.getElement()?.classList.toggle('is-selected',id===selectedId));
-  const selected = getLastPosition(readings,selectedId,now);
-  if (selected) map.current?.panTo([selected.latitude!,selected.longitude!],{animate:false});
- },[selectedId,readings,now]);
+  // Selection changes highlight only. Explicit map reset remains available.
+ },[selectedId,devices,readings,sosEvents,now,onSelect,synchronized,mapSession]);
  // The basemap is optional; do not rebuild the marker map when the toggle changes.
- // Match the map initialization dependencies so the layer follows a replaced map.
+ // Change tiles independently of observation and selection updates.
  useEffect(() => {
   setTileError(false);
   const instance = map.current;
@@ -57,7 +76,7 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
   layer.on('tileerror',onError);
   layer.addTo(instance);
   return () => { layer.off('tileerror',onError); if (instance.hasLayer(layer)) instance.removeLayer(layer); };
- },[showTiles,devices,readings,sosEvents,now,onSelect,synchronized]);
+ },[showTiles,mapSession]);
  const selected = getLastPosition(readings,selectedId,now);
  return <section className="panel vessel-map-panel" id="vessel-map">
   <div className="panel-heading"><div><h2><Navigation size={16}/> Vessel locations <span className="live-label">{synchronized?'LAST TIMED FIX':'SAMPLE POSITIONS'}</span></h2><p>Iligan Bay · Barangay Acmac, Iligan City</p></div><button className="map-reset" onClick={() => map.current?.setView([8.283,124.245],13)} aria-label="Reset map to Acmac area"><LocateFixed size={16}/></button></div>

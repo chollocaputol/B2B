@@ -5,6 +5,8 @@ import {getSupabaseClient} from './lib/supabase';
 import type {Row} from './studySf';
 import {excludeKnownFixtures} from './studyDashboardData';
 import {studyAccessMode} from './studyAccessMode';
+import {snapshotPhase, isAccessFailure} from './refreshState';
+const EMPTY_ROWS: Row[] = [];
 
 function route(path:'/login'|'/dashboard') {
  if(location.pathname!==path || location.search || location.hash) history.replaceState(null,'',path);
@@ -14,6 +16,7 @@ export default function StudyAccess(){
  const started=useRef(false);
  const inFlight=useRef(false);
  const [logoutFailed,setLogoutFailed]=useState(false);
+ const [readFailed,setReadFailed]=useState(false);
  const [excluded,setExcluded]=useState(0);
  const [email,setEmail]=useState(''),[password,setPassword]=useState('');
  const [rows,setRows]=useState<Row[]|null>(null),[signed,setSigned]=useState(false);
@@ -21,7 +24,8 @@ export default function StudyAccess(){
  const mode=studyAccessMode(location.hostname,location.protocol,import.meta.env.VITE_SUPABASE_URL);
  async function load(action:'login'|'refresh'|'restore') {
   if(!mode||inFlight.current)return;
-  inFlight.current=true;setBusy(true);setRows(null);setLogoutFailed(false);
+  inFlight.current=true;setBusy(true);setRows(null);setExcluded(0);setLogoutFailed(false);setReadFailed(false);
+  let verified=false;
   if(action!=='refresh')mapSession.current={};
   setStatus(action==='refresh'?'Refreshing synchronized observations…':'Checking operator authorization…');
   try {
@@ -37,21 +41,23 @@ export default function StudyAccess(){
    }
    const {data:user,error:authError}=await c.auth.getUser();
    if(authError||user.user?.app_metadata.thesis_study_reviewer!==true||user.user.app_metadata.thesis_study_device===true)throw Error('Operator authorization required');
+   verified=true;
    const out:Row[]=[];
    for(let start=0;start<=10000;start+=500){
-    const {data,error}=await c.from('study_sf_records').select('recorder_node_id,record_id,record_json,synced_at').order('recorder_node_id').order('record_id').range(start,start+499);
+    const {data,error,status:readStatus}=await c.from('study_sf_records').select('recorder_node_id,record_id,record_json,synced_at').order('recorder_node_id').order('record_id').range(start,start+499);
+    if(isAccessFailure(readStatus,error?.code)){verified=false;throw Error('Operator access could not be verified.');}
     if(error||!data)throw Error('Study read failed');
     out.push(...(data as Row[]));
     if(out.length>10000)throw Error('Study limit exceeded; no partial snapshot shown');
     if(data.length<500){
      const view=excludeKnownFixtures(out);
-     if(!view.records.length)mapSession.current={};
      setRows(view.records);setExcluded(view.excluded);setSigned(true);route('/dashboard');
      setStatus(`${view.records.length} synchronized non-fixture records; ${view.excluded} known test records excluded.`);return;
     }
    }
    throw Error('Study limit exceeded; no partial snapshot shown');
   }catch(e){
+   if(verified){setRows(null);setExcluded(0);setSigned(true);route('/dashboard');setReadFailed(true);setStatus('Unable to retrieve synchronized observations. Retry Refresh.');return;}
    mapSession.current={};setRows(null);setSigned(false);setPassword('');route('/login');
    setStatus(e instanceof Error?e.message:'Study read failed');
    try{const {error}=await getSupabaseClient().auth.signOut();setLogoutFailed(!!error);}catch{/* protected data already cleared */}
@@ -64,13 +70,13 @@ export default function StudyAccess(){
  },[mode]);
  async function logout(){
   if(inFlight.current)return;inFlight.current=true;
-  mapSession.current={};setRows(null);setSigned(false);setPassword('');setBusy(true);route('/login');setStatus('Signing out…');
+  mapSession.current={};setRows(null);setExcluded(0);setReadFailed(false);setSigned(false);setPassword('');setBusy(true);route('/login');setStatus('Signing out…');
   try{const {error}=await getSupabaseClient().auth.signOut();setLogoutFailed(!!error);setStatus(error?'Records cleared; session sign-out failed. Retry sign-out.':'Signed out.');}
   catch{setLogoutFailed(true);setStatus('Records cleared; session sign-out failed.');}
   finally{inFlight.current=false;setBusy(false);}
  }
- const controls=<><button className="button" disabled={busy} onClick={()=>void load('refresh')}>Refresh</button> <button className="button" disabled={busy} onClick={()=>void logout()}>Sign out</button></>;
- if(mode&&signed&&rows?.length&&!busy)return <App studyRows={rows} studyControls={controls} excludedFixtures={excluded} mapSession={mapSession.current}/>;
+ const controls=<><button className="button" disabled={busy} onClick={()=>void load('refresh')}>{busy?'Refreshing…':readFailed?'Retry':'Refresh'}</button> <button className="button" disabled={busy} onClick={()=>void logout()}>Sign out</button></>;
+ if(mode&&signed)return <App studyRows={rows??EMPTY_ROWS} studyControls={controls} excludedFixtures={excluded} mapSession={mapSession.current} studyPhase={snapshotPhase(busy,readFailed,rows?.length??0)} studyStatus={status}/>;
  return <main style={{maxWidth:800,margin:'auto',padding:24}}>
   <div className="page-heading"><div><h1>{busy?'Vessels & weather':signed?'Operator dashboard':'Operator sign-in'}</h1><p>{mode==='hosted'?'Hosted':'Local'} authorized access · synchronized history only.</p></div><a href="/">Home</a></div>
   <section className="panel" style={{padding:24}}>

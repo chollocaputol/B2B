@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type {SnapshotPhase} from './refreshState';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { studyAccessMode, externalBasemapEnabled } from './studyAccessMode';
@@ -8,8 +9,8 @@ import { ageLabel, getLastPosition, type Device, type Reading, type SosEvent } f
 // In-memory view state owned by the authenticated dashboard, never browser storage.
 export type MapSession = { viewport?: {center:[number,number];zoom:number}; selectedId?:string };
 
-type Props = { devices: Device[]; readings: Reading[]; sosEvents: SosEvent[]; selectedId: string; now: number; onSelect: (id: string) => void; synchronized?:boolean; mapSession?:MapSession };
-export default function VesselMap({ devices, readings, sosEvents, selectedId, now, onSelect, synchronized=false, mapSession }: Props) {
+type Props = { devices: Device[]; readings: Reading[]; sosEvents: SosEvent[]; selectedId: string; now: number; onSelect: (id: string) => void; synchronized?:boolean; mapSession?:MapSession; studyPhase?:SnapshotPhase };
+export default function VesselMap({ devices, readings, sosEvents, selectedId, now, onSelect, synchronized=false, mapSession, studyPhase='ready' }: Props) {
  const container = useRef<HTMLDivElement>(null);
  const map = useRef<L.Map | null>(null);
  const markers = useRef<Record<string,L.Marker>>({});
@@ -18,7 +19,7 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
  const mode = studyAccessMode(location.hostname,location.protocol,import.meta.env.VITE_SUPABASE_URL);
  const showTileControl = synchronized && mode === 'hosted';
  const showTiles = externalBasemapEnabled(synchronized,mode,tilesOptIn);
- useEffect(() => {
+ useLayoutEffect(() => {
   if (!container.current) return;
   const initialFix = getLastPosition(readings,selectedId,now);
   const center: L.LatLngExpression = mapSession?.viewport?.center ?? (initialFix ? [initialFix.latitude!,initialFix.longitude!] : [8.283,124.245]);
@@ -36,7 +37,7 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
   return () => { observer.disconnect(); instance.off('moveend',rememberView); instance.remove(); map.current=null; markers.current={}; };
  // Only a different dashboard session may replace the map instance.
  },[mapSession]);
- useEffect(() => {
+ useLayoutEffect(() => {
   const instance = map.current;
   if (!instance) return;
   const observations = L.layerGroup().addTo(instance);
@@ -59,7 +60,7 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
   }
   return () => { if (instance.hasLayer(observations)) instance.removeLayer(observations); markers.current={}; };
  },[devices,readings,sosEvents,now,onSelect,synchronized,mapSession]);
- useEffect(() => {
+ useLayoutEffect(() => {
   Object.entries(markers.current).forEach(([id,marker]) => marker.getElement()?.classList.toggle('is-selected',id===selectedId));
   // Selection changes highlight only. Explicit map reset remains available.
  },[selectedId,devices,readings,sosEvents,now,onSelect,synchronized,mapSession]);
@@ -83,7 +84,7 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
   {showTileControl&&<div className="map-error"><label><input type="checkbox" checked={tilesOptIn} onChange={e=>setTilesOptIn(e.target.checked)}/> Show external basemap</label><div>Map requests reveal the viewed area and IP address to OpenStreetMap. Enable only if that area may be shared; leave off for confidential locations. Turning off stops new tile requests.</div></div>}
   <div className="map-container" ref={container} role="region" aria-label={synchronized?'Last timed synchronized vessel GPS fixes':'Interactive map of fictional sample vessel positions near Acmac'}/>
   {showTiles&&tileError&&<div className="map-error" role="status">Some basemap tiles could not load. Vessel markers and available coordinates remain visible.</div>}
-  <div className="map-location"><MapPin size={15}/><div><strong>{devices.find(d => d.id===selectedId)?.name} · {selected?'last reported GPS fix':'GPS unavailable'}</strong><span>{selected?`${selected.latitude!.toFixed(5)}° N, ${selected.longitude!.toFixed(5)}° E · ${ageLabel(selected.timestamp,now)}`:synchronized?'No unambiguous timed valid fix. No marker is shown for this vessel.':'No valid coordinates received. No marker is shown for this vessel.'}</span></div></div>
+  <div className="map-location"><MapPin size={15}/><div><strong>{devices.find(d => d.id===selectedId)?.name??'Vessel positions'} · {studyPhase==='loading'?'Loading':studyPhase==='error'?'Unavailable':selected?'last reported GPS fix':'GPS unavailable'}</strong><span>{studyPhase==='loading'?'Refreshing synchronized vessel positions…':studyPhase==='error'?'Unable to load vessel positions.':studyPhase==='empty'?'No synchronized vessel positions available.':selected?`${selected.latitude!.toFixed(5)}° N, ${selected.longitude!.toFixed(5)}° E · ${ageLabel(selected.timestamp,now)}`:synchronized?'No unambiguous timed valid fix. No marker is shown for this vessel.':'No valid coordinates received. No marker is shown for this vessel.'}</span></div></div>
   <div className="map-caption"><span><i className="legend-vessel"/> {synchronized?'Last timed vessel fix':'Sample vessel'} {!synchronized&&<><i className="legend-sos"/> Sample SOS event location</>}</span><small>{synchronized?(showTiles?'External basemap enabled':showTileControl?'External basemap off':'Local review: external basemap disabled'):'Illustrative positions only'}</small></div>
  </section>;
 }

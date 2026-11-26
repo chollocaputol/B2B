@@ -24,11 +24,11 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
   for (const device of devices) {
    const position = getLastPosition(readings,device.id,now);
    if (!position) continue;
-   const icon = document.createElement('span'); icon.className='boat-pin'; icon.textContent=device.name.replace('Vessel ','');
+   const icon = document.createElement('span'); icon.className='boat-pin'; icon.textContent=synchronized?device.id:device.name.replace('Vessel ','');
    const tooltip = document.createElement('span'); tooltip.textContent=`${device.name} · ${synchronized?'last timed GPS fix':'sample position'}`;
    const marker = L.marker([position.latitude!,position.longitude!],{
-    icon:L.divIcon({className:'vessel-marker',html:icon,iconSize:[34,34],iconAnchor:[17,17]}), title:`Select ${device.name} ${synchronized?'last timed GPS fix':'sample position'}`, alt:`${device.name} last reported ${synchronized?'GPS fix':'sample GPS position'}`, keyboard:true,
-   }).addTo(instance).bindTooltip(tooltip,{direction:'top',offset:[0,-17]});
+    icon:L.divIcon({className:'vessel-marker',html:icon,iconSize:[44,44],iconAnchor:[22,22]}), title:`Select ${device.name} ${synchronized?'last timed GPS fix':'sample position'}`, alt:`${device.name} last reported ${synchronized?'GPS fix':'sample GPS position'}`, keyboard:true,
+   }).addTo(instance).bindTooltip(tooltip,{direction:'top',offset:[0,-12]});
    marker.getElement()?.setAttribute('aria-label',`Select ${device.name} ${synchronized?'last timed GPS fix':'sample position'}`);
    marker.on('click',() => onSelect(device.id)); markers.current[device.id]=marker;
   }

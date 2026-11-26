@@ -68,3 +68,19 @@
 .vessel-info-card dt{color:#687b89;margin:0}
 .vessel-info-card dd{font-weight:600;text-align:right;overflow-wrap:anywhere;margin:0}
 .vessel-info-card small{display:block;color:#687b89;font-size:10px;border-top:1px solid #e6ecee;padding-top:7px}
+
+/* FE2D: recorded SOS attention, not live distress or rescue status. */
+.vessel-marker.has-sos .boat-pin{position:relative;isolation:isolate;background:#b91c1c;color:#fff;border-color:#fff;box-shadow:0 0 0 2px #b91c1c66,0 3px 10px #16445635}
+.vessel-marker.has-sos.is-selected .boat-pin{box-shadow:0 0 0 3px #b91c1c99,0 3px 10px #16445635}
+.vessel-marker.has-sos .boat-pin::after{content:'';position:absolute;inset:-3px;border:2px solid #b91c1c;border-radius:50%;pointer-events:none;animation:sos-heartbeat 1.8s ease-out infinite}
+@keyframes sos-heartbeat{0%{transform:scale(1);opacity:.85}35%{transform:scale(1.65);opacity:.6}80%,100%{transform:scale(2.4);opacity:0}}
+@media(prefers-reduced-motion:reduce){.vessel-marker.has-sos .boat-pin::after{animation:none;transform:scale(1.35);opacity:.75}}
+.legend-attention{display:inline-block;width:9px;height:9px;border-radius:50%;background:#b91c1c;margin-left:8px;flex-shrink:0}
+.sos-summary-event{overflow-wrap:anywhere;background:#f8fafb;border-color:#e0e7eb;color:#263849}
+.sos-summary-event.needs-attention{background:#fff4f4;border-color:#ecc6c6;border-left:3px solid #b91c1c}
+.sos-summary-status{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:650;color:#536773;margin-bottom:8px}
+.sos-summary-dot{width:7px;height:7px;border-radius:50%;background:#71818d;flex-shrink:0}
+.sos-summary-event.needs-attention .sos-summary-status{color:#a71920}
+.sos-summary-event.needs-attention .sos-summary-dot{background:#b91c1c}
+.sos-summary-event>p,.sos-summary-event>small{color:#536773}
+.sos-summary-link{margin-top:auto}

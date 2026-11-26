@@ -36,3 +36,21 @@ test('explicit section overrides obsolete fragment and login defaults to overvie
 test('unknown nested dashboard paths are not authorized entry routes',()=>{
  for(const path of ['/dashboard/weather/extra','/dashboard/overview','/dashboard/Weather','/demo/unknown'])assert.equal(entryRoute(path,'',host,false),'not-found');
 });
+
+test('geolocation and logs are canonical routes while old links remain authorized aliases',()=>{
+ assert.equal(sectionPath('vessels'),'/dashboard/geolocation');
+ assert.equal(sectionPath('records'),'/dashboard/logs');
+ for(const [old,next] of [['vessels','geolocation'],['records','logs']] as const){
+  assert.equal(entryRoute('/dashboard/'+old,'',host,false),'operator');
+  assert.equal(operatorDestination('/dashboard/'+old,''),'/dashboard/'+next);
+  assert.equal(operatorDestination('/dashboard/'+next+'/', ''),'/dashboard/'+next);
+ }
+});
+test('renamed demo aliases remain restricted to loopback development',()=>{
+ for(const path of ['/demo/geolocation','/demo/logs','/demo/vessels','/demo/records']){
+  assert.equal(entryRoute(path,'','127.0.0.1',true),'demo');
+  assert.equal(entryRoute(path,'',host,false),'not-found');
+  assert.equal(entryRoute(path,'','127.0.0.1',false),'not-found');
+ }
+ assert.equal(entryRoute('/dashboard/logs/extra','',host,false),'not-found');
+});

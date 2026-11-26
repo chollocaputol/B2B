@@ -41,3 +41,13 @@
   from = "/dashboard/records"
   to = "/index.html"
   status = 200
+
+[[redirects]]
+  from = "/dashboard/geolocation"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/logs"
+  to = "/index.html"
+  status = 200

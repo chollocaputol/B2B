@@ -1,14 +1,17 @@
 export type Entry = 'landing' | 'operator' | 'legacy' | 'demo' | 'not-found';
 export const sections = ['overview','vessels','weather','sos','records'] as const;
 export type Section = typeof sections[number];
-export const sectionLabels: Record<Section,string> = {overview:'Overview',vessels:'Vessels',weather:'Weather',sos:'SOS',records:'Telemetry history'};
+export const sectionLabels: Record<Section,string> = {overview:'Overview',vessels:'Geolocation',weather:'Weather',sos:'SOS',records:'Logs'};
 function normalized(path:string) { return path.replace(/\/+$/, '') || '/'; }
 export function sectionPath(section:Section,demo=false):string {
  const base=demo?'/demo':'/dashboard';
- return section==='overview'?base:`${base}/${section}`;
+ return section==='overview'?base:`${base}/${section==='vessels'?'geolocation':section==='records'?'logs':section}`;
 }
 export function sectionAt(pathname:string,demo=false):Section|undefined {
  const path=normalized(pathname);
+ const base=demo?'/demo':'/dashboard';
+ if(path===base+'/vessels')return 'vessels';
+ if(path===base+'/records')return 'records';
  return sections.find(section=>sectionPath(section,demo)===path);
 }
 export function sectionFromLocation(pathname:string,hash:string,demo=false):Section {

@@ -1,4 +1,4 @@
-import { Anchor, BatteryMedium, CloudSun, Compass, Droplets, Gauge, MapPin, Radio, ShieldAlert, Thermometer } from 'lucide-react';
+import { Anchor, BatteryMedium, CloudSun, Compass, Droplets, Gauge, MapPin, ShieldAlert, Thermometer } from 'lucide-react';
 import { ageLabel, dateTime, getVesselSnapshot, weatherLabel, type Device, type Reading, type SosEvent } from './data';
 import type {studyDashboard} from './studyDashboardData';
 import VesselMap, {type MapSession} from './VesselMap';
@@ -18,7 +18,7 @@ export default function MarineOverview(props:Props) {
  const section=props.section??'overview';
  const overview=section==='overview';
  return <div className={overview?'marine-grid':'marine-grid section-single'}>
-  {overview&&<VesselMap {...props} readings={props.study?.positions??readings} synchronized={!!props.study}/>}
+  {(overview||section==='vessels')&&<VesselMap {...props} readings={props.study?.positions??readings} synchronized={!!props.study}/>}
   {(overview||section==='weather'||section==='sos')&&<div className="marine-side">
    {(overview||section==='weather')&&<section className="panel weather-panel" id="weather"><div className="panel-heading"><div><h2><CloudSun size={17}/> Weather at the vessel</h2><p>{loading?'Loading vessel…':failed?'Vessel unavailable':vessel?.name??'No vessel selected'} · {props.study?'last timed synchronized measurement':'local sensor sample'}</p></div><span className="weather-icon"><CloudSun size={30}/></span></div>
     <div className="weather-main"><div><strong>{loading?<span className="value-skeleton" aria-label="Loading temperature"/>:hasWeather?latest!.temperature!.toFixed(1):'—'}<span>°C</span></strong><p>{loading?'Loading weather…':failed?'Unable to load weather':!vessel?'No vessel selected':hasWeather?'Air temperature':'Weather sensors unavailable'}</p></div><span className={`weather-state state-${weather}`}>{loading?'Loading…':failed||!vessel?'Unavailable':weatherLabel(weather)}</span></div>
@@ -31,6 +31,6 @@ export default function MarineOverview(props:Props) {
     <p className="sos-footnote">{props.study?'Cancellation observed is not proof of rescue completion or radio source authentication. No rescue request is sent.':'Demonstration only. No distress message or rescue request is being sent.'}</p>
    </section>}
   </div>}
-  {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':shoreDistance!=null?`${(shoreDistance/1000).toFixed(1)} km`:'Unavailable'}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div><div><Radio size={18}/><span>Received LoRa RSSI<strong>{loading?'Loading…':latest?.signal!=null?`${latest.signal} dBm`:'Unavailable'}</strong></span></div></section>}
+  {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':shoreDistance!=null?`${(shoreDistance/1000).toFixed(1)} km`:'Unavailable'}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div></section>}
  </div>;
 }

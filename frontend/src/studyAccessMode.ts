@@ -5,7 +5,7 @@ export function studyAccessMode(hostname: string, protocol: string, url: string 
   return null;
 }
 
-// Preserve the fictional demo; synchronized data require approved hosted mode and explicit opt-in.
-export function externalBasemapEnabled(synchronized: boolean, mode: ReturnType<typeof studyAccessMode>, optedIn: boolean): boolean {
-  return !synchronized || (mode === 'hosted' && optedIn);
+// Preserve the fictional demo. Approved hosted synchronized access defaults to tiles on; local and unapproved access remain tile-free.
+export function externalBasemapEnabled(synchronized: boolean, mode: ReturnType<typeof studyAccessMode>, enabled: boolean = true): boolean {
+  return !synchronized || (mode === 'hosted' && enabled);
 }

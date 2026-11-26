@@ -25,13 +25,21 @@ test('fictional demo keeps its existing basemap in every access mode', () => {
     for (const optedIn of [false, true]) assert.equal(externalBasemapEnabled(false, mode, optedIn), true);
   }
 });
-test('synchronized hosted map requires an explicit opt-in', () => {
+test('synchronized hosted map defaults to tiles on and honors explicit off', () => {
   const mode = studyAccessMode(site, 'https:', hosted);
+  assert.equal(externalBasemapEnabled(true, mode), true);
   assert.equal(externalBasemapEnabled(true, mode, false), false);
   assert.equal(externalBasemapEnabled(true, mode, true), true);
 });
 test('synchronized local and unapproved environments never request tiles', () => {
   for (const mode of [studyAccessMode('127.0.0.1', 'http:', local), studyAccessMode('preview-' + site, 'https:', hosted), studyAccessMode(site, 'https:', local), null]) {
-    for (const optedIn of [false, true]) assert.equal(externalBasemapEnabled(true, mode, optedIn), false);
+    for (const enabled of [undefined, false, true]) assert.equal(externalBasemapEnabled(true, mode, enabled), false);
   }
+});
+
+test('default tiles do not bypass the approved host and project gate', () => {
+  assert.equal(externalBasemapEnabled(true, studyAccessMode(site, 'http:', hosted)), false);
+  assert.equal(externalBasemapEnabled(true, studyAccessMode(site, 'https:', undefined)), false);
+  assert.equal(externalBasemapEnabled(true, studyAccessMode('127.0.0.1', 'http:', local)), false);
+  assert.equal(externalBasemapEnabled(true, studyAccessMode(site, 'https:', hosted)), true);
 });

@@ -5,7 +5,7 @@ import VesselMap, {type MapSession} from './VesselMap';
 import type {SnapshotPhase} from './refreshState';
 import type {Section} from './routes';
 
-type Props = {devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>;mapSession?:MapSession;studyPhase?:SnapshotPhase;section?:Exclude<Section,'records'>};
+type Props = {devices:Device[];readings:Reading[];sosEvents:SosEvent[];selectedId:string;now:number;onSelect:(id:string)=>void;study?:ReturnType<typeof studyDashboard>;mapSession?:MapSession;tilesEnabled:boolean;studyPhase?:SnapshotPhase;section?:Exclude<Section,'records'>};
 export default function MarineOverview(props:Props) {
  const {devices,readings,sosEvents,selectedId,now,onSelect}=props;
  const vessel = devices.find(d=>d.id===selectedId);

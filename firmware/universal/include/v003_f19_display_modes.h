@@ -8,7 +8,11 @@ enum class HomeChoice : uint8_t { ScreenOff=0, Development=1, Portrait=2, Landsc
 enum class Orientation : uint8_t { Landscape=0, Portrait=1 };
 static constexpr uint8_t kHomeChoiceCount=5U;
 static constexpr uint8_t kOperationalPageCount=4;
+#if THESIS_STUDY_SF_CLOUD == 1
+static constexpr uint8_t kDevelopmentPageCount=9;
+#else
 static constexpr uint8_t kDevelopmentPageCount=8;
+#endif
 static constexpr uint32_t kShortTapMaxMs=900U;
 static constexpr uint32_t kModeToggleMinMs=2000U;
 inline bool emergencyActive(bool localActive, unsigned receivedActive) {

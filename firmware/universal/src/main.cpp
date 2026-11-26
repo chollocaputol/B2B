@@ -400,7 +400,10 @@ static_assert(V003F08CombinedBench::kOutputsEnabled &&
 #if THESIS_V003_F17_EXPLICIT_OPT_IN == 1 && THESIS_V003_F17_INTEGRATED_PREFLIGHT != 1
 #error "F17 opt-in requires integrated preflight mode"
 #endif
-#if THESIS_SD_OLED_UI == 1
+#if THESIS_STUDY_SF_CLOUD == 1
+#define OLED_PAGE_TOTAL "9"
+static constexpr uint8_t kOLEDPageCount = 9;
+#elif THESIS_SD_OLED_UI == 1
 #define OLED_PAGE_TOTAL "8"
 static constexpr uint8_t kOLEDPageCount = 8;
 #else
@@ -418,6 +421,9 @@ static constexpr uint8_t kOLEDPageCount = 7;
 #endif
 #include "weather_manager.h"
 #include "study_sf_target.h"
+#if THESIS_STUDY_SF_CLOUD == 1
+#include "study_sf_shore.h"
+#endif
 #ifndef THESIS_STUDY_SF_UNIVERSAL_OFFLINE
 #define THESIS_STUDY_SF_UNIVERSAL_OFFLINE 0
 #endif
@@ -617,6 +623,9 @@ static bool f18WeatherMicroView = false;
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
 // Volatile operational menu / OLED sleep. Navigation does not own radio or SOS.
 static V003F19Display::State f19Display;
+#if THESIS_STUDY_SF_CLOUD == 1
+static StudyShore::Policy studyShore;
+#endif
 static V003F19Display::SOSBrowse f21r42SOSBrowse;
 static bool f19PhysicalScreenAsleep = false;
 static bool f21PhysicalPortrait = false; // OLED-only cached rotation
@@ -1375,7 +1384,7 @@ void setup() {
   Serial.println("[F18-WEATHER] MACRO=EMPIRICAL_100MIN MICRO=EXPERIMENTAL_10_30MIN OLED=LONG_HOLD_PAGE1 SD=V003_SANDBOX GPIO=OFF");
 #endif
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
-  Serial.println("[F19-UI] MODE=OPERATIONAL OP_PAGES=4 DEV_PAGES=8 HOME_MENU=HOLD SOS=PRIORITY GPIO=OFF");
+  Serial.println("[F19-UI] MODE=OPERATIONAL OP_PAGES=4 DEV_PAGES=" OLED_PAGE_TOTAL " HOME_MENU=HOLD SOS=PRIORITY GPIO=OFF");
 #endif
 #if THESIS_V003_F19_DUAL_DISPLAY == 1
   Serial.println("[F19R3] DEFAULT=SOS_ARMED DEV7=SOS_ONLY DEV8=SD_RECORDING RESEARCH=CONTINUOUS_ONLY HISTORY=READ_ONLY");
@@ -1452,6 +1461,12 @@ void loop() {
 // F23D SD end
 #endif
   updateGPS();
+#if THESIS_STUDY_SF_CLOUD == 1
+  const bool shoreDevAllowed=!f19Display.operational() && !hasActiveLocalSOS() && getActiveSOSCount()==0;
+  studyShore.observe(gpsHasFix && gps.location.isValid() && gps.location.age()<GPSService::kFreshFixMs,
+                     latitude,longitude,shoreDevAllowed);
+  thesisStudySfSetShoreAllowed(studyShore.allowed());
+#endif
 #if THESIS_STUDY_SF_BUILD_ONLY == 1
   static uint32_t studyLastGps=0;
   if(uint32_t(millis()-studyLastGps)>=30000UL){studyLastGps=millis();char utc[21]{};
@@ -2095,6 +2110,10 @@ void handleOLEDButton() {
 #if THESIS_V003_F18_WEATHER_INTERFACE == 1
         f18WeatherMicroView=false;
 #endif
+#if THESIS_STUDY_SF_CLOUD == 1
+        studyShore.clearSimulation();
+        thesisStudySfSetShoreAllowed(studyShore.allowed());
+#endif
         Serial.println("[F19-UI] MODE=OPERATIONAL DISPLAY_ONLY OUTPUTS=OFF");
         lastOLEDUpdate=0; return;
       }
@@ -2186,6 +2205,12 @@ void handleOLEDButton() {
         sdOLEDSubview = (sdOLEDSubview + 1U) % 3U;
         Serial.printf("[OLED-SD] VIEW=%u DISPLAY_ONLY\n", (unsigned)sdOLEDSubview);
 #endif
+#endif
+#if THESIS_STUDY_SF_CLOUD == 1
+      } else if (oledPage == 8 && duration >= BUTTON_LONG_PRESS_MS) {
+        studyShore.cycle(!f19Display.operational() && !hasActiveLocalSOS() && getActiveSOSCount()==0);
+        thesisStudySfSetShoreAllowed(studyShore.allowed());
+        Serial.printf("[SHORE] MODE=%s GATE=%s; VOLATILE=1; GPS_UNCHANGED=1\n",StudyShore::modeName(studyShore.mode()),studyShore.allowed()?"ALLOWED":"BLOCKED");
 #endif
       } else if (oledPage == 4 && duration >= BUTTON_LONG_PRESS_MS) {
         alertDemoMode = (alertDemoMode + 1) % 4;
@@ -3009,6 +3034,21 @@ void updateOLED() {
 #if THESIS_SD_OLED_UI == 1
     case 7: oledSDStoragePage(); break;
 #endif
+#if THESIS_STUDY_SF_CLOUD == 1
+    case 8: {
+      u8g2.clearBuffer();u8g2.setFont(u8g2_font_6x10_tf);
+      char b[32];
+      u8g2.drawStr(0,9,"DTN SYNC 9/9");
+      snprintf(b,sizeof(b),"MODE: %s",StudyShore::modeName(studyShore.mode()));u8g2.drawStr(0,20,b);
+      if(studyShore.known())snprintf(b,sizeof(b),"GPS: %s %.0fm",studyShore.near()?"NEAR":"FAR",studyShore.distance());
+      else strcpy(b,"GPS: UNKNOWN");
+      u8g2.drawStr(0,31,b);
+      u8g2.drawStr(0,42,studyShore.allowed()?"GATE: ALLOWED":"GATE: BLOCKED");
+      const uint8_t net=thesisStudySfNetworkState();
+      u8g2.drawStr(0,53,net==2?"NET: CONNECTED":net==1?"NET: CONNECTING":net==3?"NET: STOP PENDING":"NET: OFF");
+      u8g2.drawStr(0,63,"HOLD:MODE TAP:NEXT");u8g2.sendBuffer();break;
+    }
+#endif
   }
 }
 
@@ -3344,7 +3384,7 @@ void oledSDStoragePage() {
   char line[38];
 #if THESIS_F06_SD_HYBRID == 1
   if (sdStorageMenuOpen) {
-    u8g2.drawStr(0, 9, "SD STORAGE MENU 8/8");
+    u8g2.drawStr(0, 9, "SD STORAGE MENU 8/" OLED_PAGE_TOTAL);
     const char* menuItems[4] = {
         "SD JOURNALS", "SD USB READBACK", "RECORDING MODE", "BACK"};
     for (uint8_t index = 0; index < 4; ++index) {
@@ -3357,7 +3397,7 @@ void oledSDStoragePage() {
     return;
   }
   if (sdHybridMenuOpen) {
-    u8g2.drawStr(0, 9, "RECORDING MODE 8/8");
+    u8g2.drawStr(0, 9, "RECORDING MODE 8/" OLED_PAGE_TOTAL);
     const char* menuItems[3] = {"SOS ARMED", "CONTINUOUS", "BACK"};
     for (uint8_t index = 0; index < 3; ++index) {
       snprintf(line, sizeof(line), "%c %s",
@@ -3370,7 +3410,7 @@ void oledSDStoragePage() {
   }
 #endif
   if (sdOLEDSubview == 0) {
-    u8g2.drawStr(0, 9, "SD STORAGE 8/8");
+    u8g2.drawStr(0, 9, "SD STORAGE 8/" OLED_PAGE_TOTAL);
 #if THESIS_F06_SD_HYBRID == 1
 #if THESIS_STUDY_SF_BUILD_ONLY == 1
     const bool ready=thesisStudySfStorageReady();
@@ -3412,7 +3452,7 @@ void oledSDStoragePage() {
     u8g2.drawStr(0, 63, "HOLD:FILES TAP:NEXT");
 #endif
   } else if (sdOLEDSubview == 1) {
-    u8g2.drawStr(0, 9, "SD JOURNALS 8/8");
+    u8g2.drawStr(0, 9, "SD JOURNALS 8/" OLED_PAGE_TOTAL);
 #if THESIS_STUDY_SF_BUILD_ONLY == 1
     u8g2.drawStr(0,21,"STUDY JSONL FILES");
     u8g2.drawStr(0,33,thesisStudySfStorageReady() ? "STORAGE READY" : "STORAGE NOT READY");
@@ -3450,7 +3490,7 @@ void oledSDStoragePage() {
     u8g2.drawStr(0, 64, "HOLD:USB TAP:NEXT");
 #endif
   } else {
-    u8g2.drawStr(0, 9, "SD USB READBACK 8/8");
+    u8g2.drawStr(0, 9, "SD USB READBACK 8/" OLED_PAGE_TOTAL);
 #if THESIS_STUDY_SF_BUILD_ONLY == 1
     u8g2.drawStr(0,21,"STUDY JSONL");
     u8g2.drawStr(0,33,"USB READBACK OFF");

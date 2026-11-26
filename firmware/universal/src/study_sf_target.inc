@@ -11,6 +11,7 @@
 #if THESIS_STUDY_SF_CLOUD == 1
 #include <esp_crt_bundle.h>
 #include "study_sf_cloud_auth.h"
+#include "study_sf_shore.h"
 #if THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1
 #error "Cloud sync requires the accepted universal study profile"
 #endif
@@ -55,6 +56,11 @@ StudySF::Encoder studyEncoder;
 // Volatile manual recording mode; no persistence or new storage owner.
 std::atomic<bool> studyContinuous{false};
 std::atomic<bool> studyStorageReady{false};
+#if THESIS_STUDY_SF_CLOUD == 1
+std::atomic<uint32_t> shorePermitStamp{0};
+std::atomic<uint8_t> studyNetState{0};
+bool shorePermitFresh(){const uint32_t stamp=shorePermitStamp.load();return StudyShore::permitFresh(stamp,millis());}
+#endif
 QueueHandle_t studyQueue=nullptr;
 uint32_t studyNode=0;char studyBoot[37]{};
 void newUuid(char (&out)[37]){uint8_t bytes[16];esp_fill_random(bytes,sizeof(bytes));StudySF::uuidFromBytes(bytes,out);}
@@ -127,6 +133,7 @@ void studyWorker(void* opaque){
 #if THESIS_STUDY_SF_CLOUD == 1
  const bool syncEnabled=usable(c)&&studyNode==cloudConfig.node;
  StudyCloudAuth::Session session;StudyCloudAuth::Retry authRetry;
+ bool shoreWasAllowed=false;
  if(!syncEnabled){syncStopped=true;Serial.println("[STUDY-SF] CLOUD_CONFIG_UNAVAILABLE_OR_WRONG_NODE; WIFI=DISABLED; STORAGE ACTIVE");}
  else Serial.printf("[STUDY-SF] CLOUD_SYNC_READY node=%lu\n",(unsigned long)studyNode);
 #else
@@ -142,6 +149,22 @@ void studyWorker(void* opaque){
   }
 #if THESIS_STUDY_SF_OFFLINE_V003 != 1 && (THESIS_STUDY_SF_UNIVERSAL_OFFLINE != 1 || THESIS_STUDY_SF_CLOUD == 1)
   const uint32_t now=millis();
+#if THESIS_STUDY_SF_CLOUD == 1
+  const bool shoreAllowed=!syncStopped && shorePermitFresh();
+  if(!shoreAllowed){
+    // Storage is serviced above even when no network operation is admitted.
+    if(shoreWasAllowed || netStarted || WiFi.getMode()!=WIFI_OFF){
+      WiFi.persistent(false);WiFi.mode(WIFI_OFF);
+      if(shoreWasAllowed)Serial.println("[SHORE] GATE=BLOCKED; retaining records; WIFI_OFF_REQUESTED");
+    }
+    studyNetState.store(WiFi.getMode()==WIFI_OFF?0:3);
+    shoreWasAllowed=false;netStarted=false;online=false;clockStarted=false;clockReported=false;
+    session.clear();authRetry=StudyCloudAuth::Retry{};
+    vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
+  if(!shoreWasAllowed){shoreWasAllowed=true;Serial.println("[SHORE] GATE=ALLOWED; hosted sync permitted");}
+  studyNetState.store(WiFi.status()==WL_CONNECTED?2:1);
+#endif
   if(!syncStopped){
    if(WiFi.status()!=WL_CONNECTED){if(online){online=false;
 #if THESIS_STUDY_SF_CLOUD == 1
@@ -153,7 +176,9 @@ void studyWorker(void* opaque){
     if(time(nullptr)>=1700000000&&uxQueueMessagesWaiting(studyQueue)==0&&uint32_t(now-lastUpload)>=1000U){lastUpload=now;char batchId[37];newUuid(batchId);auto next=journal.prepare(batchId);
      if(next==StudySF::Journal::Next::Ready){
 #if THESIS_STUDY_SF_CLOUD == 1
-      if(!session.valid(now)){session.clear();if(authRetry.ready(now)){authRetry.mark(now);cloudLogin(c,session);}vTaskDelay(pdMS_TO_TICKS(20));continue;}
+      if(!shorePermitFresh()){vTaskDelay(pdMS_TO_TICKS(20));continue;}
+      if(!session.valid(now)){session.clear();if(authRetry.ready(now)){authRetry.mark(now);if(shorePermitFresh())cloudLogin(c,session);}vTaskDelay(pdMS_TO_TICKS(20));continue;}
+      if(!shorePermitFresh()){vTaskDelay(pdMS_TO_TICKS(20));continue;}
       ResponseBuffer reply;int status=upload(c,journal.batch(),reply,session.token);
 #else
       ResponseBuffer reply;int status=upload(c,journal.batch(),reply);
@@ -183,6 +208,10 @@ bool thesisStudySfConfigured(){return storageUsable(studyConfig);}
 void thesisStudySfSetContinuous(bool continuous){if(thesisStudySfConfigured())studyContinuous.store(continuous);}
 bool thesisStudySfIsContinuous(){return studyContinuous.load();}
 bool thesisStudySfStorageReady(){return studyStorageReady.load();}
+#if THESIS_STUDY_SF_CLOUD == 1
+void thesisStudySfSetShoreAllowed(bool allowed){shorePermitStamp.store(allowed?millis():0U);}
+uint8_t thesisStudySfNetworkState(){return studyNetState.load();}
+#endif
 bool thesisStudySfStart(uint32_t node){
 #if THESIS_STUDY_SF_OFFLINE_V003 == 1 || THESIS_STUDY_SF_SYNC_V003 == 1
  if(node!=3U)return false;

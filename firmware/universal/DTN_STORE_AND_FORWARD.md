@@ -118,3 +118,56 @@ accuracy, endurance and multihop remain unverified. Wi-Fi retries may emit
 ESP_ERR_WIFI_STATE; reconnection succeeded in the observed trial. Restart
 replays earlier files because the cursor is RAM-only; no automatic deletion.
 Do not mix power optimization or other unrelated improvements into CLOUD4.
+
+## SHORE1 candidate — Acmac proximity-controlled hosted sync
+
+The operator selected the designated shore synchronization reference
+8.275292 N, 124.262623 E (Google Maps pin, 26 Nov 2026). These are
+provisional engineering parameters: entry within 100 m, retain admission
+through 150 m, leave beyond 150 m, or deny on invalid/stale GPS fix. This
+is a point-radius gate, not a measured coverage boundary or coastline
+distance. Wi-Fi authentication and successful delivery are still required.
+
+Only the hosted profile gains DEV9 (DTN SYNC), and the four operational
+pages remain unchanged. HOLD cycles AUTO / SIM SHORE / SIM OFFSHORE;
+TAP advances the page. Simulation is volatile and cleared on return to
+operational mode, active SOS, or reboot. Simulation does not change GPS,
+weather, SOS, or journal contents. AUTO uses the existing GPS freshness
+check. A short main-loop permission lease guards new worker network work;
+the worker stops Wi-Fi and clears its RAM session when admission ends.
+An already in-flight blocking HTTPS call may finish before shutdown.
+SD append and LoRa remain independent of the gate. Offline-only and local
+bench profiles keep their previous behavior. Retained journals and replay
+policy are unchanged; no durable replay cursor or endurance claim. The
+study dashboard marker uses the designated point; demo marker stays
+illustrative. No synthetic GPS fixes or derived shore distances added.
+Physical near-shore radius, GNSS accuracy and coverage remain to be tested.
+
+
+## SHORE1-3 functional bench acceptance - 26 November 2026
+
+Both enrolled vessels ran the private shore-controlled cloud candidate.
+The original source tests passed 19/19 and 33/33; native shore policy and
+cloud session tests passed. The dummy cloud build reported 105404 bytes RAM
+and 1488168 bytes flash. The offline profile compiled with 77724 bytes RAM
+and 791705 bytes flash. Both private flash summaries and retained app/NVS
+readbacks were checked by SHORE3. The isolated frontend frozen-lockfile
+TypeScript/Vite build passed before publication.
+
+V003 and V002 demonstrated DEV9 navigation, simulated shore admission,
+actual hosted authentication, confirmed receipts, simulated offshore denial
+and AUTO with no fix. V002 continued recording while blocked; the GPS
+record captured at uptime 120007 ms was delivered upon renewed admission.
+Five newly accepted V002 identities matched hosted PostgreSQL. V002 reboot
+cleared simulation, and returning directly to Operational from Development
+while SIM SHORE was active requested Wi-Fi shutdown. A blocking auth or
+upload already in progress can finish before shutdown. Physical LoRa TX
+continued; this is not a bidirectional or range validation. Last verified
+hosted snapshot: 229 total rows, 228 non-fixture bench observations
+(V002:7, V003:221). Not a complete-card accounting claim.
+
+Actual shore GPS activation, coverage/radius calibration, OLED readability,
+radio current draw and endurance, weather/GPS accuracy and multihop remain
+separate validation work. No SD format, journal replay, backend schema,
+authentication contract, NVS enrollment, relay or PMU change in SHORE1-3.
+Private images and evidence remain outside Git.

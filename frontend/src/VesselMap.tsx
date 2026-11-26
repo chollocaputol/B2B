@@ -17,8 +17,8 @@ export default function VesselMap({ devices, readings, sosEvents, selectedId, no
   if(!synchronized)L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
    maxZoom:18, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',
   }).on('tileerror',() => setTileError(true)).addTo(instance);
-  const reference = document.createElement('span'); reference.textContent='Acmac · area reference';
-  L.circleMarker([8.274,124.2649],{radius:5,color:'#526c7e',fillColor:'#fff',fillOpacity:1,weight:2}).bindTooltip(reference,{permanent:true,direction:'right',className:'shore-label'}).addTo(instance);
+  const reference = document.createElement('span'); reference.textContent=synchronized?'Acmac · designated sync shore':'Acmac · area reference';
+  L.circleMarker(synchronized?[8.275292,124.262623]:[8.274,124.2649],{radius:5,color:'#526c7e',fillColor:'#fff',fillOpacity:1,weight:2}).bindTooltip(reference,{permanent:true,direction:'right',className:'shore-label'}).addTo(instance);
   for (const device of devices) {
    const position = getLastPosition(readings,device.id,now);
    if (!position) continue;

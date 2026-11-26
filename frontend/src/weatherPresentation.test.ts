@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {recordedWeather,microStateLabel,microPatternLabel} from './weatherPresentation.ts';
+import type {Row} from './studySf.ts';
+const now=Date.parse('2026-11-27T00:00:00Z'),at=now-60000;
+const micro={input_valid:true,state:'NO_PATTERN',pattern:'NONE'};
+const make=(counter:number,capture:number|null=at,payload:unknown=micro,node=2,boot='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',kind:Row['record_json']['kind']='weather'):Row=>{const record_id=boot+':'+counter;return {recorder_node_id:node,record_id,synced_at:new Date(now-1000).toISOString(),record_json:{recorder_node_id:node,record_id,kind,captured_at:capture===null?null:new Date(capture).toISOString(),uptime_ms:counter,payload:{micro:payload,weather_state:1}}};};
+test('micro display uses selected recording vessel and most recent timed weather only',()=>{const r=recordedWeather([make(1),make(2,at+1000,{...micro,state:'WARMUP'}),make(3,at+2000,micro,3),make(4,at+3000,micro,2,undefined,'gps')],'2',now);assert.equal(r.captureAt,at+1000);assert.equal(microStateLabel(r.micro),'Warm-up');assert.equal(microPatternLabel(r.micro),'Unavailable');});
+test('latest invalid input does not fall back to earlier valid weather',()=>{const r=recordedWeather([make(1),make(2,at+1,{input_valid:false,state:'INVALID',pattern:'NONE'})],'2',now);assert.equal(microStateLabel(r.micro),'Invalid input');assert.equal(microPatternLabel(r.micro),'Unavailable');});
+test('null latest micro remains unavailable rather than borrowing an older result',()=>{const r=recordedWeather([make(1),make(2,at+1,null)],'2',now);assert.equal(r.micro,null);assert.equal(r.captureAt,at+1);});
+test('future and unknown capture are excluded; receipt never substitutes capture',()=>{const r=recordedWeather([make(1,null),make(2,now+1)],'2',now);assert.deepEqual(r,{captureAt:null,receiptAt:null,micro:null});});
+test('cross-boot equal time is ambiguous, same boot uses numeric counter',()=>{assert.equal(recordedWeather([make(1),make(2,at,micro,2,'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')],'2',now).micro,null);assert.equal(recordedWeather([make(10,at,null),make(2)],'2',now).micro,null);});
+test('capture and receipt are independent and future receipt is unavailable',()=>{const r=make(1);assert.equal(recordedWeather([r],'2',now).receiptAt,now-1000);r.synced_at=new Date(now+1).toISOString();assert.equal(recordedWeather([r],'2',now).receiptAt,null);});
+test('no-pattern does not mean safe and malformed fields are not shown',()=>{const r=recordedWeather([make(1)],'2',now);assert.equal(microStateLabel(r.micro),'No pattern recorded');assert.equal(microPatternLabel(r.micro),'None recorded');assert.equal(recordedWeather([make(2,at,{input_valid:'true',state:'NO_PATTERN',pattern:'NONE'})],'2',now).micro,null);});
+test('demo and empty snapshots contain no fabricated forecast or receipt',()=>{for(const rows of [undefined,[]])assert.deepEqual(recordedWeather(rows,'2',now),{captureAt:null,receiptAt:null,micro:null});});

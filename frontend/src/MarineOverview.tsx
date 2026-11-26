@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react';
 import EmergencyHistory from './EmergencyHistory';
+import WeatherLayers from './WeatherLayers';
 import type {ViewSnapshot} from './relationalViews';
 import { Anchor, ArrowRight, BatteryMedium, CloudSun, Compass, Droplets, Gauge, MapPin, ShieldAlert, Thermometer } from 'lucide-react';
 import { ageLabel, dateTime, getVesselSnapshot, weatherLabel, type Device, type Reading, type SosEvent } from './data';
@@ -45,15 +46,16 @@ export default function MarineOverview(props:Props) {
  const hasWeather = latest?.temperature !== null && latest?.temperature !== undefined;
  const section=props.section??'overview';
  const overview=section==='overview';
- return <div className={overview?'marine-grid':'marine-grid section-single'}>
+ return <div className={overview?'marine-grid overview-map-first':'marine-grid section-single'}>
   {(overview||section==='vessels')&&<VesselMap {...props} readings={props.study?.positions??readings} synchronized={!!props.study}/>}
   {(overview||section==='weather'||section==='sos')&&<div className="marine-side">
-   {(overview||section==='weather')&&<section className="panel weather-panel" id="weather"><div className="panel-heading"><div><h2><CloudSun size={17}/> Weather at the vessel</h2><p>{loading?'Loading vessel…':failed?'Vessel unavailable':vessel?.name??'No vessel selected'} · {props.study?'last timed synchronized measurement':'local sensor sample'}</p></div><span className="weather-icon"><CloudSun size={30}/></span></div>
+   {overview&&<section className="panel weather-panel" id="weather"><div className="panel-heading"><div><h2><CloudSun size={17}/> Weather at the vessel</h2><p>{loading?'Loading vessel…':failed?'Vessel unavailable':vessel?.name??'No vessel selected'} · {props.study?'last timed synchronized measurement':'local sensor sample'}</p></div><span className="weather-icon"><CloudSun size={30}/></span></div>
     <div className="weather-main"><div><strong>{loading?<span className="value-skeleton" aria-label="Loading temperature"/>:hasWeather?latest!.temperature!.toFixed(1):'—'}<span>°C</span></strong><p>{loading?'Loading weather…':failed?'Unable to load weather':!vessel?'No vessel selected':hasWeather?'Air temperature':'Weather sensors unavailable'}</p></div><span className={`weather-state state-${weather}`}>{loading?'Loading…':failed||!vessel?'Unavailable':weatherLabel(weather)}</span></div>
     <div className="weather-details"><div><Droplets size={15}/><span>Humidity</span><strong>{loading?'Loading…':latest?.humidity!=null?`${latest.humidity.toFixed(1)} %`:'Unavailable'}</strong></div><div><Gauge size={15}/><span>Pressure</span><strong>{loading?'Loading…':latest?.pressure!=null?`${latest.pressure.toFixed(1)} hPa`:'Unavailable'}</strong></div><div><Thermometer size={15}/><span>Pressure trend</span><strong>{loading?'Loading…':latest?.pressureTrend!=null?`${latest.pressureTrend>0?'+':''}${latest.pressureTrend.toFixed(1)} hPa`:'Unavailable'}</strong></div></div>
     <div className="weather-note">{latest?`${props.study?'Captured':'Last packet'} ${ageLabel(latest.timestamp,now)} · `:''}Sensor state only; not an official forecast.</div>
    </section>}
    {overview&&<OverviewSos {...props}/>}
+   {(overview||section==='weather')&&<WeatherLayers rows={props.study?.records} nodeId={selectedId} now={now} phase={props.studyPhase} compact={overview}/>}
    {section==='sos'&&<EmergencyHistory rows={props.study?.records} samples={sosEvents} devices={devices} now={now} phase={props.studyPhase} views={props.views}/>}
   </div>}
   {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':distanceText(shoreDistance)}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div></section>}

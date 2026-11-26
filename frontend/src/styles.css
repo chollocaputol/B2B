@@ -127,3 +127,40 @@
 .emergency-count,.emergency-status{font-size:12px;font-weight:600;color:#536c78;}.emergency-count.active,.emergency-status.active{color:#b91c1c;}.emergency-status.active{border-left:3px solid #b91c1c;padding-left:7px;}
 @media(max-width:600px){.log-search{width:210px;}.log-filters{padding-inline:12px;}.log-filters label{flex:1 1 135px;}.log-filters select{max-width:100%;}}
 @media(prefers-reduced-motion:reduce){.record-table-state.is-loading svg{animation:none;}}
+/* Package C: map-first overview and independent recorded weather layers. */
+.marine-grid.overview-map-first{align-items:start;grid-template-columns:minmax(0,1fr) minmax(285px,330px)}
+.overview-map-first .vessel-map-panel{align-self:stretch;min-width:0}
+.overview-map-first .marine-side{min-width:0}
+.overview-map-first .map-container{min-height:430px}
+.weather-layers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;min-width:0}
+.weather-layers-compact{grid-template-columns:minmax(0,1fr);gap:12px}
+.weather-layer{padding:16px;min-width:0;overflow-wrap:anywhere}
+.weather-layer header{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:#365762}
+.weather-layer header svg{color:#198b80;flex-shrink:0}
+.weather-layer h3{font-size:13px;margin:0;font-weight:650;color:inherit}
+.weather-layer header span{font-size:10px;color:#596b79;margin-left:auto}
+.weather-layer-result{display:block;font-size:18px;line-height:1.45;color:#345762;margin:12px 0 8px}
+.weather-layer p{font-size:11px;line-height:1.65;color:#596b79;margin:8px 0 0}
+.weather-layer dl{margin:12px 0 0;font-size:11px;line-height:1.6}
+.weather-layer dl div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid #e3eceb}
+.weather-layer dt{color:#596b79}.weather-layer dd{margin:0;font-weight:550;text-align:right;color:#365762}
+.weather-layers-compact .weather-layer{padding:13px 15px}
+.weather-layers-compact .weather-layer-result{font-size:15px;margin:8px 0 5px}
+@media(max-width:980px){.marine-grid.overview-map-first{grid-template-columns:minmax(0,1fr) minmax(260px,290px)}}
+@media(max-width:760px){.marine-grid.overview-map-first{grid-template-columns:minmax(0,1fr)}.overview-map-first .vessel-map-panel{order:0}.overview-map-first .marine-side{order:1}.overview-map-first .map-container{min-height:330px}.weather-layers{grid-template-columns:minmax(0,1fr)}}
+
+/* C1 refinement: single measurement surface and chart-local range selector. */
+.weather-measurements{margin-bottom:20px;min-width:0}
+.weather-measurements .weather-measurement-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:0}
+.weather-measurement-grid .stat-card{min-width:0}
+.weather-measurement-grid .stat-value{font-size:clamp(24px,2.4vw,36px);white-space:nowrap}
+.weather-measurement-grid .pressureTrend .stat-icon{background:#edf6f3;color:#48867b}
+.weather-sample-context{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 2px 0;font-size:12px;color:#596b79}
+.weather-sample-context>span:first-child{display:flex;align-items:center;gap:6px}
+.weather-sample-context .weather-state{max-width:none;font-size:11px}
+.weather-state.state--1{background:#f0f3f5;color:#596b79;border-color:#e2e8ec}
+.weather-measurement-note{color:#596b79;font-size:11px;margin:6px 2px 0;line-height:1.6}
+.trends .panel-heading{flex-wrap:wrap;gap:12px}
+.trends .range-switch{flex-shrink:0;max-width:100%}
+@media(max-width:1200px){.weather-measurements .weather-measurement-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:390px){.weather-measurements .weather-measurement-grid{grid-template-columns:minmax(0,1fr)}}

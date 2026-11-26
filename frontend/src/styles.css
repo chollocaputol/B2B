@@ -18,3 +18,17 @@
 @media(max-width:760px){.marine-grid{grid-template-columns:1fr;gap:16px;margin-bottom:17px}.marine-side{order:1;gap:16px}.vessel-map-panel{order:2}.vessel-detail-strip{order:3;padding:17px 0;gap:19px}.weather-panel .panel-heading{padding:19px 18px 0}.weather-panel h2{font-size:13px}.weather-main{padding:20px 18px 15px}.weather-main strong{font-size:43px}.weather-main p{font-size:11px}.weather-details{margin:0 18px}.weather-details>div{font-size:11px;padding:10px 0}.weather-details strong{font-size:12px}.weather-note{font-size:10px;padding-left:18px;padding-right:18px}.weather-state{font-size:10px;max-width:130px}.sos-panel h2{font-size:13px}.sos-event{margin:15px 18px 0;padding:14px}.sos-event-title strong{font-size:11px}.sos-event-title>span:last-child{font-size:9px}.sos-event>p,.sos-coordinates{font-size:11px}.sos-event>small,.sos-footnote{font-size:10px}.sos-select{font-size:11px}.map-container{height:330px;min-height:330px}.vessel-map-panel h2{font-size:13px}.vessel-map-panel .live-label{font-size:7px}.vessel-map-panel .panel-heading{padding:19px 16px 16px}.marine-grid .panel-heading p{font-size:11px;line-height:1.7}.map-location strong{font-size:11px}.map-location span{font-size:10px}.map-caption{font-size:10px}.map-caption small{font-size:9px}.project-description{font-size:10px;padding:15px}.page-footer{flex-wrap:wrap;line-height:1.8}.page-heading p{max-width:245px}.eyebrow{font-size:7px;max-width:240px;line-height:1.8}.trends .metric-tabs button{font-size:9px;padding:7px 6px}.vessel-detail-strip>div{padding-left:17px;gap:8px}.vessel-detail-strip span{font-size:9px}.vessel-detail-strip strong{font-size:12px}.project-description::before{font-size:8px}.table-scroll table{min-width:760px}}
 
 .value-skeleton{display:inline-block!important;width:86px;height:25px;border-radius:5px;background:#e3ebee;vertical-align:middle}.data-state-note{padding:15px;color:#627b87;font-size:11px}
+
+/* FE8B-R: keep operator actions independent of the changing data message. */
+.study-header-controls{display:flex;align-items:center;gap:8px;flex:none}
+.study-header-controls .button{white-space:nowrap;box-sizing:border-box;min-height:36px;flex:none}
+.study-header-controls .button:first-child{width:108px}
+.study-header-controls .button:last-child{width:82px}
+.study-refresh-banner{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;min-height:84px;box-sizing:border-box}
+.study-banner-copy{min-width:0}
+.study-banner-copy>strong{display:block}
+.study-status-slot{display:grid;min-width:0;overflow-wrap:anywhere}
+.study-status-slot>span,.study-status-slot::before{grid-area:1/1}
+.study-status-slot::before{content:"10000 synchronized non-fixture records; 10000 known synthetic records excluded from this view and export.";visibility:hidden}
+@media(max-width:680px){.study-topbar{padding-inline:12px}.study-topbar .public-label{display:none}.study-header-controls{gap:6px}.study-header-controls .button:first-child{width:94px}.study-header-controls .button:last-child{width:72px}.study-header-controls .button{padding-inline:8px}.study-refresh-banner{min-height:108px}}
+@media(max-width:380px){.study-topbar .breadcrumb{display:none}.study-topbar{justify-content:flex-end}.study-refresh-banner{min-height:132px}}

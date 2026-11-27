@@ -27,13 +27,22 @@ export function validRecord(x: unknown, recorder: number): x is RecordJson {
       !validUtc(x.captured_at) || !int(x.uptime_ms,0,4294967295) || !obj(x.payload)) return false;
   const p=x.payload;
   if (x.kind==='weather') {
-    return keys(p,['temperature_c','humidity_percent','pressure_hpa','pressure_trend_hpa','weather_state','micro']) &&
+    const legacy=['temperature_c','humidity_percent','pressure_hpa','pressure_trend_hpa','weather_state','micro'];
+    const macro=p.macro;
+    const extended=keys(p,[...legacy,'macro']) && (
+      (macro===null && obj(p.micro)) || (p.micro===null && obj(macro) &&
+        keys(macro,['input_valid','history_count','state','zambretti_index']) &&
+        typeof macro.input_valid==='boolean' && int(macro.history_count,0,10) &&
+        int(macro.state,0,3) && macro.state===p.weather_state &&
+        (macro.zambretti_index===null ? (!macro.input_valid || macro.history_count!==10 || macro.state===0 || p.pressure_trend_hpa===null) :
+          (macro.input_valid===true && macro.history_count===10 && macro.state!==0 && typeof p.pressure_trend_hpa==='number' && int(macro.zambretti_index,0,255)))));
+    return (keys(p,legacy) || extended) &&
       nullable(p.temperature_c,-100,100) && nullable(p.humidity_percent,0,100) && nullable(p.pressure_hpa,100,1200) &&
       nullable(p.pressure_trend_hpa,-200,200) && int(p.weather_state,0,3) &&
       (p.micro===null || (obj(p.micro) && keys(p.micro,['input_valid','state','pattern']) && typeof p.micro.input_valid==='boolean' &&
         typeof p.micro.state==='string' && p.micro.state.length<=64 && typeof p.micro.pattern==='string' && p.micro.pattern.length<=64));
   }
-  if (x.kind==='gps') return keys(p,['gps_fix','latitude','longitude']) && typeof p.gps_fix==='boolean' &&
+  if (x.kind==='gps') return (keys(p,['gps_fix','latitude','longitude']) || (keys(p,['gps_fix','latitude','longitude','battery_percent']) && (p.battery_percent===null || int(p.battery_percent,0,100)))) && typeof p.gps_fix==='boolean' &&
     (p.gps_fix ? p.latitude!==null && p.longitude!==null && nullable(p.latitude,-90,90) && nullable(p.longitude,-180,180) : p.latitude===null && p.longitude===null);
   if (x.kind!=='sos' && x.kind!=='cancel') return false;
   if (!keys(p,['origin_node_id','event_id','source','packet_hex']) || !int(p.origin_node_id,1,9999) ||

@@ -6,6 +6,7 @@ import { studyAccessMode, externalBasemapEnabled } from './studyAccessMode';
 import { LocateFixed, MapPin, Navigation } from 'lucide-react';
 import { ageLabel, dateTime, getLastPosition, getLatestReading, weatherLabel, type Device, type Reading, type SosEvent } from './data';
 import type { studyDashboard } from './studyDashboardData';
+import {batteryDetail,type RecordedBattery} from './wxbatPresentation';
 import { popupEmergencyFromReports, emergencyReports, popupBattery, type PopupEmergency } from './vesselPopup';
 import { SHORE, shoreReference, distanceToShore, distanceText, distanceLayout } from './geolocation';
 
@@ -22,7 +23,7 @@ function dismissInfo(instance:L.Map|null, active:{current:OpenInfo|null}, restor
  element?.setAttribute('aria-expanded','false');
  if(restoreFocus)element?.focus({preventScroll:true});
 }
-function popupContent(device:Device, position:Reading, weather:Reading|null|undefined, sos:PopupEmergency, synchronized:boolean, onClose:()=>void) {
+function popupContent(device:Device, position:Reading, weather:Reading|null|undefined, sos:PopupEmergency, synchronized:boolean, battery:RecordedBattery|undefined, now:number, onClose:()=>void) {
  const card=document.createElement('div');card.className='vessel-info-card';
  const heading=document.createElement('div');heading.className='vessel-info-heading';
  const title=document.createElement('strong');title.textContent=device.name;
@@ -30,7 +31,7 @@ function popupContent(device:Device, position:Reading, weather:Reading|null|unde
  heading.append(title,close);card.append(heading);
  const list=document.createElement('dl');
  const attention=sos.status==='Needs attention';
- const fields=[['Vessel name',device.registeredName??(synchronized?'Unavailable':device.name)],['Registration no.',device.registrationSerialNo??'Unavailable'],['SOS status',sos.status],['Weather state',weatherLabel(weather?.weatherState??-1)],['Battery',popupBattery(weather)],[attention?'SOS observed at':'Last GPS fix',attention?(sos.observedAt===null?'Unknown':dateTime(sos.observedAt)+' PHT'):dateTime(position.timestamp)+' PHT']];
+ const fields=[['Vessel name',device.registeredName??(synchronized?'Unavailable':device.name)],['Registration no.',device.registrationSerialNo??'Unavailable'],['SOS status',sos.status],['Weather state',weatherLabel(weather?.weatherState??-1)],[synchronized?'Battery estimate':'Battery',synchronized?batteryDetail(battery,now):popupBattery(weather)],[attention?'SOS observed at':'Last GPS fix',attention?(sos.observedAt===null?'Unknown':dateTime(sos.observedAt)+' PHT'):dateTime(position.timestamp)+' PHT']];
  for(const [label,value] of fields){const term=document.createElement('dt');term.textContent=label;const detail=document.createElement('dd');detail.textContent=value;list.append(term,detail);}
  card.append(list);
  const note=document.createElement('small');note.textContent=synchronized?(attention?'Recorded SOS observation; marker is last GPS fix, not distress location.':'Synchronized observations; not live position.'):'Fictional sample observations.';card.append(note);
@@ -128,7 +129,7 @@ export default function VesselMap({ study, devices, readings, sosEvents, selecte
     if(studyPhase!=='ready'||(synchronized&&!study))return;
     // Hosted GPS rows and weather rows are intentionally separate projections.
     const weather=synchronized?study?.latestWeather[device.id]:getLatestReading(readings,device.id,now);
-    const {card,close}=popupContent(device,position,weather,sos,synchronized,()=>{tapped=null;dismissInfo(instance,activeInfo,true);redrawDistance();});
+    const {card,close}=popupContent(device,position,weather,sos,synchronized,study?.latestBattery[device.id],now,()=>{tapped=null;dismissInfo(instance,activeInfo,true);redrawDistance();});
     if(touchInteraction){tapped=target;redrawDistance();}
     card.style.width=Math.min(246,Math.max(120,Math.floor((instance.getSize().x-40)/2)))+'px';
     const layer=L.tooltip({direction:'auto',offset:[14,0],permanent:true,interactive:true,opacity:1,className:'vessel-info-popup'}).setLatLng(marker.getLatLng()).setContent(card).addTo(instance);

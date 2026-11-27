@@ -1,4 +1,5 @@
 import {latestTimed,type Row} from './studySf.ts';
+import {eligibleRows,microCandidate,macroCandidate,observationTimes} from './wxbatPresentation.ts';
 
 export type MicroObservation={inputValid:boolean;state:string;pattern:string};
 export type RecordedWeather={captureAt:number|null;receiptAt:number|null;micro:MicroObservation|null};
@@ -9,14 +10,12 @@ function microObservation(value:unknown):MicroObservation|null {
  if(typeof p.input_valid!=='boolean'||typeof p.state!=='string'||typeof p.pattern!=='string'||!p.state.trim()||!p.pattern.trim()||p.state.length>64||p.pattern.length>64)return null;
  return {inputValid:p.input_valid,state:p.state,pattern:p.pattern};
 }
-// The accepted DTN contract has no independent Zambretti result, computation
-// timestamp, forecast horizon or micro computation timestamp. Do not infer them.
+// Select micro independently of macro-only records; retain legacy unavailable results.
 export function recordedWeather(rows:Row[]|undefined,nodeId:string,now:number):RecordedWeather {
  if(!rows||!nodeId||!Number.isFinite(now))return unavailable();
- const row=latestTimed(rows.filter(r=>String(r.recorder_node_id)===nodeId&&r.record_json.kind==='weather'&&r.record_json.captured_at!==null&&Date.parse(r.record_json.captured_at)<=now));
+ const row=latestTimed(eligibleRows(rows,nodeId,now,'weather').filter(r=>microCandidate(r.record_json.payload)));
  if(!row)return unavailable();
- const receipt=Date.parse(row.synced_at);
- return {captureAt:Date.parse(row.record_json.captured_at!),receiptAt:Number.isFinite(receipt)&&receipt<=now?receipt:null,micro:microObservation(row.record_json.payload.micro)};
+ return {...observationTimes(row,now),micro:macroCandidate(row.record_json.payload)?null:microObservation(row.record_json.payload.micro)};
 }
 export function microStateLabel(micro:MicroObservation|null):string {
  if(!micro)return 'Unavailable';

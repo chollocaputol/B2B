@@ -63,7 +63,7 @@ export default function App({studyRows,relationalViews=NO_VIEWS,studyRegistry=EM
  }
  const navItems=[{key:'overview',Icon:LayoutDashboard},{key:'vessels',Icon:MapPin},{key:'weather',Icon:CloudSun},{key:'sos',Icon:ShieldAlert},{key:'records',Icon:Database}] as const;
  const now = useMemo(() => Date.now(),[studyRows]);
- const study = useMemo(()=>studyRows ? studyDashboard(studyRows,now,studyRegistry,registryStatus) : null,[studyRows,now,studyRegistry,registryStatus]);
+ const study = useMemo(()=>studyRows ? studyDashboard(studyRows,now,studyRegistry,registryStatus,relationalViews) : null,[studyRows,now,studyRegistry,registryStatus,relationalViews]);
  const data = useMemo(()=>study ?? getDemoData(now),[study,now]);
  const [preferredId,setDeviceId] = useState(() => mapSession?.selectedId ?? data.devices[0]?.id ?? '');
  const deviceId=selectionFor(data.devices,preferredId);

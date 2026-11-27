@@ -1,12 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {isAccessFailure} from './refreshState.ts';
 import type {Row} from './studySf.ts';
+import {batteryPercent,macroObservation} from './wxbatPresentation.ts';
 export type ViewRow=Record<string,unknown>;
 const core='recorder_node_id,record_id,captured_at,synced_at';
 const fields={
  synchronization_history:core+',kind',
- vessel_telemetry:core+',gps_fix,latitude,longitude',
- weather_observations:core+',temperature_c,humidity_percent,pressure_hpa,pressure_trend_hpa,weather_state,micro_input_valid,micro_state,micro_pattern',
+ vessel_telemetry:core+',gps_fix,latitude,longitude,battery_percent',
+ weather_observations:core+',temperature_c,humidity_percent,pressure_hpa,pressure_trend_hpa,weather_state,micro_input_valid,micro_state,micro_pattern,macro_input_valid,macro_history_count,macro_state,macro_zambretti_index',
  sos_observations:core+',kind,origin_node_id,event_id,source',
  sos_events:'origin_node_id,event_id,sos_observation_count,cancel_observation_count,recording_node_count,first_known_sos_capture_at,first_known_cancel_capture_at,first_receipt_at,last_receipt_at'
 } as const;
@@ -60,6 +61,16 @@ export function matchedProjection(row:Row,index:ReturnType<typeof indexViews>):R
  if((r.kind==='sos'||r.kind==='cancel')&&v.kind!==r.kind)return null;
  const micro=p.micro as Record<string,unknown>|null|undefined;
  if(r.kind==='weather'&&(!same(v.micro_input_valid,micro?.input_valid)||!same(v.micro_state,micro?.state)||!same(v.micro_pattern,micro?.pattern)))return null;
+ if(r.kind==='gps'){
+  if(p.battery_percent!=null&&batteryPercent(p.battery_percent)===null)return null;
+  if(!same(v.battery_percent,p.battery_percent))return null;
+ }
+ if(r.kind==='weather'){
+  const macro=macroObservation(p);
+  if(p.macro!=null&&!macro)return null;
+  if(!same(v.macro_input_valid,macro?.inputValid)||!same(v.macro_history_count,macro?.historyCount)||!same(v.macro_state,macro?.state)||!same(v.macro_zambretti_index,macro?.index))return null;
+ }
+ // Preserve missing/null distinctions and all original extension fields.
  const payload={...p,...Object.fromEntries(names.map(n=>[n,v[n]]))};
  // Keep the original JSON for export. This projection is display-only.
  return {...row,synced_at:h.synced_at as string,record_json:{...r,captured_at:h.captured_at as string|null,payload}};

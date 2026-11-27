@@ -1,6 +1,7 @@
 import type { MouseEvent } from 'react';
 import EmergencyHistory from './EmergencyHistory';
 import WeatherLayers from './WeatherLayers';
+import {batteryLabel,batteryAge} from './wxbatPresentation';
 import type {ViewSnapshot} from './relationalViews';
 import { Anchor, ArrowRight, BatteryMedium, CloudSun, Compass, Droplets, Gauge, MapPin, ShieldAlert, Thermometer } from 'lucide-react';
 import { ageLabel, dateTime, getVesselSnapshot, weatherLabel, type Device, type Reading, type SosEvent } from './data';
@@ -42,6 +43,7 @@ export default function MarineOverview(props:Props) {
  const {position}=snapshot;const shoreDistance=distanceToShore(position,!!props.study);
  const context=props.study&&vessel?vesselContext(props.study.records,vessel.id,now):null;
  const stamp=(t:number|null|undefined)=>t==null?'Unavailable':dateTime(t)+' PHT'; const latest=props.study?props.study.latestWeather[selectedId]:snapshot.latest;
+ const battery=props.study?.latestBattery[selectedId];
  const weather = latest?.weatherState ?? -1;
  const hasWeather = latest?.temperature !== null && latest?.temperature !== undefined;
  const section=props.section??'overview';
@@ -55,10 +57,10 @@ export default function MarineOverview(props:Props) {
     <div className="weather-note">{latest?`${props.study?'Captured':'Last packet'} ${ageLabel(latest.timestamp,now)} · `:''}Sensor state only; not an official forecast.</div>
    </section>}
    {overview&&<OverviewSos {...props}/>}
-   {(overview||section==='weather')&&<WeatherLayers rows={props.study?.records} nodeId={selectedId} now={now} phase={props.studyPhase} compact={overview}/>}
+   {(overview||section==='weather')&&<WeatherLayers rows={props.study?.observations} nodeId={selectedId} now={now} phase={props.studyPhase} compact={overview}/>}
    {section==='sos'&&<EmergencyHistory rows={props.study?.records} samples={sosEvents} devices={devices} now={now} phase={props.studyPhase} views={props.views}/>}
   </div>}
-  {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':distanceText(shoreDistance)}</strong></span></div><div><BatteryMedium size={18}/><span>Battery sample<strong>{loading?'Loading…':latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong></span></div></section>}
+  {(overview||section==='vessels')&&<section className="panel vessel-detail-strip" aria-label="Selected vessel details"><div><Anchor size={18}/><span>Selected vessel<strong>{loading?'Loading…':failed?'Unavailable':vessel?.name??'—'}</strong></span></div><div><MapPin size={17}/><span>Shore distance at last fix<strong title={position?`${ageLabel(position.timestamp,now)} · ${dateTime(position.timestamp)} PHT`:undefined}>{loading?'Loading…':distanceText(shoreDistance)}</strong></span></div><div><BatteryMedium size={18}/><span>{props.study?'Battery sample · recorded estimate':'Battery sample'}<strong title={props.study&&battery?.captureAt!=null?stamp(battery.captureAt):undefined}>{loading?'Loading…':failed?'Unavailable':props.study?batteryLabel(battery):latest?.battery!=null?`${latest.battery} %`:'Unavailable'}</strong>{props.study&&!loading&&!failed&&<small>{batteryAge(battery,now)}</small>}</span></div></section>}
   {section==='vessels'&&<section className="panel vessel-context-panel" aria-label="Vessel observation details">
    <div className="panel-heading"><div><h2>Vessel information</h2><p>{props.study?'Registry and recorded observation context':'Fictional sample context'}</p></div></div>
    {loading||failed?<p className="data-state-note" role="status">{loading?'Loading vessel information…':'Vessel information unavailable.'}</p>:!vessel?<p className="data-state-note">No vessel selected.</p>:<>

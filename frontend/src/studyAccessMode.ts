@@ -4,3 +4,8 @@ export function studyAccessMode(hostname: string, protocol: string, url: string 
   if (hostname === 'bayanihan-b2b.netlify.app' && protocol === 'https:' && url?.trim() === 'https://twqumqiplqqfhixjvxeo.supabase.co') return 'hosted';
   return null;
 }
+
+// Preserve the fictional demo. Approved hosted synchronized access defaults to tiles on; local and unapproved access remain tile-free.
+export function externalBasemapEnabled(synchronized: boolean, mode: ReturnType<typeof studyAccessMode>, enabled: boolean = true): boolean {
+  return !synchronized || (mode === 'hosted' && enabled);
+}

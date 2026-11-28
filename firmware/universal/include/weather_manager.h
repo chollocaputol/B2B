@@ -15,7 +15,7 @@ enum WeatherState : uint8_t {
 
 // Default pins preserve existing Vessel-001/002 and F08 bench behavior.
 // Only the opt-in Vessel-003 F09 sensor profile shares BME680 I2C pins.
-#include "v003_f09_shared_sensor_bus.h"
+#include "sensor_bus.h"
 #define BME_SDA_PIN 21
 #define BME_SCL_PIN 48
 #if THESIS_V003_F09_SHARED_SENSOR_BUS == 1

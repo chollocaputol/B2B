@@ -1,4 +1,4 @@
-export interface Device { id: string; name: string; location: string }
+export interface Device { id: string; name: string; location: string; registryId?:string; registeredName?:string; registrationSerialNo?:string }
 export interface Reading {
  deviceId: string;
  timestamp: number;

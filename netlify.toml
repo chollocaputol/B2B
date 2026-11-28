@@ -11,3 +11,43 @@
   [headers.values]
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[redirects]]
+  from = "/login"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/vessels"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/weather"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/sos"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/records"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/geolocation"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/dashboard/logs"
+  to = "/index.html"
+  status = 200

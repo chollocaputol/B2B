@@ -17,7 +17,7 @@
 #error "F24D preview flag must be 0 or 1"
 #endif
 #if THESIS_DTN_F24D_BUILD_ONLY == 1
-#include "dtn_f24d_arduino_read_port.h"
+#include "dtn_arduino_read_port.h"
 #endif
 // F24E: no physical grant and no new SD access in the build-only preview.
 #ifndef THESIS_DTN_F24E_BUILD_ONLY
@@ -30,7 +30,7 @@
 #if THESIS_DTN_F24D_BUILD_ONLY != 1
 #error "F24E preview requires F24D build-only dependency"
 #endif
-#include "dtn_f24e_sd_owner_scheduler.h"
+#include "dtn_sd_owner_scheduler.h"
 #endif
 // F24F: compile-only SOS close lease. The default is never authorized.
 #ifndef THESIS_DTN_F24F_BUILD_ONLY
@@ -43,7 +43,7 @@
 #if THESIS_DTN_F24E_BUILD_ONLY != 1
 #error "F24F preview requires F24E build-only scheduler"
 #endif
-#include "dtn_f24f_sos_closed_lease.h"
+#include "dtn_sos_closed_lease.h"
 #endif
 // F24G: compile-only SOS seal candidate; all physical operations are denied.
 #ifndef THESIS_DTN_F24G_BUILD_ONLY
@@ -56,7 +56,7 @@
 #if THESIS_DTN_F24F_BUILD_ONLY != 1
 #error "F24G preview requires F24F build-only gate"
 #endif
-#include "dtn_f24g_sos_seal.h"
+#include "dtn_sos_seal.h"
 #endif
 // F24H: writer retirement state model; no real SD-owner port is authorized.
 #ifndef THESIS_DTN_F24H_BUILD_ONLY
@@ -69,7 +69,7 @@
 #if THESIS_DTN_F24G_BUILD_ONLY != 1
 #error "F24H preview requires F24G build-only contract"
 #endif
-#include "dtn_f24h_writer_retirement.h"
+#include "dtn_writer_retirement.h"
 #endif
 // F24I: independent-witness bridge, physical owner absent, deny by default.
 #ifndef THESIS_DTN_F24I_BUILD_ONLY
@@ -82,7 +82,7 @@
 #if THESIS_DTN_F24H_BUILD_ONLY != 1
 #error "F24I preview requires F24H build-only retirement model"
 #endif
-#include "dtn_f24i_sd_owner_bridge.h"
+#include "dtn_sd_owner_bridge.h"
 #endif
 // F24J: host-only arbiter; all existing physical SD paths remain unclaimed.
 #ifndef THESIS_DTN_F24J_BUILD_ONLY
@@ -95,7 +95,7 @@
 #if THESIS_DTN_F24I_BUILD_ONLY != 1
 #error "F24J requires F24I deny-only bridge"
 #endif
-#include "dtn_f24j_owner_coordinator.h"
+#include "dtn_owner_coordinator.h"
 #endif
 #include <XPowersLib.h>
 // F22R3C opt-in logger CONTRACT. NO SD mount/reads/writes in this profile.
@@ -110,7 +110,7 @@
     THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0 || THESIS_LAB_RELAY_TX != 0
 #error "F22R3C logger contract requires multi-ID build-only, SD pilot OFF, GPIO/relay OFF"
 #endif
-#include "f22_fleet_storage_policy.h"
+#include "fleet_storage_policy.h"
 #include "../hardware/vessel_identity.h"
 #endif
 // F22R3D dry-run: no source of approved media/board consent exists yet.
@@ -119,7 +119,7 @@
 #endif
 #if THESIS_F22_FLEET_OPERATIONAL == 1
 #include "../hardware/vessel_identity.h"
-#include "../hardware/f22_universal_capability_policy.h"
+#include "../hardware/vessel_capabilities.h"
 #endif
 #ifndef THESIS_F22R3D_FLEET_SD_DRYRUN
 #define THESIS_F22R3D_FLEET_SD_DRYRUN 0
@@ -132,7 +132,7 @@
     THESIS_V003_F15_SD_PILOT_ARMED != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0 || THESIS_LAB_RELAY_TX != 0
 #error "F22R3D dry-run needs F22R3C failclosed, F19 build-only, SD/relay/GPIO OFF"
 #endif
-#include "f22_fleet_storage_runtime_gate.h"
+#include "fleet_storage_runtime_gate.h"
 #endif
 #ifndef THESIS_F07_WEATHER_LOG
 #define THESIS_F07_WEATHER_LOG 0
@@ -203,7 +203,7 @@
     THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24V requires permanent F24U/T/S/R/Q/K DENY and F23D/fleet/relay/GPIO OFF"
 #endif
-#include "dtn_f24v_core_close_policy.h"
+#include "dtn_core_close_policy.h"
 static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physical SD");
 #endif
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1
@@ -216,7 +216,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #if THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24K requires legacy relay/GPIO outputs off"
 #endif
-#include "dtn_f24k_sd_interposition.h"
+#include "dtn_sd_interposition.h"
 #endif
 // F24M: real firmware SOS packet capture seams, but no authorized SD owner.
 // Only the permanently denied F24K SD profile may activate this build-only
@@ -231,7 +231,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_SD_LOGGER != 1
 #error "F24M requires F24K DENY SD, logger enabled, independent F23D writer OFF"
 #endif
-#include "dtn_f24m_sos_packet_store.h"
+#include "dtn_sos_packet_store.h"
 #endif
 // F24N: incremental full-frame cold-restart reconstruction in the actual
 // logger main-loop path. Reuses permanently denied F24K/F24M build profile.
@@ -245,7 +245,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #if THESIS_DTN_F24M_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F06_SD_SANDBOX != 1
 #error "F24N requires F24M/F24K permanently denied F06 sandbox, F23D OFF"
 #endif
-#include "dtn_f24n_sos_restart_recovery.h"
+#include "dtn_sos_restart_recovery.h"
 #endif
 // F24O: owner-bound packet/recovery adapter, host-executable and firmware
 // typechecked against a DENY witness; no physical SD permission is installed.
@@ -259,7 +259,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #if THESIS_DTN_F24N_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1 || THESIS_F23D_SD_EVIDENCE != 0 || THESIS_F22_FLEET_OPERATIONAL != 0
 #error "F24O only extends F24N/F24K SD denial; F23D and fleet storage must be OFF"
 #endif
-#include "dtn_f24o_owned_sos_port.h"
+#include "dtn_owned_sos_port.h"
 #endif
 // F24Q: source-only cross-writer arbitration model + F23D volume entrypoint
 // naming. NO physical observer or File handle interception is provided.
@@ -275,7 +275,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24Q requires F24P/K DENY; F23D, fleet, legacy relay and GPIO OFF"
 #endif
-#include "dtn_f24q_cross_writer_arbiter.h"
+#include "dtn_cross_writer_arbiter.h"
 #endif
 // F24R: guard actual retained export/history File methods with an UNGRANTABLE
 // cross-writer lease in this build-only profile. F23D alternate File adapter
@@ -292,7 +292,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24R requires F24Q/F24K DENY; F23D, fleet, relay and physical GPIO OFF"
 #endif
-#include "dtn_f24r_guarded_file_port.h"
+#include "dtn_guarded_file_port.h"
 #endif
 // F24S: source-scoped guarded short-lived F06 logger File operations.
 // This preview is permanently denied by F24K and F24Q DenyWitness.
@@ -309,7 +309,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24S requires F24R/Q/K DENY + F06 sandbox; F23D/fleet/relay/GPIO OFF"
 #endif
-#include "dtn_f24s_temporary_logger_files.h"
+#include "dtn_temporary_logger_files.h"
 #endif
 // F24P: integrate F24N root discovery with the SAME owner-bound F24O port.
 // This is still NOT global physical all-file-handle ownership; the legacy
@@ -342,7 +342,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
     THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24T requires F24S/R/Q/K deny-only F06, F23D/fleet/relay/GPIO OFF"
 #endif
-#include "dtn_f24t_history_directory.h"
+#include "dtn_history_directory.h"
 #endif
 // F24U: pre-revocation drain is a DENY-only software preview. Its typechecked
 // runtime instance cannot obtain an SD lease or open a physical Arduino File.
@@ -360,7 +360,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
     THESIS_LAB_RELAY_TX != 0 || THESIS_V003_F13_LIVE_OUTPUTS != 0
 #error "F24U requires F24T/S/R/Q/K permanent deny and F23D/fleet/relay/GPIO OFF"
 #endif
-#include "dtn_f24u_teardown_coordinator.h"
+#include "dtn_teardown_coordinator.h"
 #endif
 // F24W: owner-held slot lifecycle preview. No physical backend exists.
 #ifndef THESIS_DTN_F24W_BUILD_ONLY
@@ -376,7 +376,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #if defined(THESIS_SD_PROBE) && THESIS_SD_PROBE != 0
 #error "F24W forbids independent SD probe"
 #endif
-#include "dtn_f24w_mount_owner.h"
+#include "dtn_mount_owner.h"
 #endif
 // F24X: compile the actual SOS writer/replay against the owner-held port.
 #ifndef THESIS_DTN_F24X_BUILD_ONLY
@@ -389,7 +389,7 @@ static_assert(DTNF24V::kPhysicalOwnerGranted == false,"F24V cannot grant physica
 #if THESIS_DTN_F24W_BUILD_ONLY != 1 || THESIS_DTN_F24O_BUILD_ONLY != 1 || THESIS_DTN_F24P_BUILD_ONLY != 1 || THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY != 1
 #error "F24X requires F24W/O/P/K DENY"
 #endif
-#include "dtn_f24x_owner_sos_port.h"
+#include "dtn_owner_sos_port.h"
 #endif
 namespace ThesisSDLogger {
 #if THESIS_DTN_F24K_SD_INTERPOSE_BUILD_ONLY == 1

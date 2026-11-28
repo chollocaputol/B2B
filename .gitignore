@@ -21,8 +21,25 @@ build/
 # Local package-manager cache
 .pnpm-store/
 
-# Local design notes and previews
-/docs/
+# Local design notes and previews; allowlist public documentation
+/docs/**
+!/docs/history/
+!/docs/history/backend/
+!/docs/history/backend/docs/
+!/docs/history/backend/schema-reference/
+!/docs/history/backend/sql/
+!/docs/history/backend/sql/proposals/
+!/docs/history/firmware/
+!/docs/README.md
+!/docs/history/backend/docs/phase6-ingestion-api-contract.md
+!/docs/history/backend/docs/phase6-schema-change-proposal.md
+!/docs/history/backend/docs/study_sf_contract.md
+!/docs/history/backend/docs/study_sf_local_integration.md
+!/docs/history/backend/schema-reference/banca_monitoring_schema.sql
+!/docs/history/backend/sql/proposals/study_sf_ingest.sql
+!/docs/history/backend/sql/proposals/study_sf_read.sql
+!/docs/history/firmware/FIRMWARE_CLEANUP_REPORT.md
+!/docs/history/firmware/FIRMWARE_STRUCTURE_REPORT.md
 
 # Firmware installer backups
 *.bak
@@ -38,3 +55,10 @@ __pycache__/
 # Private DTN bench configuration (never commit)
 study_sf_local_config.generated.h
 study_sf_cloud_config.generated.h
+
+# Private device and local dashboard configuration
+**/study_sf_cloud_config.generated.h
+**/study_sf_local_config.generated.h
+/frontend/.env
+/frontend/.env.*
+!/frontend/.env.example
